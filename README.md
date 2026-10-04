@@ -65,7 +65,7 @@ DSH 的主 agent 会自动执行一长串操作：读文件、跑命令、改代
 | 7 | **每个主对话记录独立** | 一个主对话一份落库文件，切换主对话只切换显示，不串记录 | `src/host/persistence.ts` `pathFor` |
 | 8 | **记录没完成会写明原因** | 不是笼统的"未完成"，而是分别给出超时 / 模型失败 / 触及上限 / 没拿到摘要 / 你主动停止，并给补救建议 | `src/shared/record-reason.ts` `RECORD_REASON_TEXT` |
 | 9 | **模型单独选，不跟随主 agent** | 从 DSH 已配置模型里自己挑；**没选就不发请求**，绝不偷偷用默认模型 | `src/index.ts` `resolveModel` |
-| 10 | **失败、超时都给中文提示** | 不静默失败；总超时 300 秒 / 空闲 120 秒，可用环境变量收紧 | `src/host/routes.ts`；`src/host/timeout-config.ts` |
+| 10 | **失败、超时都给中文提示** | 不静默失败；默认总超时 300 秒 / 空闲 120 秒，可用环境变量收紧（非法值自动回退默认，不会变成 0 或永久等待） | 默认值 `src/host/llm.ts` `DEFAULTS`；中文事件 `src/host/routes.ts`；覆盖 `src/host/timeout-config.ts` |
 | 11 | **模型不可用时仍能看** | 已有问答、你选中的依据、以及一份**本地生成**的基本说明照常显示，并明确标注"这不是模型给出的解释" | `src/client/overlay.tsx` `offlineFallbackNodes` |
 | 12 | **`/compact` 只压缩小助手** | 手动整理小助手自己后续回答所参考的上下文；完整问答记录仍保存可翻看；不触发主 agent 压缩 | `src/client/overlay.tsx`；`src/host/llm.ts` `compactAssistant` |
 | 13 | **右下角占用圆环** | 显示的是**小助手自身**的占用，不用主 agent 的数值；估算会标「估算」，拿不到容量就显示「占用未知」 | `src/host/occupancy.ts`；`src/client/overlay.tsx` `ringNode` |
