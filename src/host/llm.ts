@@ -197,7 +197,9 @@ export const COMPACT_INSTRUCTION = [
  '2. 必须保留每条依据的分级（已观察到 / 仅据汇报 / 无从得知）。',
  '3. 必须原样保留「该步未提供足够信息」这类限制性标注，不得因为压缩而把不确定说成确定。',
  '4. 保留用户已经问过什么、结论是什么。',
- '5. 只压缩小助手自己的上下文，不要改动主对话的任何内容。',
+ '5. 只压缩小助手自己与用户的对话。**主 agent 的上下文不在你要压缩的范围里**：',
+ '   你不需要、也不得为它写任何摘要，更不要把它当成小助手说过的话。',
+ '6. 不要改动主对话的任何内容。',
 ].join('\n');
 export async function compactAssistant(ctx:LlmContext,messages:AssistantMessage[]):Promise<{summary:string;reasoning:string;usage?:unknown;complete:boolean;timeout?:boolean;failure?:LlmFailureInfo}>{
  // content 必须是内容块数组：dsh-llm 的适配器会执行 message.content.flatMap(...)，

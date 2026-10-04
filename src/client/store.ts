@@ -62,6 +62,25 @@ export type AssistantClientState = {
   occupancyKnown: boolean;
   /** 占用值若是推算而非直接测量，界面要标「估算」（§9.2）。 */
   occupancyEstimated?: boolean;
+  /**
+   * 0.2：这份上下文由哪两块构成。
+   *
+   * 用户要求：「鼠标放上去应能显示出多少部分是主 agent 转移至小助手的上下文，
+   * 哪部分是小助手与用户对话产生的上下文」。
+   *
+   * 两块之和 === 本次实际注入的量（宿主按**截断之后**的实际值记账）。
+   * 拿不到时**不显示悬停提示**——宁可不显示，也不编造一个数字。
+   */
+  occupancyParts?: {
+    mainAgentTokens: number;
+    mainAgentChars: number;
+    ownTokens: number;
+    ownChars: number;
+    /** 主 agent 段用了几条表面事件（可核查）。 */
+    mainAgentEvents?: number;
+    /** 主 agent 段是否因为总量上限被截断过。 */
+    mainlineTruncated?: boolean;
+  };
   /** 首次打开时的快捷问题是否已被用户点过（点过就不再自动展示，§4）。 */
   quickQuestionsDismissed?: boolean;
   /** 模型目录（§7/§11.8），由宿主 /models 返回。 */

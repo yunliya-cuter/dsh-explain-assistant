@@ -14,7 +14,16 @@ export interface RouteService {
   loadHistoryResult?: (id: string, recordId: string, cursor?: string, signal?: AbortSignal) => Promise<HistoryResultPayload>;
   listModels?: (signal?: AbortSignal) => Promise<unknown>;
   resolveModel?: (id: string, signal?: AbortSignal) => Promise<{ selection: AssistantModel }>;
-  buildMessages?: (id: string, question: string, payload: Record<string, unknown>, signal?: AbortSignal) => Promise<AssistantMessage[]>;
+  /**
+   * 0.2：第 5 个参数是**本次调用属于哪条路径**（'ask' 提问 / 'compact' 压缩）。
+   *
+   * 为什么必须区分：小助手的 /compact 只应压缩「小助手与用户对话产生的上下文」，
+   * 主 agent 转移进来的那部分不得被摘要顶替（用户明确要求）。而 ask 与 compact
+   * 共用本函数、且下游 compactAssistant 会把**整份** messages 送去摘要，
+   * 所以唯一的隔离点就是「压缩时不把主 agent 段放进来」。
+   * 省略该参数时按 'ask' 处理（保持既有调用方与测试的行为不变）。
+   */
+  buildMessages?: (id: string, question: string, payload: Record<string, unknown>, signal?: AbortSignal, mode?: 'ask' | 'compact') => Promise<AssistantMessage[]>;
   llm?: unknown;
   tokenMeter?: unknown;
   /** §10 调用限额：总超时与空闲超时。省略时用 llm.ts 的默认值。 */
@@ -121,7 +130,12 @@ export function createExplainAssistantRoutes(options: RouteOptions): Map<string,
           try {
             controllerStream.enqueue(send('start', { requestId }));
             const payload = (parsed.payload && typeof parsed.payload === 'object' ? parsed.payload : {}) as Record<string, unknown>; question = typeof payload.question === 'string' ? payload.question.trim() : ''; if (op === 'ask' && !question) throw new ExplainAssistantError('INVALID_REQUEST', '请先输入要问的问题。');
-            const messages = service.buildMessages ? await service.buildMessages(id!, question, payload, signal) : [{ role: 'user', content: question } as AssistantMessage];
+            // 0.2：把 op 传下去 —— compact 模式下宿主不注入主 agent 段，
+            // 从而保证「小助手 /compact 只压小助手与用户对话产生的上下文」。
+            // op 在这里只可能是 'ask' 或 'compact'：stream 处理器只挂在两条 SSE 路由上
+            // （operation() 对其它路径返回别的名字，但那些走的是 plain 处理器）。
+            const mode = op === 'compact' ? 'compact' as const : 'ask' as const;
+            const messages = service.buildMessages ? await service.buildMessages(id!, question, payload, signal, mode) : [{ role: 'user', content: question } as AssistantMessage];
             const model = service.resolveModel ? (await service.resolveModel(id!, signal)).selection : { provider: 'default', model: 'default' };
             const context = { llm: service.llm, tokenMeter: service.tokenMeter, model, tools: serviceContext, signal, ...(service.llmTimeouts ?? {}), onEvent: (item: Record<string, unknown>) => { const type = item.type as SseEvent['type']; if (type === 'text' && typeof item.delta === 'string') partialText += item.delta; controllerStream.enqueue(send(type, item)); } };
             const result = op === 'compact' ? await compactAssistant(context, messages) : await runAssistant(context, messages);

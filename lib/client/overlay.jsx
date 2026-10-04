@@ -404,14 +404,46 @@ function historyDetailNodes(state, plugin) {
  * 位置从「绝对定位压在表单上」改成表单里的一个普通格子：绝对定位那版会和发送按钮重叠，
  * 是上一版界面最扎眼的一处「不可用」。
  */
+/**
+ * 0.2：把「这份上下文由哪两块构成」拼成一句人话。
+ *
+ * 用户要求：鼠标放到圆环上，能看出多少来自主 agent 转移、多少是小助手与用户对话产生的。
+ * 格式按用户给的形状：两部分各占的比例 + 绝对量，例如
+ *   「主 agent 转移 1.2k / 小助手对话 3.4k，约 26% / 74%」
+ *
+ * 拿不到构成时返回 undefined —— 宁可不显示提示，也不编造一个数字。
+ * 两块之和为 0 时也算拿不到（没有可显示的比例）。
+ */
+function occupancyPartsText(parts) {
+    if (!parts || typeof parts !== 'object')
+        return undefined;
+    const main = typeof parts.mainAgentTokens === 'number' && Number.isFinite(parts.mainAgentTokens) ? Math.max(0, parts.mainAgentTokens) : 0;
+    const own = typeof parts.ownTokens === 'number' && Number.isFinite(parts.ownTokens) ? Math.max(0, parts.ownTokens) : 0;
+    const total = main + own;
+    if (total <= 0)
+        return undefined;
+    const short = (value) => value >= 1000 ? (value / 1000).toFixed(1) + 'k' : String(value);
+    const mainPercent = Math.round((main / total) * 100);
+    const ownPercent = 100 - mainPercent;
+    const extra = parts.mainlineTruncated ? '（主 agent 部分已截断到上限）' : '';
+    return '主 agent 转移 ' + short(main) + ' / 小助手对话 ' + short(own)
+        + '，约 ' + mainPercent + '% / ' + ownPercent + '%' + extra;
+}
 function ringNode(state) {
     const box = el('div', { class: 'dsh-explain-assistant-ring ea-ring' });
     const known = Boolean(state.occupancyKnown) && typeof state.occupancy === 'number';
     const percent = known ? Math.min(100, Math.max(0, Math.round(state.occupancy))) : 0;
+    // 0.2：悬停显示两块构成。此前这个圆环**只有 aria-label、没有任何鼠标悬停提示**，
+    // 用户鼠标放上去什么都不显示（用户截图箭头指的就是这里）。
+    const partsText = occupancyPartsText(state.occupancyParts);
+    if (partsText)
+        box.setAttribute('title', partsText);
     box.setAttribute('role', 'img');
-    box.setAttribute('aria-label', known
+    const baseLabel = known
         ? '上下文占用约 ' + percent + '%' + (state.occupancyEstimated ? '（估算值）' : '')
-        : '上下文占用未知');
+        : '上下文占用未知';
+    // 无障碍标签必须与悬停提示**同源**：读屏用户拿不到 title，不能只给鼠标用户看构成。
+    box.setAttribute('aria-label', partsText ? baseLabel + '。构成：' + partsText : baseLabel);
     if (state.occupancyEstimated && known)
         box.setAttribute('data-estimated', 'true');
     if (!known)

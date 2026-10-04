@@ -4,6 +4,7 @@ import { JsonSessionStore } from './host/persistence.js';
 import { catalogContains, discoverCatalog, resolveSelection, toModelSelection } from './host/catalog.js';
 import { buildMessages, SYSTEM_PROMPT } from './host/prompts.js';
 import { carriedRecords, measureAssistantOccupancy } from './host/occupancy.js';
+import { readMainlineContext } from './host/session-context.js';
 import { ExplainAssistantError, type HistoryResultPayload } from './host/contracts.js';
 import { createArchiveSweeper } from './host/archive.js';
 
@@ -30,8 +31,17 @@ export const inject = [
  * 估算（见 host/occupancy.ts），结果一律带 estimated=true，界面标「估算」。
  * 容量取自适配器自报的 llm.resolveModelInfo().context.contextWindow；
  * 未选模型或容量未知时返回 undefined，由界面显示「占用未知」——不编造、不借用主 agent。
+ *
+ * 0.2 补充：主 agent 转移进来的那一段**要计入总量**（它确实占用了小助手的上下文），
+ * 但**分开记账**（occupancy.parts），界面悬停时才能分别显示两块各占多少。
+ * 注意这不违反 §9.2：「不使用主 agent 的数值」指的是不能拿主 agent 的上下文窗口
+ * 或它的百分比来冒充小助手的，不是不许把小助手自己发出的请求里含的那部分算进来。
  */
-async function readOccupancy(ctx: any, state: any): Promise<{ percent: number; estimated: boolean } | undefined> {
+async function readOccupancy(
+  ctx: any,
+  state: any,
+  mainline?: { tokens?: number; chars?: number },
+): Promise<{ percent: number; estimated: boolean; parts: { mainAgentTokens: number; mainAgentChars: number; ownTokens: number; ownChars: number } } | undefined> {
   try {
     const explicit = state?.explicitModel as { provider?: string; model?: string } | undefined;
     if (!explicit?.provider || !explicit?.model) return undefined;
@@ -44,9 +54,11 @@ async function readOccupancy(ctx: any, state: any): Promise<{ percent: number; e
       compactSummary: state?.compactState?.summary,
       records: carriedRecords(state?.records, state?.compactState?.createdAt),
       contextWindow,
+      ...(typeof mainline?.tokens === 'number' ? { mainAgentTokens: mainline.tokens } : {}),
+      ...(typeof mainline?.chars === 'number' ? { mainAgentChars: mainline.chars } : {}),
     });
     if (!occupancy) return undefined;
-    return { percent: occupancy.percent, estimated: true };
+    return { percent: occupancy.percent, estimated: true, parts: occupancy.parts };
   } catch {
     return undefined;
   }
@@ -83,6 +95,33 @@ export function apply(ctx: any): void {
   const home = typeof process !== 'undefined' ? (process.env.DSH_HOME || process.env.HOME) : undefined;
   const store = home ? new JsonSessionStore({ rootDir: home + '/explain-assistant' }) : undefined;
   const sessionQuery = ctx?.sessionQuery;
+
+  /**
+   * 0.2：主 agent 上下文的**短时缓存**（仅 loadState 用）。
+   *
+   * 为什么需要：打开浮窗时客户端会连续打几次 state，而 readSurface 每次都要克隆
+   * 整份表面（实测：小会话 1–2 ms，1.4 万事件的会话约 23 ms，3.4 万事件的会话约 1.2 秒）。
+   * 没有缓存时，这几次刷新会把同一份内容重复读好几遍。
+   *
+   * 为什么 TTL 只有 5 秒：用户要求「提问时同步至最新」。5 秒足够吸收打开浮窗时的那几次
+   * 连续刷新，又短到不会让界面上的占用数字明显落后。**提问路径不经过这个缓存**
+   * （见 buildMessages），所以「答得出主 agent 刚做完的那一步」不受影响。
+   */
+  const MAINLINE_CACHE_TTL_MS = 5000;
+  const mainlineCache = new Map<string, { at: number; value: Awaited<ReturnType<typeof readMainlineContext>> }>();
+  const readMainlineCached = async (id: string, signal?: AbortSignal) => {
+    const now = Date.now();
+    const hit = mainlineCache.get(id);
+    if (hit && now - hit.at < MAINLINE_CACHE_TTL_MS) return hit.value;
+    const value = await readMainlineContext({ sessionQuery, sessionId: id, signal });
+    mainlineCache.set(id, { at: now, value });
+    // 缓存不能无限长：归档清理过的会话不该继续占内存。
+    if (mainlineCache.size > 64) {
+      const oldest = [...mainlineCache.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, mainlineCache.size - 64);
+      for (const [key] of oldest) mainlineCache.delete(key);
+    }
+    return value;
+  };
 
   /** 目录可能随时变化（换 provider、加模型），故做短时缓存，避免每个请求都打一遍宿主。 */
   let catalogCache: { at: number; value: any } | undefined;
@@ -186,7 +225,9 @@ export function apply(ctx: any): void {
     loadState: async (id: string, signal?: AbortSignal) => {
       const state: any = store ? (await store.load(id)).state : { sessionId: id, records: [], unread: false, archived: false };
       const explicit = state.explicitModel as { provider?: string; model?: string } | undefined;
-      const occupancy = await readOccupancy(ctx, state);
+      // 0.2：主 agent 上下文同时驱动两件事——占用数字（圆环）与悬停显示的构成。
+      const mainline = await readMainlineCached(id, signal);
+      const occupancy = await readOccupancy(ctx, state, mainline);
       const catalog = await loadCatalog(signal).catch(() => ({ groups: [], failures: [] }));
       // §5.1/§8：首屏只给最近一页，更早的靠「查看更早历史」按页取。
       // 一次全给会在记录变多后把浮窗塞满，也让首屏变慢。
@@ -214,6 +255,18 @@ export function apply(ctx: any): void {
         ...(occupancy === undefined ? {} : { occupancy: occupancy.percent }),
         occupancyKnown: occupancy !== undefined,
         occupancyEstimated: occupancy?.estimated === true,
+        // 0.2：这份上下文由哪两块构成（圆环的悬停提示据此显示，不再只给一个总数）。
+        // 两块之和 === 本次实际注入的量（主 agent 段超上限时按**丢完之后**的实际值记，
+        // 否则用户悬停看到的数对不上账）。
+        ...(occupancy === undefined ? {} : {
+          occupancyParts: {
+            mainAgentTokens: occupancy.parts.mainAgentTokens,
+            mainAgentChars: occupancy.parts.mainAgentChars,
+            ownTokens: occupancy.parts.ownTokens,
+            ownChars: occupancy.parts.ownChars,
+            ...(mainline ? { mainAgentEvents: mainline.eventCount, mainlineTruncated: mainline.truncated } : {}),
+          },
+        }),
         catalog,
       };
     },
@@ -327,7 +380,7 @@ export function apply(ctx: any): void {
      * §9.1：压缩过之后，参考的是「摘要 + 压缩之后的新问答」，不是压缩前的原始问答。
      * §5.1：不能无节制把全部历史交给模型，所以只取最近若干轮（由 buildMessages 截断）。
      */
-    buildMessages: async (id: string, question: string, payload: Record<string, unknown>) => {
+    buildMessages: async (id: string, question: string, payload: Record<string, unknown>, signal?: AbortSignal, mode: 'ask' | 'compact' = 'ask') => {
       const state: any = store ? (await store.load(id)).state : undefined;
       const compactCreatedAt: string | undefined = state?.compactState?.createdAt;
       const all: any[] = Array.isArray(state?.records) ? state.records : [];
@@ -339,9 +392,27 @@ export function apply(ctx: any): void {
         .map(record => ({ question: record.question, answer: record.answerText, ...(record.reason ? { reason: record.reason } : {}) }));
       // 既往助手消息必须带来源（provider/model），否则形状不合 dsh-llm 契约。
       const explicit = state?.explicitModel;
+      /**
+       * 0.2：主 agent 的上下文。
+       *
+       * **压缩模式下一律不注入**——这是用户明确要求的「小助手 /compact 只压小助手与用户对话
+       * 产生的上下文，主 agent 转移进来的部分不应受影响」。
+       *
+       * 为什么靠「不注入」而不是「压缩后再回填」：ask 与 compact 共用本函数
+       * （routes.ts 的同一行调用），所以这里是两条路径唯一的、也是最清楚的分叉点。
+       * 注入之后由 compactAssistant 把整份 messages 送去摘要——**任何**在场的内容都会被摘要掉，
+       * 事后回填既多一次拼接，又会出现「摘要里提到了它、回填的原文里也有它」的双版本。
+       *
+       * 这里**不用 loadState 的那个短时缓存**：提问要求「同步至最新」，
+       * 必须读此刻的表面（readSurface 对活跃会话走内存快照，代价很小）。
+       */
+      const mainline = mode === 'compact'
+        ? undefined
+        : await readMainlineContext({ sessionQuery, sessionId: id, signal });
       return buildMessages(question, payload, {
         history: turns,
         compactSummary: state?.compactState?.summary,
+        ...(mainline ? { mainline: { text: mainline.text } } : {}),
         ...(explicit?.provider && explicit?.model ? { assistantSource: { provider: explicit.provider, model: explicit.model } } : {}),
       });
     },

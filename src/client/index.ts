@@ -325,6 +325,9 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
             occupancy: typeof payload.occupancy === 'number' ? payload.occupancy : undefined,
             occupancyKnown: typeof payload.occupancy === 'number',
             occupancyEstimated: payload.occupancyEstimated === true,
+            // 0.2：两块构成。与 occupancy 用**同一套守卫**（有活动请求时保留本地），
+            // 否则回答进行中的一次刷新会把悬停提示清掉。
+            occupancyParts: isObject(payload.occupancyParts) ? payload.occupancyParts as never : undefined,
           }),
         ...(catalog ? { catalog: catalog as never } : {}),
         // 只在宿主确实给了摘要时覆盖本地状态：正在压缩时不能用旧的落库值盖掉「压缩中」。

@@ -37,6 +37,29 @@ export type OccupancyInput = {
     records?: readonly OccupancyRecord[];
     /** 适配器自报的上下文容量；缺失或非法时返回 undefined。 */
     contextWindow?: number;
+    /**
+     * 0.2：主 agent 转移进小助手的那一段的估算 token 数。
+     *
+     * 为什么必须计入：那一段**确实占用了小助手的上下文**（每次提问都要发给模型）。
+     * 不把它算进来，圆环就会少报——用户看到"才 20%"却在提问时撞上容量上限。
+     *
+     * 但它与"小助手自身占用"是**两块**，所以分开记账（见 Occupancy.parts），
+     * 界面悬停时才能分别显示。§9.2「显示小助手自身占用，不使用主 agent 的数值」
+     * 约束的是**不能用主 agent 的上下文窗口/百分比冒充小助手的**，
+     * 不是"不许把小助手自己发出的请求里含的那部分算进它自己的占用"。
+     */
+    mainAgentTokens?: number;
+    /** 主 agent 段的原始字符数（界面悬停显示绝对量用）。 */
+    mainAgentChars?: number;
+};
+/** 这份上下文的构成：两块各自的量。两块之和 = usedTokens。 */
+export type OccupancyParts = {
+    /** 主 agent 转移进来的那部分。 */
+    mainAgentTokens: number;
+    mainAgentChars: number;
+    /** 小助手与用户对话产生的部分（含系统提示词与压缩摘要）。 */
+    ownTokens: number;
+    ownChars: number;
 };
 export type Occupancy = {
     percent: number;
@@ -44,6 +67,8 @@ export type Occupancy = {
     contextWindow: number;
     /** 恒为 true：启发式结果一律标「估算」，不得伪装成精确值。 */
     estimated: true;
+    /** 0.2：两块构成。ownTokens + mainAgentTokens === usedTokens。 */
+    parts: OccupancyParts;
 };
 /**
  * 计算小助手自身占用比例。

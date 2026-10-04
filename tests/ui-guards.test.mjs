@@ -95,6 +95,57 @@ test('占用已知时渲染百分比，且估算态打上估算标记', async ()
   } finally { dom.restore(); }
 });
 
+/* ---------------- 0.2：悬停显示「这份上下文由哪两块构成」 ---------------- */
+
+test('0.2: 有构成数据时，圆环悬停提示同时给出两块的数量与占比', async () => {
+  const { node, dom } = await render(baseState({
+    occupancyKnown: true, occupancy: 42, occupancyEstimated: true,
+    occupancyParts: { mainAgentTokens: 1200, mainAgentChars: 4800, ownTokens: 3400, ownChars: 13600, mainAgentEvents: 6 },
+  }));
+  try {
+    const ring = node.querySelectorAll('.dsh-explain-assistant-ring')[0];
+    const title = ring.getAttribute('title');
+    assert.ok(title, '必须设置悬停提示（此前这个圆环完全没有 title，鼠标放上去什么都不显示）');
+    assert.match(title, /主 agent 转移 1\.2k/, '必须给出主 agent 转移的量');
+    assert.match(title, /小助手对话 3\.4k/, '必须给出小助手对话的量');
+    assert.match(title, /约 26% \/ 74%/, '必须给出两部分占比，且加起来是 100%');
+    // 无障碍标签必须与悬停提示同源：读屏用户拿不到 title。
+    const aria = ring.getAttribute('aria-label');
+    assert.match(aria, /主 agent 转移 1\.2k/, 'aria-label 必须带上同一份构成');
+  } finally { dom.restore(); }
+});
+
+test('0.2 反例: 没有构成数据时不得设置悬停提示（宁可不显示，也不编造）', async () => {
+  const { node, dom } = await render(baseState({ occupancyKnown: true, occupancy: 42 }));
+  try {
+    const ring = node.querySelectorAll('.dsh-explain-assistant-ring')[0];
+    assert.equal(ring.getAttribute('title'), null, '拿不到构成时不得编造一个悬停提示');
+    assert.equal(/主 agent 转移/.test(ring.getAttribute('aria-label') || ''), false, 'aria-label 也不得编造构成');
+  } finally { dom.restore(); }
+});
+
+test('0.2 反例: 两块都是 0 时不显示构成（0/0 的比例没有意义）', async () => {
+  const { node, dom } = await render(baseState({
+    occupancyKnown: true, occupancy: 0,
+    occupancyParts: { mainAgentTokens: 0, mainAgentChars: 0, ownTokens: 0, ownChars: 0 },
+  }));
+  try {
+    const ring = node.querySelectorAll('.dsh-explain-assistant-ring')[0];
+    assert.equal(ring.getAttribute('title'), null, '总量为 0 时不该给出 0%/100% 这种假比例');
+  } finally { dom.restore(); }
+});
+
+test('0.2: 主 agent 段被截断时，悬停提示要如实说明', async () => {
+  const { node, dom } = await render(baseState({
+    occupancyKnown: true, occupancy: 60, occupancyEstimated: true,
+    occupancyParts: { mainAgentTokens: 15000, mainAgentChars: 60000, ownTokens: 500, ownChars: 2000, mainlineTruncated: true },
+  }));
+  try {
+    const ring = node.querySelectorAll('.dsh-explain-assistant-ring')[0];
+    assert.match(ring.getAttribute('title'), /已截断/, '截断过就必须说，不能让用户以为看到的是全部');
+  } finally { dom.restore(); }
+});
+
 test('首个打开渲染快捷问题按钮；标记已点过后不再渲染', async () => {
   const first = await render(baseState({ quickQuestionsDismissed: false }));
   try {

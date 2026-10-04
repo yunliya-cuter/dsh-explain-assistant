@@ -10,7 +10,16 @@ export interface RouteService {
     resolveModel?: (id: string, signal?: AbortSignal) => Promise<{
         selection: AssistantModel;
     }>;
-    buildMessages?: (id: string, question: string, payload: Record<string, unknown>, signal?: AbortSignal) => Promise<AssistantMessage[]>;
+    /**
+     * 0.2：第 5 个参数是**本次调用属于哪条路径**（'ask' 提问 / 'compact' 压缩）。
+     *
+     * 为什么必须区分：小助手的 /compact 只应压缩「小助手与用户对话产生的上下文」，
+     * 主 agent 转移进来的那部分不得被摘要顶替（用户明确要求）。而 ask 与 compact
+     * 共用本函数、且下游 compactAssistant 会把**整份** messages 送去摘要，
+     * 所以唯一的隔离点就是「压缩时不把主 agent 段放进来」。
+     * 省略该参数时按 'ask' 处理（保持既有调用方与测试的行为不变）。
+     */
+    buildMessages?: (id: string, question: string, payload: Record<string, unknown>, signal?: AbortSignal, mode?: 'ask' | 'compact') => Promise<AssistantMessage[]>;
     llm?: unknown;
     tokenMeter?: unknown;
     /** §10 调用限额：总超时与空闲超时。省略时用 llm.ts 的默认值。 */
