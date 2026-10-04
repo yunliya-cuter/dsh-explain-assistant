@@ -1,0 +1,24 @@
+# 依赖与构建产物
+node_modules/
+*.tgz
+package-lock.json
+
+# 日志
+*.log
+
+# 内部工作底账：含本机访问 token、进程号、运行细节，不属于插件本身
+docs/HANDOFF.md
+docs/status.md
+docs/gap-analysis.md
+docs/gap-analysis.md.bak-*
+
+# 取证材料：含本机 token 与 50MB 本地 GUI 截图（截图会暴露会话内容）
+docs/evidence/
+
+# 本地一次性审计产物：含本机绝对路径，且测试数字停留在早期版本（会与 README 冲突）
+tests/COVERAGE.md
+tests/inspect-3082.mjs
+
+# 临时文件
+*.tmp
+.DS_Store

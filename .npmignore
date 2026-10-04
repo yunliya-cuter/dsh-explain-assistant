@@ -1,0 +1,11 @@
+# Build and repository-only artifacts
+*.tgz
+node_modules/
+*.log
+
+# 证据截图与取证产物：体积大（3 张就 2.9MB，曾把包从 197KB 撑到 2.7MB）且不是运行时输入
+docs/evidence/screenshots/
+docs/evidence/
+
+# TypeScript sources and local test fixtures are not runtime package inputs
+# Keep docs and compiled lib for support and inspection.

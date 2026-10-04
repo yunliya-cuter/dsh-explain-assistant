@@ -1,0 +1,329 @@
+/* ==================================================================
+ * 解释小助手 · 界面样式
+ *
+ * 设计取向：贴着 DSH 宿主既有的观感走（同一套 --dsw-alias-* 变量），
+ * 不另立一套配色，免得和页面其它部分打架。
+ *
+ * 上一版为什么"不可用"，这几条是直接原因，改动都针对它们：
+ *   1. 标题栏把「选择内容」「/compact」「×」和标题挤在一行，文字被压、按钮贴边；
+ *   2. 33 个模型平铺成一个换行流，把浮窗整个吃掉，用户要滚很久才看得到输入框；
+ *   3. 占用圆环绝对定位在右下角，和「发送」按钮重叠；
+ *   4. 没有正文滚动区和固定输入区的分层，滚动时按钮跟着跑；
+ *   5. 行高、间距、字号没有层级，一段回答和一堆按钮长得一样重。
+ * ================================================================== */
+
+/* ---------- 外壳 ---------- */
+.dsh-explain-assistant-overlay{
+  position:fixed;z-index:30;
+  display:flex;flex-direction:column;box-sizing:border-box;
+  min-width:360px;min-height:420px;
+  background:var(--dsw-alias-bg-base,#fff);
+  color:var(--dsw-alias-label-primary,#111);
+  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.14));
+  border-radius:14px;
+  box-shadow:0 18px 48px rgba(0,0,0,.28),0 2px 8px rgba(0,0,0,.16);
+  overflow:hidden;pointer-events:auto;
+  font-size:13px;line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+.dsh-explain-assistant-overlay *,.dsh-explain-assistant-overlay *::before,.dsh-explain-assistant-overlay *::after{box-sizing:border-box}
+
+/* ---------- 标题栏 ---------- */
+.dsh-explain-assistant-titlebar{
+  display:flex;align-items:center;gap:10px;flex:0 0 auto;
+  min-height:46px;padding:0 10px 0 14px;
+  cursor:move;user-select:none;
+  border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1));
+  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06));
+}
+.dsh-explain-assistant-titlebar .ea-title{flex:0 0 auto;font-size:14px;font-weight:600;letter-spacing:.02em}
+.dsh-explain-assistant-status{flex:1 1 auto;min-width:0;font-size:12px;color:var(--dsw-alias-label-tertiary,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ea-header-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.dsh-explain-assistant-close{
+  font-size:20px;line-height:1;background:none;border:0;padding:4px 8px;cursor:pointer;
+  border-radius:8px;color:var(--dsw-alias-label-secondary,#444);
+}
+.dsh-explain-assistant-close:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.14))}
+
+/* ---------- 通用按钮 ---------- */
+.ea-btn{
+  font:inherit;line-height:1.2;
+  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.16));
+  border-radius:8px;
+  background:var(--dsw-alias-bg-base,#fff);
+  color:var(--dsw-alias-label-primary,#111);
+  padding:6px 11px;cursor:pointer;
+  white-space:nowrap;
+  transition:background .12s ease,border-color .12s ease;
+}
+.ea-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12))}
+.ea-btn:disabled{opacity:.5;cursor:not-allowed}
+.ea-btn-soft{background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.08));border-color:transparent;padding:5px 10px;font-size:12px}
+.ea-btn-quiet{background:transparent;border-color:transparent;color:var(--dsw-alias-label-secondary,#555);padding:4px 8px;font-size:12px}
+.ea-btn-quiet:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.14))}
+.ea-btn-primary{
+  background:var(--dsw-alias-button-primary-fill,#2f6bff);
+  border-color:var(--dsw-alias-button-primary-fill,#2f6bff);
+  color:var(--dsw-alias-label-primary-inverted,#fff);
+  font-weight:600;padding:9px 18px;
+}
+.ea-btn-primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover,#245bdd);border-color:var(--dsw-alias-button-primary-hover,#245bdd)}
+
+/* ---------- 正文滚动区 ---------- */
+.dsh-explain-assistant-content{
+  display:flex;flex:1 1 auto;flex-direction:column;gap:12px;
+  min-height:0;overflow-y:auto;overflow-x:hidden;
+  padding:14px;
+  scrollbar-width:thin;
+}
+.ea-slot{display:flex;flex-direction:column;gap:12px}
+.ea-slot:empty{display:none}
+
+/* ---------- 首次打开的引导 ---------- */
+.ea-hero{
+  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.12));
+  border-radius:10px;padding:12px 14px;
+  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.05));
+}
+.ea-hero-title{margin:0 0 8px;font-size:13px;color:var(--dsw-alias-label-secondary,#444)}
+.ea-hero-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--dsw-alias-label-secondary,#555)}
+.ea-hero-list li{line-height:1.65}
+
+/* ---------- 卡片 ---------- */
+.ea-card{
+  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.12));
+  border-radius:10px;padding:11px 12px;
+  display:flex;flex-direction:column;gap:8px;
+}
+.ea-card-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ea-card-title{margin:0;font-size:12.5px;font-weight:600;color:var(--dsw-alias-label-secondary,#3a3a3a);flex:0 0 auto}
+.ea-count{
+  display:inline-block;min-width:18px;text-align:center;
+  font-size:11px;line-height:16px;padding:0 5px;border-radius:9px;
+  background:var(--dsw-alias-bg-layer-3,rgba(127,127,127,.16));
+  color:var(--dsw-alias-label-tertiary,#666);
+}
+.ea-count-inline{margin-left:auto}
+
+/* ---------- 回答 / 运行中 ---------- */
+.ea-answer{
+  white-space:pre-wrap;word-break:break-word;
+  font-size:13.5px;line-height:1.75;
+  padding:12px 14px;border-radius:10px;
+  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06));
+  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1));
+}
+.ea-running{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--dsw-alias-label-secondary,#555)}
+.ea-spinner{
+  width:14px;height:14px;flex:0 0 auto;border-radius:50%;
+  border:2px solid var(--dsw-alias-border-l3,rgba(0,0,0,.2));
+  border-top-color:var(--dsw-alias-button-primary-fill,#2f6bff);
+  animation:ea-spin .8s linear infinite;
+}
+@keyframes ea-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.ea-spinner{animation:none}}
+
+/* ---------- 错误 ---------- */
+.dsh-explain-assistant-error,.ea-error{
+  color:var(--dsw-alias-state-error-primary,#b42318);
+  background:var(--dsw-alias-bg-layer-1,rgba(180,35,24,.08));
+  border:1px solid var(--dsw-alias-state-error-primary,rgba(180,35,24,.3));
+  padding:9px 11px;border-radius:9px;font-size:12.5px;
+  white-space:pre-wrap;word-break:break-word;
+}
+
+/* ---------- 快捷问题 ---------- */
+.ea-quick{
+  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.12));
+  border-radius:10px;padding:11px 12px;
+  display:flex;flex-direction:column;gap:9px;
+}
+.ea-quick-row{display:flex;flex-wrap:wrap;gap:7px}
+.ea-chip{
+  border-radius:999px;padding:6px 13px;font-size:12.5px;
+  background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.08));
+  border-color:transparent;
+}
+.ea-chip:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.16))}
+
+/* ---------- 模型选择 ---------- */
+.ea-model-current{font-size:12px;color:var(--dsw-alias-label-secondary,#555);word-break:break-all;line-height:1.5}
+.ea-model-summary{
+  cursor:pointer;font-size:12px;padding:5px 0;text-align:left;
+  color:var(--dsw-alias-label-tertiary,#666);
+  background:transparent;border-color:transparent;
+}
+.ea-model-details[data-open=true] .ea-model-summary{margin-bottom:6px}
+/* 未选模型时把摘要行做成醒目的行动点：用户必须能一眼看到「这里要先点一下」。 */
+.ea-model-details[data-unselected=true] .ea-model-summary{
+  display:inline-block;padding:7px 14px;border-radius:8px;
+  font-weight:600;font-size:12.5px;
+  color:var(--dsw-alias-label-primary-inverted,#fff);
+  background:var(--dsw-alias-button-primary-fill,#2f6bff);
+  border-color:transparent;
+}
+.ea-model-details[data-unselected=true] .ea-model-summary:hover{background:var(--dsw-alias-button-primary-hover,#245bdd)}
+.ea-model-list{
+  display:flex;flex-direction:column;gap:10px;
+  max-height:280px;overflow-y:auto;
+  padding:8px;border-radius:9px;
+  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.05));
+  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));
+}
+.ea-model-group{display:flex;flex-direction:column;gap:6px}
+.ea-model-group-name{
+  display:flex;align-items:center;gap:7px;
+  font-size:11.5px;font-weight:600;letter-spacing:.02em;
+  color:var(--dsw-alias-label-tertiary,#666);
+  position:sticky;top:-8px;padding:4px 0;
+  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.05));
+}
+.ea-model-options{display:flex;flex-wrap:wrap;gap:6px}
+.ea-model-option{border-radius:7px;padding:5px 10px;font-size:12px;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.ea-model-option[aria-pressed=true]{
+  border-color:var(--dsw-alias-button-primary-fill,#2f6bff);
+  color:var(--dsw-alias-button-primary-fill,#2f6bff);
+  background:var(--dsw-alias-bg-layer-2,rgba(47,107,255,.1));
+  font-weight:600;
+}
+.ea-model-failure{display:block;font-size:11.5px;color:var(--dsw-alias-state-warn-primary,#a15c00);line-height:1.5}
+
+/* ---------- 依据 ---------- */
+.ea-evidence-row{display:flex;flex-direction:column;gap:4px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1))}
+.ea-evidence-row:first-of-type{border-top:0;padding-top:0}
+.ea-row-head{display:flex;align-items:baseline;gap:8px;justify-content:space-between}
+.ea-evidence-title{font-size:12.5px;word-break:break-all}
+.ea-meta{font-size:11px;color:var(--dsw-alias-label-tertiary,#777);white-space:nowrap;flex:0 0 auto}
+.ea-evidence-summary{margin:2px 0 0;font-size:12.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary,#444)}
+
+/* ---------- 历史 ---------- */
+.ea-record{display:flex;flex-direction:column;gap:5px;padding-top:9px;border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1))}
+.ea-record:first-of-type{border-top:0;padding-top:0}
+.ea-record-question{font-size:12.5px;word-break:break-word}
+.ea-record-answer{margin:0;font-size:12.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary,#444)}
+.ea-warn{font-size:11.5px;color:var(--dsw-alias-state-warn-primary,#a15c00)}
+.ea-empty{color:var(--dsw-alias-label-tertiary,#777);font-size:12.5px;margin:0}
+
+/* ---------- 折叠块 ---------- */
+.ea-disclosure>summary,.ea-tool>summary{
+  cursor:pointer;font-size:12.5px;
+  color:var(--dsw-alias-label-secondary,#444);
+  padding:4px 0;
+}
+.ea-disclosure-body{
+  max-height:260px;overflow:auto;
+  white-space:pre-wrap;word-break:break-word;
+  font-size:12px;line-height:1.65;
+  padding:8px 10px;border-radius:8px;
+  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06));
+  color:var(--dsw-alias-label-secondary,#555);
+}
+.ea-tool{display:flex;flex-direction:column;border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));padding-top:4px}
+.ea-tool:first-of-type{border-top:0}
+.ea-tool-body{display:flex;flex-direction:column;gap:6px;padding:4px 0 6px}
+.ea-tool-detail{margin:0;font-size:12px;color:var(--dsw-alias-label-secondary,#555)}
+.ea-pre{
+  margin:0;max-height:200px;overflow:auto;
+  white-space:pre-wrap;word-break:break-word;
+  font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  padding:8px 10px;border-radius:8px;
+  background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.1));
+  color:var(--dsw-alias-label-secondary,#444);
+}
+.ea-tools{display:flex;flex-direction:column;gap:4px;border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.12));padding-top:10px}
+
+/* ---------- 底部输入区（固定，不随正文滚动） ---------- */
+.dsh-explain-assistant-form{
+  display:flex;flex-direction:column;gap:9px;flex:0 0 auto;
+  padding:11px 13px 12px;
+  border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.12));
+  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.05));
+}
+.ea-input{
+  width:100%;min-height:52px;max-height:150px;
+  resize:vertical;
+  padding:9px 11px;
+  font:inherit;line-height:1.55;
+  color:var(--dsw-alias-label-primary,#111);
+  background:var(--dsw-alias-bg-base,#fff);
+  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.18));
+  border-radius:9px;
+}
+.ea-input::placeholder{color:var(--dsw-alias-label-tertiary,#888)}
+.ea-composer-actions{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.ea-ring-slot{display:flex;align-items:center;min-width:0}
+
+/* ---------- 选中模式提示 ---------- */
+.ea-selection-status{font-size:12px;color:var(--dsw-alias-label-tertiary,#666);line-height:1.5;min-height:0}
+.ea-selection-status:empty{display:none}
+.dsh-explain-assistant-overlay[data-selection-mode=true]{outline:2px solid var(--dsw-alias-button-primary-fill,#2f6bff);outline-offset:-2px}
+
+/* ---------- 占用圆环（§9.2） ---------- */
+.dsh-explain-assistant-ring{
+  display:flex;align-items:center;gap:7px;
+  font-size:11px;color:var(--dsw-alias-label-tertiary,#666);
+}
+.dsh-explain-assistant-ring svg{display:block;flex:0 0 auto}
+.dsh-explain-assistant-ring-track{stroke:var(--dsw-alias-border-l3,rgba(0,0,0,.18))}
+.dsh-explain-assistant-ring-arc{stroke:var(--dsw-alias-button-primary-fill,#2f6bff)}
+.dsh-explain-assistant-ring[data-estimated=true] .dsh-explain-assistant-ring-arc{stroke:var(--dsw-alias-state-warn-primary,#f59e0b)}
+.dsh-explain-assistant-ring[data-unknown=true] .dsh-explain-assistant-ring-track{stroke-dasharray:2 3}
+.dsh-explain-assistant-ring-label{white-space:nowrap}
+.dsh-explain-assistant-ring-estimated{color:var(--dsw-alias-state-warn-primary,#f59e0b);font-size:10px}
+
+/* ---------- /compact 结果（§9.1） ---------- */
+.ea-compact-status{margin:0;font-size:12.5px;line-height:1.6;color:var(--dsw-alias-label-secondary,#444)}
+.ea-compact-error{color:var(--dsw-alias-state-error-primary,#dc2626)}
+.dsh-explain-assistant-compact-summary{
+  margin:6px 0 0;padding:8px 10px;
+  font-size:12.5px;line-height:1.6;white-space:pre-wrap;
+  color:var(--dsw-alias-label-primary,#111);
+  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06));
+  border-left:3px solid var(--dsw-alias-button-primary-fill,#2f6bff);
+  border-radius:0 7px 7px 0;
+}
+
+/* ---------- 缩放手柄 ---------- */
+.dsh-explain-assistant-resize{
+  position:absolute;right:0;bottom:0;width:18px;height:18px;
+  cursor:nwse-resize;border:0;background:transparent;
+  color:var(--dsw-alias-label-tertiary,#888);font-size:11px;line-height:1;
+  display:flex;align-items:flex-end;justify-content:flex-end;
+  padding:0 2px 2px 0;
+}
+
+/* ---------- 焦点可见 ---------- */
+.dsh-explain-assistant-overlay button:focus-visible,
+.dsh-explain-assistant-overlay textarea:focus-visible,
+.dsh-explain-assistant-overlay summary:focus-visible,
+.dsh-explain-assistant-overlay [tabindex]:focus-visible{
+  outline:2px solid var(--dsw-alias-button-primary-fill,#2f6bff);
+  outline-offset:1px;
+}
+/* ---------- §5.2 正在围绕哪条内容提问（输入框上方常驻） ---------- */
+.ea-target-bar{
+  display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  margin:0 0 6px;padding:6px 9px;
+  font-size:12px;line-height:1.5;
+  color:var(--dsw-alias-label-primary,#111);
+  background:var(--dsw-alias-bg-layer-1,rgba(47,107,255,.08));
+  border-left:3px solid var(--dsw-alias-button-primary-fill,#2f6bff);
+  border-radius:0 7px 7px 0;
+}
+.ea-target-bar:empty,.ea-target-bar:not([data-has-target]){display:none}
+.ea-target-label{color:var(--dsw-alias-label-secondary,#555)}
+.ea-target-title{font-weight:600;word-break:break-word}
+.ea-target-more{color:var(--dsw-alias-label-tertiary,#777)}
+.ea-target-clear{margin-left:auto}
+/* ---------- §7/§10 模型不可用时的降级层 ---------- */
+.ea-offline{margin:8px 0;padding:9px 10px;background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06));border-radius:8px}
+.ea-offline-list{margin:6px 0 0;padding-left:18px}
+.ea-offline-evidence{font-size:12.5px;line-height:1.6;color:var(--dsw-alias-label-primary,#111);word-break:break-word}
+.ea-offline-line{margin:4px 0;font-size:12.5px;line-height:1.65;color:var(--dsw-alias-label-primary,#111)}
+.ea-offline-note{margin:8px 0 0;font-size:11.5px;line-height:1.6;color:var(--dsw-alias-label-tertiary,#777)}
+/* ---------- §6.3 依据分级徽标 ---------- */
+.ea-evidence-tier{font-size:11px;line-height:1.5;padding:1px 6px;border-radius:999px;white-space:nowrap;border:1px solid transparent}
+.ea-tier-observed{color:var(--dsw-alias-state-success-primary,#15803d);background:rgba(21,128,61,.1);border-color:rgba(21,128,61,.3)}
+.ea-tier-reported{color:var(--dsw-alias-state-warning-primary,#b45309);background:rgba(180,83,9,.1);border-color:rgba(180,83,9,.3)}
+.ea-tier-unavailable,.ea-tier-unknown{color:var(--dsw-alias-label-tertiary,#666);background:rgba(127,127,127,.1);border-color:rgba(127,127,127,.3)}
+.ea-evidence-tier-hint{display:block;margin-top:3px;font-size:11px;line-height:1.55;color:var(--dsw-alias-label-tertiary,#777)}
