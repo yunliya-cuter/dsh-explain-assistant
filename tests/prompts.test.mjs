@@ -93,3 +93,67 @@ test('用户问题为空时仍给出可执行的追问指令，不产生空 user
   const messages = m.buildMessages('   ', { evidence: [] });
   assert.ok(messages[1].content[0].text.trim().length > 0);
 });
+
+/* ===================================================================== *
+ * task-25 缺陷3：提示词自相矛盾
+ *
+ * renderEvidence 原先在「没点选步骤」时硬编码
+ *   「请如实说明：该步未提供足够信息……不要凭猜测描述主 agent 正在做什么」
+ * 而 SYSTEM_PROMPT 第 138-139 行却要求「没有点选时就凭主 agent 的上下文回答，
+ * **不得**因为没选中片段就说『该步未提供足够信息』」——两处直接打架。
+ * 3082 上的真实回答开头就是「这轮我没有收到你说的……所以我不照那句结论说」。
+ *
+ * 注意断言用**完整句子**，不能用「该步未提供足够信息」这种短串：
+ * SYSTEM_PROMPT 的「四要素」里本来就有一句「某一项确实拿不到信息时，写明『该步未提供足够信息』」，
+ * 那是**合理**用法，不该被误判成冲突（我第一版断言写太宽，把这条正确用法也算进去了）。
+ * ===================================================================== */
+
+test('提示词矛盾(修复): 有主 agent 上下文时，不得再说「请如实说明：该步未提供足够信息」', () => {
+  const messages = m.buildMessages('解释', {}, { mainline: { text: '主 agent 正在读文件' } });
+  const all = JSON.stringify(messages);
+  assert.equal(/请如实说明：该步未提供足够信息/.test(all), false,
+    '有主 agent 上下文时不能再让模型说「该步未提供足够信息」（与 SYSTEM_PROMPT 冲突）');
+  assert.equal(/不要凭猜测描述主 agent 正在做什么/.test(all), false,
+    '有主 agent 上下文时不得再禁止模型描述主 agent（那正是它该依据的材料）');
+  // 必须给出正确的替代指引
+  assert.match(all, /本次没有点选具体步骤/, '应改说「本次没有点选具体步骤」');
+  assert.match(all, /主 agent 的上下文/, '必须指明依据主 agent 的上下文回答');
+});
+
+test('提示词矛盾 不回归: 没有主 agent 上下文时，输出与原来逐字节一致', () => {
+  // 无 mainline（deps 里不带这个键）→ 必须完全保持 old 行为
+  const withoutMainline = m.buildMessages('解释', {});
+  const all = JSON.stringify(withoutMainline);
+  assert.match(all, /请如实说明：该步未提供足够信息/, '没有主 agent 上下文时必须保留原来的老实说明');
+  assert.match(all, /不要凭猜测描述主 agent 正在做什么/, '没有主 agent 上下文时仍应禁止猜测');
+  // 直接对 renderEvidence 做逐字节断言（最严格）
+  const expected = [
+    '【本次没有拿到任何步骤依据】',
+    '用户这次没有选中任何步骤或工具卡片，你手上没有任何具体记录。',
+    '请如实说明：该步未提供足够信息，并请用户在主对话里点选一个具体步骤再问。',
+    '不要凭猜测描述主 agent 正在做什么。',
+  ].join('\n');
+  assert.equal(m.renderEvidence(undefined), expected, '无 mainline 时必须逐字节与原来一致');
+  assert.equal(m.renderEvidence([], false), expected, '显式传 false 时同样逐字节一致');
+});
+
+test('提示词矛盾 边界: 空白 mainline 按「没有」处理（不得指示依据一块不存在的内容）', () => {
+  // 空字符串/纯空白：不能告诉模型「依据下面的主 agent 上下文回答」，因为下面根本没有那块内容
+  for (const text of ['', '   ', '\n', undefined]) {
+    const messages = m.buildMessages('解释', {}, { mainline: { text } });
+    const all = JSON.stringify(messages);
+    assert.equal(/本次没有点选具体步骤/.test(all), false,
+      '空白 mainline 必须按「没有上下文」处理，实际 text=' + JSON.stringify(text));
+    assert.match(all, /请如实说明：该步未提供足够信息/,
+      '空白 mainline 应退回原来的老实说明，实际 text=' + JSON.stringify(text));
+  }
+});
+
+test('提示词矛盾: renderEvidence 的 hasMainline 只影响「无依据」分支', () => {
+  // 有依据时，hasMainline 不该改变输出（否则会影响既有行为）
+  const evidence = [{ id: 'e', title: 't', summary: 's', evidenceState: 'observed' }];
+  assert.equal(m.renderEvidence(evidence, true), m.renderEvidence(evidence, false),
+    '有依据时 hasMainline 不得改变输出');
+  assert.equal(m.renderEvidence(evidence, true), m.renderEvidence(evidence),
+    '默认值与显式 false 对「有依据」同样等价');
+});

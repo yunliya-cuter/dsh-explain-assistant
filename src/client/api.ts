@@ -45,6 +45,8 @@ export type AssistantApi = {
   forget(sessionId: string, signal?: AbortSignal): Promise<ApiEnvelope<unknown>>;
   /** §10：把该会话标记为已读（打开浮窗后清除未读）。 */
   markRead(sessionId: string, signal?: AbortSignal): Promise<ApiEnvelope<unknown>>;
+  /** 记住浮窗的摆放位置与大小（关掉再打开要回到原处）。 */
+  geometry(sessionId: string, geometry: { x: number; y: number; width: number; height: number }, signal?: AbortSignal): Promise<ApiEnvelope<unknown>>;
 };
 
 export class AssistantApiError extends Error {
@@ -184,6 +186,7 @@ export function createAssistantApi(base = '/api/explain-assistant'): AssistantAp
     compact: (s, signal, onEvent) => stream(base + '/compact', s, { schemaVersion: 1, sessionId: s, operation: 'compact', payload: {} }, signal, onEvent),
     markRead: (s, signal) => json(base + '/mark-read?' + queryParam('sessionId', s), { method: 'POST', signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ schemaVersion: 1, sessionId: s, operation: 'mark-read', payload: {} }) }),
     forget: (s, signal) => json(base + '/forget?' + queryParam('sessionId', s), { method: 'POST', signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ schemaVersion: 1, sessionId: s, operation: 'forget', payload: {} }) }),
+    geometry: (s, geometry, signal) => json(base + '/geometry?' + queryParam('sessionId', s), { method: 'POST', signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ schemaVersion: 1, sessionId: s, operation: 'geometry', payload: { geometry } }) }),
     cancel: async (s, id) => { await json(base + '/in-flight?' + queryParam('sessionId', s) + '&' + queryParam('requestId', id), { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ schemaVersion: 1, sessionId: s, requestId: id, operation: 'cancel', payload: {} }) }); }
   };
 }

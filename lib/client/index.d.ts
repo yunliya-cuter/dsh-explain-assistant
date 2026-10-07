@@ -23,4 +23,10 @@ export declare function createClientPlugin(options?: ClientPluginOptions): {
     closeHistoryDetail: () => void;
     forget: (sessionId: string) => Promise<void>;
     primeUnread: (sessionId: string) => Promise<void>;
+    saveGeometry: (sessionId: string, geometry: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    }) => void;
 };

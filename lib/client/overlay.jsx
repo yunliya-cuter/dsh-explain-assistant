@@ -1,4 +1,7 @@
 import { clampGeometry, attachWindowInteractions } from './window.js';
+// 回答正文的 Markdown 渲染。用户要求「解析记号」与「保证性能」同时成立，
+// 增量机制（块级冻结 + 代码块只追加 + 只换尾部）都在这个模块里，见其头部说明。
+import { mountMarkdown, cachedMarkdownNodes } from './markdown.js';
 // §10/D1：记录为什么没完成的中文文案与宿主**共用同一份**（src/shared/）。刻意不复制第二份。
 import { recordReasonText, RECORD_REASON_PREFIX, RECORD_INCOMPLETE_TEXT } from '../shared/record-reason.js';
 let previouslyFocused = null;
@@ -68,17 +71,27 @@ function timeText(value) {
 /* ------------------------------------------------------------------ *
  * 各区块渲染
  * ------------------------------------------------------------------ */
-/** 当前这次提问的结果。放在最上面：用户打开浮窗最想知道的就是「它刚才说了什么」。 */
-function currentAnswerNodes(state, plugin) {
+/**
+ * 「正在解释…」的提示条。
+ *
+ * 为什么和正文分成两个函数：正文现在走**增量渲染**（mountMarkdown），它必须一直
+ * 待在自己的容器里原地更新 —— 冻结的块一旦被摘下来再挂回去，浏览器的滚动锚点就丢了，
+ * 用户看到的是跳变。所以正文独占一个槽位，这个提示条自己一个槽位，互不牵连。
+ */
+function currentStatusNodes(state, plugin) {
+    if (!isBusy(state) || state.text)
+        return [];
+    return [el('div', { class: 'ea-running', role: 'status' }, el('span', { class: 'ea-spinner', 'aria-hidden': 'true' }), el('span', { text: state.phase === 'connecting' ? '正在连接模型…' : '正在解释…' }), button('停止', '停止本次解释', () => plugin.cancel?.(), { class: 'ea-btn ea-btn-quiet' }))];
+}
+/** 当前这次提问的推理过程与工具过程（正文由 answerSlot 单独负责）。 */
+function currentDetailNodes(state) {
     const nodes = [];
-    if (isBusy(state) && !state.text) {
-        nodes.push(el('div', { class: 'ea-running', role: 'status' }, el('span', { class: 'ea-spinner', 'aria-hidden': 'true' }), el('span', { text: state.phase === 'connecting' ? '正在连接模型…' : '正在解释…' }), button('停止', '停止本次解释', () => plugin.cancel?.(), { class: 'ea-btn ea-btn-quiet' })));
-    }
-    if (state.text) {
-        nodes.push(el('article', { class: 'dsh-explain-assistant-answer ea-answer', 'aria-label': '小助手回答', text: state.text }));
-    }
     if (state.reasoning) {
-        nodes.push(el('details', { class: 'dsh-explain-assistant-reasoning ea-disclosure' }, el('summary', {}, '推理过程（原始内容，默认折叠）'), el('div', { class: 'ea-disclosure-body', text: state.reasoning })));
+        nodes.push(el('details', { class: 'dsh-explain-assistant-reasoning ea-disclosure' }, el('summary', {}, '推理过程（原始内容，默认折叠）'), 
+        // 推理过程同样是模型写出来的文字，会带 Markdown 记号；走缓存渲染，避免每次重画重解析。
+        // 键里带上推理正文的指纹：换一次提问、推理内容一变就自然失效，
+        // 免得两次提问拿到同一份旧节点。
+        el('div', { class: 'ea-disclosure-body ea-md-scope' }, ...cachedMarkdownNodes('live-reasoning#' + contentKey(state.reasoning), state.reasoning))));
     }
     if (state.tools.length) {
         const rows = state.tools.map(tool => el('details', { class: 'dsh-explain-assistant-tool ea-tool' }, el('summary', {}, (tool.label || tool.name) + ' · ' + (tool.status === 'running' ? '进行中' : tool.status === 'error' ? '失败' : '完成')), el('div', { class: 'ea-tool-body' }, tool.detail ? el('p', { class: 'ea-tool-detail', text: tool.detail }) : null, tool.result !== undefined ? el('pre', { class: 'ea-pre', text: typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result, null, 2) }) : null)));
@@ -236,8 +249,10 @@ function compactNodes(state) {
     }
     else if (status === 'complete') {
         rows.push(el('p', { class: 'ea-compact-status', role: 'status', text: '已压缩：后续回答参考下面这份摘要。完整问答记录仍然保留在历史里，没有被删除。' }));
+        // 摘要也是**模型写出来的正文**，同样会带 Markdown 记号 —— 原先直接塞 text，记号会原样露出。
+        // 用户抱怨「没有对 md 的符号进行解析」，指的是所有看到模型文字的地方，不只是回答正文。
         if (compact.summary)
-            rows.push(el('p', { class: 'dsh-explain-assistant-compact-summary ea-compact-summary', text: compact.summary }));
+            rows.push(el('div', { class: 'dsh-explain-assistant-compact-summary ea-compact-summary ea-md-scope' }, ...cachedMarkdownNodes('compact-' + (compact.updatedAt || contentKey(String(compact.summary))), String(compact.summary))));
         if (compact.updatedAt)
             rows.push(el('small', { class: 'ea-meta', text: '压缩时间 ' + timeText(compact.updatedAt) }));
     }
@@ -246,7 +261,7 @@ function compactNodes(state) {
         const failed = status === 'error';
         rows.push(el('p', { class: failed ? 'ea-compact-status ea-compact-error' : 'ea-compact-status', role: 'alert', text: (failed ? '压缩失败：' : '压缩已中断：') + (compact.error || '没有拿到可用的摘要') }));
         if (compact.summary) {
-            rows.push(el('p', { class: 'dsh-explain-assistant-compact-summary ea-compact-summary', text: compact.summary }));
+            rows.push(el('div', { class: 'dsh-explain-assistant-compact-summary ea-compact-summary ea-md-scope' }, ...cachedMarkdownNodes('compact-prev-' + compact.updatedAt, String(compact.summary))));
             rows.push(el('small', { class: 'ea-meta', text: '上面这份是上一次成功压缩的摘要，仍然可用。' }));
         }
     }
@@ -284,6 +299,24 @@ function evidenceNodes(state, plugin) {
     });
     return [el('section', { class: 'dsh-explain-assistant-evidence ea-card', 'aria-labelledby': 'dsh-explain-assistant-evidence-title' }, el('div', { class: 'ea-card-head' }, el('h3', { class: 'ea-card-title', id: 'dsh-explain-assistant-evidence-title', text: '已选择依据' }), el('span', { class: 'ea-count ea-count-inline', text: String(state.evidence.length) })), ...rows)];
 }
+/**
+ * 一段文本的短指纹（FNV-1a）。
+ *
+ * 用途：当历史记录**没有 id** 时给渲染缓存算一个**稳定的**键。
+ * 为什么不能用位置索引当键：分页会把同一条记录挪到不同位置，
+ * 于是「第 3 条」这个键会指向**另一条记录**——缓存命中后会把别人的正文显示出来。
+ * 内容指纹只取决于内容本身，与位置无关，因此分页、插入都不会让它错位。
+ *
+ * 不需要密码学强度：它的唯一作用是「同一段文本得到同一个键」，碰撞了最多是多解析一次。
+ */
+function contentKey(text) {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash.toString(36);
+}
 /** §8 历史问答。关闭再打开能继续查看与追问。 */
 function historyNodes(state, plugin) {
     const children = [el('div', { class: 'ea-card-head' }, el('h3', { class: 'ea-card-title', text: '历史' }), state.records.length ? el('span', { class: 'ea-count ea-count-inline', text: String(state.records.length) }) : null, state.hasEarlier ? button(state.loadingEarlier ? '正在加载…' : '查看更早历史', '加载更早历史', () => { if (!state.loadingEarlier)
@@ -302,7 +335,30 @@ function historyNodes(state, plugin) {
             const answer = (typeof record.answerText === 'string' && record.answerText) ? record.answerText : record.answer;
             const at = record.startedAt ?? record.createdAt;
             const reasoning = typeof record.reasoningText === 'string' && record.reasoningText ? record.reasoningText : record.reasoning;
-            children.push(el('article', { class: 'dsh-explain-assistant-record ea-record' }, el('div', { class: 'ea-row-head' }, el('strong', { class: 'ea-record-question', text: record.question }), el('small', { class: 'ea-meta', text: timeText(at) })), answer ? el('p', { class: 'ea-record-answer', text: answer }) : null, reasoning ? el('details', { class: 'ea-disclosure' }, el('summary', {}, '这次回答的推理过程'), el('div', { class: 'ea-disclosure-body', text: reasoning })) : null, 
+            children.push(el('article', { class: 'dsh-explain-assistant-record ea-record' }, el('div', { class: 'ea-row-head' }, el('strong', { class: 'ea-record-question', text: record.question }), el('small', { class: 'ea-meta', text: timeText(at) })), 
+            // 历史正文同样是 Markdown：用户看到的「记号没解析」在这一处也存在。
+            // 走 cachedMarkdownNodes 而不是直接渲染 —— updateOverlay 在流式期间每个分片都跑一次，
+            // 没有缓存的话，每来一个字就要把**所有历史记录**重新解析一遍，记录越多越卡。
+            // 缓存键必须**稳定**：有 id 用 id；没有 id 时用正文指纹，**不能**用位置索引
+            // （位置索引会随分页变化指向另一条记录，缓存命中后会把别人的正文顶上来）。
+            // 同样带上 ea-md-scope：它是「这里面的文字是模型写的」的**约定标记类**，
+            // **不是**「已解析」的判据 —— 判据是子节点来自渲染器。已部署产物里
+            // class="ea-record-answer" 没有这个类却解析正常，证明它既不必要也不充分。
+            //
+            // ⚠️ 这里**确实带来用户可见的变化**，不是「观感不变」（原先那句注释是错的，已更正）：
+            // 元素一旦带上 ea-md-scope，styles.css:127+ 那组规则就生效，
+            // 于是 **粗体** 与 ~~删除线~~ 从「有节点、无样式」变为可见呈现 ——
+            // .ea-record-answer 只有 code/codeblock/h/link/list/p/pre/quote 的规则，缺 strong/del。
+            // 方向上是修复（渲染器一直产出这些节点，只是从没有规则给它们样式），
+            // 但观感必须由页面复验确认，不能靠推断 —— 见 docs/evidence/ 的页面普查。
+            answer ? el('div', { class: 'ea-record-answer ea-md-scope' }, ...cachedMarkdownNodes(recordId || 'rec#' + contentKey(String(record.question || '') + '\u0000' + String(answer)), String(answer))) : null, 
+            // 推理同样是**模型写出的 Markdown**，必须走渲染器。
+            // 这里原本是唯一一处裸文本渲染（el('div', {..., text: reasoning})），
+            // 页面实测：历史列表里 6 个 ea-disclosure-body 全部没有 ea-md-scope，
+            // 成段的 `- 条目` 记号原样露出（同一份 reasoning 在详情面板 512 行却能解析）。
+            // 缓存键必须**稳定**：有 id 用 id；没有 id 用正文指纹 —— 不能用位置索引
+            // （见 441-443 行：位置索引会随分页漂移到别的记录，命中后把别人的正文顶上来）。
+            reasoning ? el('details', { class: 'ea-disclosure' }, el('summary', {}, '这次回答的推理过程'), el('div', { class: 'ea-disclosure-body ea-md-scope' }, ...cachedMarkdownNodes(recordId || 'rec-reasoning#' + contentKey(String(reasoning)), String(reasoning)))) : null, 
             // 同样两套字段名：客户端本地写 incomplete，宿主写 status/complete。
             // 只看 incomplete 的话，来自宿主的未完成记录永远不会显示警告（§6.3「不得把没验证的说成已验证」）。
             //
@@ -356,11 +412,12 @@ function historyDetailNodes(state, plugin) {
     if (record.question)
         rows.push(el('p', { class: 'ea-detail-question', text: '问题：' + String(record.question) }));
     const answer = typeof record.answerText === 'string' && record.answerText ? record.answerText : record.answer;
+    // 同历史区：没有 recordId 时用正文指纹当键，避免两条不同记录撞同一键而互相顶掉正文。
     if (answer)
-        rows.push(el('article', { class: 'ea-detail-answer', text: String(answer) }));
+        rows.push(el('article', { class: 'ea-detail-answer ea-md-scope' }, ...cachedMarkdownNodes('detail-' + (detail.recordId || 'rec#' + contentKey(String(answer))), String(answer))));
     const reasoning = typeof record.reasoningText === 'string' && record.reasoningText ? record.reasoningText : record.reasoning;
     if (reasoning)
-        rows.push(el('details', { class: 'ea-disclosure' }, el('summary', {}, '完整推理过程'), el('div', { class: 'ea-disclosure-body', text: String(reasoning) })));
+        rows.push(el('details', { class: 'ea-disclosure' }, el('summary', {}, '完整推理过程'), el('div', { class: 'ea-disclosure-body ea-md-scope' }, ...cachedMarkdownNodes('detail-reasoning-' + (detail.recordId || 'rec#' + contentKey(String(reasoning))), String(reasoning)))));
     if (evidence.length) {
         rows.push(el('h4', { class: 'ea-detail-subtitle', text: '完整依据（共 ' + (counts.evidence || evidence.length) + ' 条，已显示 ' + evidence.length + ' 条）' }));
         for (const item of evidence) {
@@ -542,6 +599,10 @@ export function renderOverlay(state, plugin) {
     const body = el('div', { class: 'dsh-explain-assistant-content ea-body' });
     const errorSlot = el('div', { class: 'ea-slot' });
     const currentSlot = el('div', { class: 'ea-slot' });
+    // 正文的容器用 <article>：它是「小助手回答」这一块，读屏需要这个语义标签。
+    // 增量渲染器只在这个容器**内部**增删尾部节点，容器本身不重建。
+    const answerSlot = el('article', { class: 'dsh-explain-assistant-answer ea-answer', 'aria-label': '小助手回答' });
+    const answerView = mountMarkdown(answerSlot);
     const heroSlot = el('div', { class: 'ea-slot' });
     const quickSlot = el('div', { class: 'ea-slot' });
     const modelSlot = el('div', { class: 'ea-slot' });
@@ -551,7 +612,7 @@ export function renderOverlay(state, plugin) {
     // 展开面板放在最前面：用户点的是「查看完整内容」，结果必须在打开的那一刻就被看见，
     // 否则在长长的历史列表里点完之后什么都不会变化（内容其实在下面，用户以为按钮坏了）。
     const detailSlot = el('div', { class: 'ea-slot' });
-    body.append(detailSlot, errorSlot, currentSlot, heroSlot, quickSlot, modelSlot, evidenceSlot, compactSlot, historySlot, selectionStatus);
+    body.append(detailSlot, errorSlot, currentSlot, answerSlot, heroSlot, quickSlot, modelSlot, evidenceSlot, compactSlot, historySlot, selectionStatus);
     const input = el('textarea', { class: 'ea-input', placeholder: '问小助手主 agent 正在做什么…', 'aria-label': '向解释小助手提问', rows: '2' });
     const send = button(isBusy(state) ? '处理中' : '发送', '发送问题', () => { form.requestSubmit(); }, { class: 'ea-btn ea-btn-primary ea-send' });
     const ringSlot = el('div', { class: 'ea-ring-slot' });
@@ -565,16 +626,37 @@ export function renderOverlay(state, plugin) {
     const targetBar = el('div', { class: 'ea-target-bar', role: 'status', 'aria-live': 'polite' });
     const form = el('form', { class: 'dsh-explain-assistant-form ea-composer' });
     form.append(targetBar, input, el('div', { class: 'ea-composer-actions' }, ringSlot, send));
+    /**
+     * 改大小的入口：**像普通窗口一样拖边、拖角**。
+     *
+     * 用户对上一版（只有一个角落字符 ◢）的定性原话是
+     * 「不是，意思是这个设计不符合操作直觉，不是说它看不到用不了」——
+     * 他嫌的不是字号或颜色，而是「要去角落找一个符号」这件事不合他平时用窗口的经验。
+     * 所以这里在四周各铺一条边、四个角各铺一个热区，方向与鼠标指针一致；
+     * 那个 ◢ 保留（有人习惯找它），但只是**其中一部分**，不再是唯一入口。
+     */
+    const RESIZE_DIRECTIONS = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+    const resizeZones = RESIZE_DIRECTIONS.map(direction => ({
+        direction,
+        element: el('div', {
+            class: 'ea-resize-edge ea-resize-' + direction,
+            'data-resize-direction': direction,
+            // 热区是纯装饰性拖拽面：读屏与键盘仍走标题栏的方向键（见 attachWindowInteractions）。
+            'aria-hidden': 'true',
+        }),
+    }));
     const resize = button('◢', '调整窗口大小；使用方向键调整', undefined, { class: 'dsh-explain-assistant-resize ea-resize' });
     const geometry = clampGeometry(state.geometry, window.innerWidth, window.innerHeight);
     root.style.left = geometry.x + 'px';
     root.style.top = geometry.y + 'px';
     root.style.width = geometry.width + 'px';
     root.style.height = geometry.height + 'px';
-    root.append(titlebar, body, form, resize);
+    root.append(titlebar, body, form, ...resizeZones.map(zone => zone.element), resize);
     const ctx = {
-        state, plugin: like, body, phase, selectionStatus,
-        errorSlot, currentSlot, heroSlot, quickSlot, modelSlot, evidenceSlot, compactSlot, historySlot, detailSlot, ringSlot, targetBar,
+        state, plugin: like, body, phase, selectionStatus, controller: undefined, appliedGeometry: undefined,
+        // 见 updateOverlay：用来判断「后面来的几何值是不是新值」。
+        // 不这样做的话，每次重画都会把用户刚拖好的位置按旧值拽回去。
+        errorSlot, currentSlot, answerSlot, answerView, heroSlot, quickSlot, modelSlot, evidenceSlot, compactSlot, historySlot, detailSlot, ringSlot, targetBar,
         // 默认折叠模型列表：一开就摊开 33 个模型会把「使用说明 + 快捷问题」顶出可视区。
         // 未选模型时由摘要行 + 醒目的提示承担「先选一个」的引导（§7/§11.8）。
         form, input, send, modelOpen: false,
@@ -622,12 +704,17 @@ export function renderOverlay(state, plugin) {
     };
     root.addEventListener('keydown', keydown);
     root.addEventListener('dsh-explain-assistant:dispose', () => root.removeEventListener('keydown', keydown), { once: true });
-    const controller = attachWindowInteractions(root, titlebar, resize, geometry, next => {
+    const controller = attachWindowInteractions(root, titlebar, geometry, next => {
         const current = contexts.get(root);
-        if (current)
-            current.plugin.registry.update(current.state.sessionId, { geometry: next });
-    });
-    root.addEventListener('dsh-explain-assistant:dispose', () => controller.dispose(), { once: true });
+        if (!current)
+            return;
+        // 先落到内存（本次会话内立刻生效），再让宿主记住（关掉再打开要回到原处）。
+        // 此前只做了前者 —— contracts 里那个 geometry 字段从来没人写过，位置等于没存。
+        current.plugin.registry.update(current.state.sessionId, { geometry: next });
+        current.plugin.saveGeometry?.(current.state.sessionId, next);
+    }, resizeZones);
+    ctx.controller = controller;
+    root.addEventListener('dsh-explain-assistant:dispose', () => { controller.dispose(); answerView.dispose(); }, { once: true });
     // preventScroll：默认的 focus() 会把浏览器滚动到输入框，于是首屏直接停在模型列表上、
     // 「使用说明 + 快捷问题」被顶到可视区外面——第一眼就看不到这窗口是干什么的。
     queueMicrotask(() => { (input || root).focus({ preventScroll: true }); body.scrollTop = 0; });
@@ -650,11 +737,39 @@ export function updateOverlay(root, state, plugin) {
     //
     // 正文区是原地更新（各 slot 走 fill()，不重建容器），浏览器本来就会保住滚动位置；
     // 内容变短时浏览器也会自己钳低。所以「不碰」才是正确的保持方式。
+    // ── 几何值「后到」时必须补应用 ──────────────────────────────────────────
+    //
+    // 首次打开浮窗时 `/state` 还没回来，创建那一刻只能用默认位置渲染；
+    // 等几何值回来时 `updateOverlay` 只重画内容、**不重设位置** → 必须关闭重开才生效。
+    // 实测（verify-3082）：硬重载后首次打开停在默认 `(600,16) 420x526`，关闭重开才 `(220,32) 620x526`。
+    //
+    // 两条守卫，缺一条都会造成倒退：
+    //  ① 用户**正在**拖动/缩放时不覆盖 —— 否则会把用户正拖的位置拽回去；
+    //  ② 与上次已套用的值相同则不动 —— 否则每次重画（流式回答期间几百次）都重设一次位置。
+    if (state.geometry && ctx.controller && !ctx.controller.isInteracting()) {
+        const next = clampGeometry(state.geometry, window.innerWidth, window.innerHeight);
+        const prev = ctx.appliedGeometry;
+        if (!prev || prev.x !== next.x || prev.y !== next.y || prev.width !== next.width || prev.height !== next.height) {
+            ctx.controller.applyExternal(next);
+            ctx.appliedGeometry = next;
+        }
+    }
     ctx.phase.textContent = phaseLabel(state);
     ctx.errorSlot.replaceChildren();
     if (state.error)
         ctx.errorSlot.appendChild(el('div', { class: 'dsh-explain-assistant-error ea-error', role: 'alert', text: state.error }));
-    fill(ctx.currentSlot, [...currentAnswerNodes(state, ctx.plugin), ...offlineFallbackNodes(state)]);
+    fill(ctx.currentSlot, [...currentStatusNodes(state, ctx.plugin), ...currentDetailNodes(state), ...offlineFallbackNodes(state)]);
+    // 正文：走增量渲染。
+    //
+    // streaming 的判据是「还在吐字」，也就是 phase 为 connecting/running。
+    // 注意**不能**只看「文本有没有变长」：一次回答结束后宿主还会再推一次同样的文本，
+    // 那时若仍按流式处理，增量器会保留增量状态而不做整篇定稿渲染，
+    // 未闭合的块（例如最后一段没有空行结尾）会一直停在「临时」形态。
+    ctx.answerSlot.hidden = !state.text;
+    if (state.text)
+        ctx.answerView.update(state.text, isBusy(state));
+    else
+        ctx.answerView.update('', false);
     fill(ctx.heroSlot, heroNodes(state));
     fill(ctx.quickSlot, quickNodes(state, ctx.plugin));
     fill(ctx.modelSlot, modelNodes(state, ctx.plugin, ctx.modelOpen, next => { ctx.modelOpen = next; ctx.rerender(); }));

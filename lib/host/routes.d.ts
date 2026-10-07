@@ -42,6 +42,14 @@ export interface RouteService {
     /** §10：把该会话标记为已读（打开浮窗后清除未读）。 */
     markRead?: (id: string) => Promise<void>;
     selectModel?: (id: string, model: unknown, signal?: AbortSignal) => Promise<unknown>;
+    /**
+     * 记住浮窗的摆放位置与大小。
+     *
+     * 为什么需要：contracts 里早就有 `AssistantState.geometry` 字段，磁盘上也一直留着它，
+     * 但**从来没有任何代码往里写** —— 于是用户每次拖好位置、关掉浮窗再打开，又回到默认位置。
+     * 这是「只写了一半」的功能，不是新需求。
+     */
+    saveGeometry?: (id: string, geometry: unknown, signal?: AbortSignal) => Promise<unknown>;
     isSessionAllowed?: (id: string, signal?: AbortSignal) => Promise<boolean>;
     isArchived?: (id: string, signal?: AbortSignal) => Promise<boolean>;
 }

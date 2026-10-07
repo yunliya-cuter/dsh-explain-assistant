@@ -29,7 +29,32 @@ export function estimateTextTokens(text: string): number {
 }
 
 /** 一条小助手自己的问答记录（只取参与上下文的两个字段）。 */
-export type OccupancyRecord = { question?: string; answer?: string };
+export type OccupancyRecord = {
+  question?: string;
+  /**
+   * 回答正文。**落库的真实字段名**（routes.ts 写进磁盘的就是它）。
+   *
+   * 这里曾经只声明 `answer`，而 `answer` 是**客户端本地记录**的字段名，
+   * 落库记录里根本没有它 —— 于是占用把每条回答正文都算成 0 个字。
+   * 实测（3082 真实文件 session-7e1a8742）：回答正文 1107 字一个没算，
+   * ownTokens 601（应为 878）、ownChars 2286（应为 3393）。
+   */
+  answerText?: string;
+  /** 客户端本地追加的记录用的字段名（宿主落库记录没有它），保留以兼容既有形状。 */
+  answer?: string;
+};
+
+/**
+ * 取一条记录的**回答正文**。字段名只能在这一处判定，不许两处各写一遍。
+ *
+ * 优先级：`answerText` 是字符串就用它（**空串也算数**——那是真实的空回答，
+ * 不是"字段缺失"，不能拿 `answer` 去兜底）；`answerText` 不是字符串时才退回 `answer`。
+ */
+export function answerTextOf(record: OccupancyRecord | undefined): string {
+  if (!record) return '';
+  if (typeof record.answerText === 'string') return record.answerText;
+  return typeof record.answer === 'string' ? record.answer : '';
+}
 
 export type OccupancyInput = {
   /** 小助手的系统提示词：每次请求都带，必须计入。 */
@@ -95,7 +120,8 @@ export function measureAssistantOccupancy(input: OccupancyInput): Occupancy | un
   }
   for (const record of input.records ?? []) {
     const question = typeof record.question === 'string' ? record.question : '';
-    const answer = typeof record.answer === 'string' ? record.answer : '';
+    // 必须走 answerTextOf：真实落库字段是 answerText，直接读 record.answer 会恒取到空。
+    const answer = answerTextOf(record);
     ownChars += question.length + answer.length;
     used += estimateTextTokens(question) + estimateTextTokens(answer) + 2 * (BLOCK_OVERHEAD + ROLE_OVERHEAD);
   }
@@ -127,11 +153,15 @@ export function carriedRecords(
   compactCreatedAt?: string,
 ): OccupancyRecord[] {
   const list = records ?? [];
-  if (!compactCreatedAt) return list.map(record => ({ question: record.question, answer: record.answer }));
+  // 回答正文一律走 answerTextOf（**唯一判定处**）：落库字段是 answerText，
+  // 而客户端本地记录用 answer。两处各写一遍就会再次出现「少算正文」那类缺陷。
+  const carry = (record: OccupancyRecord & { startedAt?: string; createdAt?: string }): OccupancyRecord =>
+    ({ question: record.question, answerText: answerTextOf(record) });
+  if (!compactCreatedAt) return list.map(carry);
   return list
     .filter(record => {
       const at = record.startedAt ?? record.createdAt;
       return typeof at === 'string' && at > compactCreatedAt;
     })
-    .map(record => ({ question: record.question, answer: record.answer }));
+    .map(carry);
 }

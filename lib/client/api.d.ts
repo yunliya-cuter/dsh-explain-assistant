@@ -41,6 +41,13 @@ export type AssistantApi = {
     forget(sessionId: string, signal?: AbortSignal): Promise<ApiEnvelope<unknown>>;
     /** §10：把该会话标记为已读（打开浮窗后清除未读）。 */
     markRead(sessionId: string, signal?: AbortSignal): Promise<ApiEnvelope<unknown>>;
+    /** 记住浮窗的摆放位置与大小（关掉再打开要回到原处）。 */
+    geometry(sessionId: string, geometry: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    }, signal?: AbortSignal): Promise<ApiEnvelope<unknown>>;
 };
 export declare class AssistantApiError extends Error {
     readonly code: string;

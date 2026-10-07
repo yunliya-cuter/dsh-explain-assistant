@@ -78,12 +78,20 @@ check() { # check <标记> <文件...>
   local needle="$1"; shift
   local n=0
   for f in "$@"; do
-    c=$(grep -c -- "$needle" "$f" 2>/dev/null || true)
+    # **必须用 -F（明文）**：这些标记是要在产物里逐字找到的字符串，不是正则。
+    # 用正则时方括号会被当字符组 —— 例如 close[1][0] === marker 会变成「close1 或 0」的字符类，
+    # 于是标记明明在产物里却报「缺少标记」，把一次正确的部署中止掉（本轮已实际踩到两次）。
+    c=$(grep -c -F -- "$needle" "$f" 2>/dev/null || true)
     n=$((n + ${c:-0}))
   done
   echo "  $needle -> $n"
   if [ "$n" -eq 0 ]; then echo "  ✗ 缺少标记「$needle」：装上的产物不是本次构建，部署中止。"; exit 1; fi
 }
+# 注意：这里**故意没有**做「产物里不得出现旧禁令字样」的字符串检查。
+# 实测：开关写成三元表达式后，构建产物里**两个分支的字符串都在**
+# （true 分支与 false 分支都被打进包里），所以 grep 旧字样必然命中 ——
+# 那样的检查会误判成「放宽没生效」并把一次正确的部署中止掉。
+# 真正要看的是**运行时**那个值，见下面 4b) 的 node 核验。
 # 宿主侧：把某条记录的完整内容交出来（0.1.34 F2/F3）
 check loadHistoryResult "$LIB/index.js"
 # 宿主侧：落库时真的带上 evidence/tools/images（0.1.35；此前只有 9 个字段，面板永远是空的）
@@ -210,6 +218,232 @@ check "主 agent 转移" "$LIB/client.js"
 check occupancyParts "$LIB/client.js"
 # 记账：两块之和必须等于注入量（否则用户悬停看到的数对不上账）
 check occupancyParts "$LIB/index.js"
+
+# ══════════════════════════════════════════════════════════════════════════
+# 0.2.1：整插件巡查查出的四条缺陷
+#
+# 共同点值得记下来：这四条此前**全都没有被 450 条测试抓住**。
+# 原因分两类，校验也据此设计：
+#   · 「假数据与真数据不同形」——占用那条；
+#   · 「只覆盖了主路径、没覆盖边界」——停止与位置两条。
+# ══════════════════════════════════════════════════════════════════════════
+
+# ① 停止被误报成「模型失败」。
+# 根因是 llm.ts 里 abortByParent 引用的 aborted 声明在它后面（暂时性死区），
+# 抛 ReferenceError → 事件变成 error/INTERNAL_ERROR → 原因被记成 model_failed。
+# 用户点「停止」，看到的是「模型那边返回了错误」，记录里也写成模型失败。
+check wasAborted "$LIB/host/llm.js"
+check looksAborted "$LIB/host/llm.js"
+# 中止必须用 ExplainAssistantError 抛：路由的 toErrorBody 只认这个类型，
+# 用裸 Error 的话事件虽是 aborted，内容却是 INTERNAL_ERROR「没能完成这次操作」。
+check "ExplainAssistantError('ABORTED'" "$LIB/host/llm.js"
+# 原因推导要认 AbortError（实测 discoverCatalog 在 abort 时抛的正是它，不带我们的 ABORTED 码）
+check "name === 'AbortError'" "$LIB/shared/record-reason.js"
+
+# ② 占用把回答正文算成了 0 个字。
+# occupancy 读 record.answer，而落库真实字段是 answerText —— 实测 3082 真实记录
+# 少算 1107 字（ownTokens 601 应为 878）。这个缺陷测试抓不到，因为**测试喂的假数据
+# 用的是同一个错字段名**，假数据与真数据不同形。
+check answerTextOf "$LIB/host/occupancy.js"
+check answerText "$LIB/host/occupancy.js"
+
+# ③ 提示词自相矛盾：无依据时 renderEvidence 叫模型说「该步未提供足够信息」，
+# 而 SYSTEM_PROMPT 明令「不得因为没选中片段就说这句话」。实测模型在回答里公开拒绝该指令。
+# 有主 agent 上下文时改用中性措辞，没有时保持逐字节不变。
+check hasMainline "$LIB/host/prompts.js"
+check 本次没有点选具体步骤 "$LIB/host/prompts.js"
+
+# ④ 浮窗位置不保存：contracts 里早有 geometry 字段，但**从来没有任何写入方**，
+# 用户拖好位置、关掉再打开又回默认位置。
+check saveGeometry "$LIB/index.js"
+check saveGeometry "$LIB/client.js"
+check "/explain-assistant/geometry" "$LIB/index.js"
+# 拖动提交时真的调用它（否则「加了接口但没人调」也会假绿）
+check "plugin.saveGeometry?.(current.state.sessionId" "$LIB/client.js"
+# **只写不读 = 位置照样丢**：宿主存了那份位置，刷新时必须读回来。
+# 教训（2026-10-04 部署后才发现）：第一版只做了「拖动→写宿主」，没做读回；
+# 整页重载后 registry 全新、位置回默认，磁盘上那份白存 —— 是 verify-3082 在页面上
+# 看到「硬重载后回默认」才暴露的。这条标记钉住那个读回分支。
+check "payload.geometry" "$LIB/client.js"
+
+# ⑤ 空字符路径校验：原文写的是 includes('\0')，在源码里那是「反斜杠 + 0」两个普通字符，
+# 实测含真正 NUL 的路径能通过。
+check "u0000" "$LIB/host/evidence.js"
+
+# ══════════════════════════════════════════════════════════════════════════
+# 0.2.3：0.2.2 部署后在真实页面上复验暴露出来的两条「修了但没真修好」
+#
+# 教训：0.2.2 的代码层测试全绿，页面复验却判未通过。两条都属于
+# 「修了主路径、漏了它旁边那一跳」——上一轮四条缺陷里有两条同类，这一轮又来两条。
+# ══════════════════════════════════════════════════════════════════════════
+
+# ① 用户点「停止」后，界面文案被异步 catch 覆盖。
+# 实测（verify-3082 用 MutationObserver 抓的确定性序列）：
+#   t=911ms cancel() 写入「已按你的要求停止本次解释」
+#   t=926ms run() 的 .catch() 因 abort 触发，按 aborted 判成「请求已中断」把文案盖掉
+#   连跑 3 次一致 —— 不是偶发。落库那一半是对的（宿主走 deriveErrorReason）。
+# 修法：给请求加 stoppedByUser 标记，catch 里标记为真就**不再写 error**。
+check stoppedByUser "$LIB/client.js"
+check "request.stoppedByUser === true" "$LIB/client.js"
+
+# ② 整页硬重载后**首次打开**不应用已存位置，必须关闭重开才生效。
+# 实测：首次打开 (600,16) 420x526（默认），关闭重开后 (220,32) 620x526。
+# 根因：浮窗创建那一刻 state.geometry 还没到（首次打开时 /state 是异步的），
+# 而 updateOverlay 只重画内容、**完全不重设位置** → 几何值后到也永远不生效。
+# 修法：拖动控制器加「应用外部几何值」入口，updateOverlay 在几何值变化时补应用；
+# 两条守卫防倒退：正在拖动/缩放时不覆盖、与上次已套用值相同则不动。
+check isInteracting "$LIB/client.js"
+check applyExternal "$LIB/client.js"
+check appliedGeometry "$LIB/client.js"
+
+# ══════════════════════════════════════════════════════════════════════════
+# 0.2.4：改大小的入口从「角落一个字符 ◢」换成「拖边、拖角」
+#
+# 用户对上一版的定性，原话是：
+#   「不是，意思是这个设计不符合操作直觉，不是说它看不到用不了。」
+# 也就是说他嫌的**不是**字号小或颜色淡，而是「要去角落找一个符号才能改大小」
+# 这件事本身不合他平时用窗口的经验 —— 普通窗口是拖边、拖角就能改。
+# ══════════════════════════════════════════════════════════════════════════
+
+# 八个方向热区必须真的存在（四个边 + 四个角）
+check "ea-resize-edge" "$LIB/client.js"
+check "data-resize-direction" "$LIB/client.js"
+check "ea-resize-se" "$LIB/client.js"
+check "ea-resize-nw" "$LIB/client.js"
+# 方向映射必须是**单一来源**：曾经同一条规则写了两遍（w 分支里令 x=…，末尾又钳一次），
+# 两处数学等价 → 拆掉任一处另一处都会补上 → 证伪脚本看不出红（一次真正的假绿）。
+check resizeByDirection "$LIB/client.js"
+# 拖动时要有可见反馈（正在改大小）
+check "data-resizing" "$LIB/client.js"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 0.2.7：回答正文解析 Markdown 记号
+#
+# 用户原话：「没有对 md 的符号进行解析。我希望能够解析的同时还保证性能。」
+# 两件事是并列的：记号要变成格式，且流式吐字时不能卡。下面两条各验一半。
+# ══════════════════════════════════════════════════════════════════════════
+
+# ① 解析：渲染器确实被打进客户端产物，且浮窗走的是它。
+check "ea-md-p" "$LIB/client.js"
+check "ea-md-codeblock" "$LIB/client.js"
+check "ea-md-h" "$LIB/client.js"
+check "ea-md-li" "$LIB/client.js"
+check "ea-md-quote" "$LIB/client.js"
+check "ea-md-strong" "$LIB/client.js"
+check "mountMarkdown" "$LIB/client.js"
+check "createMarkdownRenderer" "$LIB/client.js"
+check "cachedMarkdownNodes" "$LIB/client.js"
+# 历史正文与详情正文也必须走渲染器（只在主正文上做等于漏了一半）
+check "ea-record-answer" "$LIB/client.js"
+check "ea-detail-answer" "$LIB/client.js"
+# 安全：不得使用 HTML 注入 API。未信任文本只能走 createElement / textContent。
+if grep -q "innerHTML" "$LIB/client.js"; then
+  echo "  X 客户端产物里出现了 innerHTML —— 未信任文本绝不能走 HTML 注入"; exit 1
+fi
+
+# ② 性能：增量机制必须在产物里（块级冻结 + 代码块只追加 + 只换尾部）。
+# 这三样少任何一样，「保证性能」就落空，所以逐个点名，不靠「大概有」。
+check "frozenBlocks" "$LIB/client.js"
+check "frozenCount" "$LIB/client.js"
+check "blockRenders" "$LIB/client.js"
+check "codeAppends" "$LIB/client.js"
+check "codeChars" "$LIB/client.js"
+# 0.2.8：修掉一个用户一眼能看见的缺陷 —— 列表在流式下重复显示。
+# 根因是 mountMarkdown 里「容器实际挂的节点」与「已挂节点记账」脱节：
+# 某块第一次被冻结时冻结出新对象、容器里却是旧对象，按「前缀肯定对了」跳过 → 两份内容并存。
+# 这一条必须点名 firstDiff：它就是对同一性对齐的那段逻辑，退回旧写法这个标记就没了。
+check "firstDiff" "$LIB/client.js"
+
+# ══════════════════════════════════════════════════════════════════════════
+# 0.2.9：对抗性审查（impl-history）报出的 6 条真缺陷，逐条点名
+#
+# 这 6 条都不是推演出来的，是队友用独立探针实测复现的，且每条都做过证伪。
+# 其中两条会造成**内容损失**（用户能看到的东西没了），两条会让页面**卡死**——
+# 后者正对着用户「保证性能」那条要求，所以必须逐条在产物里点名，不靠「大概有」。
+# ══════════════════════════════════════════════════════════════════════════
+
+# ① CRLF：模型经某些网关会吐 CRLF，行尾回车会让标题/列表全然不识别、段落不再切分（整篇退化）。
+#    修法：切行时去掉行尾回车，于是行对象多了一个独立的 end 变量。
+#    标记选 start: i, end: nl —— 它是本次修复独有的形态，且不含反斜杠与方括号，
+#    免得 grep 把标记当正则（带 [] 或反斜杠 r 的标记本轮已连续踩坑三次）。
+check "start: i, end: nl" "$LIB/client.js"
+# ② 缩进的闭合围栏（0-3 空格）原先认不出来 → 围栏永不闭合 → **后面所有正文被吞进代码块**。
+check "close[1][0] === marker" "$LIB/client.js"
+# ③ 有序列表起始号：'3.' 开头原先渲染成从 1 开始，与原文编号对不上。
+check "startNumber" "$LIB/client.js"
+check 'setAttribute("start"' "$LIB/client.js"
+# ④ 列表项里的代码块原先跑到列表外面；⑤ 空行分隔的同类列表原先被拆成两个。
+#    两者同一个根因：空行被当成列表结束。修法见 nextNonBlank。
+check "nextNonBlank" "$LIB/client.js"
+# ⑥ 未闭合/深嵌套方括号的平方级耗时（32k 实测 2624ms → 7ms），正对「保证性能」。
+check "buildCloseIndex" "$LIB/client.js"
+check "closeIndexOf" "$LIB/client.js"
+
+# ══════════════════════════════════════════════════════════════════════════
+# 0.2.10：两条在页面上会看到的缺陷 + 两处覆盖遗漏
+# ══════════════════════════════════════════════════════════════════════════
+
+# ① 定稿那一刻整棵正文 DOM 被重建 → 用户看到「答完的瞬间闪一下」。
+#    根因：定稿分支 reset 后整份重渲染，产出的全是新对象。修法：沿用流式成果，只补齐后面几块。
+#    标记取 rawOf —— 它就是「按源码片段比对、保留已有前缀」那段逻辑，退回旧写法这个标记就没了。
+check "rawOf" "$LIB/client.js"
+# ② 缓存把同一批节点交给多个容器 → 真实浏览器 appendChild 是移动语义 → 历史正文间歇性变空。
+check "deliverSettled" "$LIB/client.js"
+check "contentKey" "$LIB/client.js"
+# ③ 覆盖遗漏：压缩摘要与推理过程同样是模型写出来的正文，原先没走 Markdown 渲染。
+check "ea-md-scope" "$LIB/client.js"
+
+# 0.2.12：Markdown 表格渲染（用户放行「表格始终允许」，但渲染器原本**不支持表格** ——
+# 块类型只有 paragraph/heading/code/list/quote/hr，若只改提示词，模型真吐表格时
+# 用户看到的会是一堆裸露的竖线。所以渲染器与提示词必须一起上）。
+check "ea-md-table" "$LIB/client.js"
+check "ea-md-th" "$LIB/client.js"
+check "ea-md-td" "$LIB/client.js"
+check "isTableStart" "$LIB/client.js"
+check "tableCells" "$LIB/client.js"
+# 0.2.12：提示词两档放宽的开关（代码块/JSON 临时、表格长期）。
+check "ALLOW_TEMPORARY_CODE_BLOCKS" "$LIB/host/prompts.js"
+check "长期允许" "$LIB/host/prompts.js"
+# 4b) 提示词两档要看**运行时求值结果**，不是查字符串：
+#   三元开关的两个分支都会被打进产物，所以 grep 分不出当前生效的是哪一支。
+#
+#   当前期望状态（用户 2026-10-07 的第二条要求）：**临时放宽已收回**。
+#     · 代码块 / JSON -> 禁令原话应已回来（开关 = false）
+#     · Markdown 表格 -> **仍长期允许**（不归开关管，收回时必须仍在）
+#   这两条要一起断言：只验「禁令回来了」会漏掉「表格被误收走」，反之亦然。
+node -e "
+const m = require('$LIB/host/prompts.js');
+const s = m.SYSTEM_PROMPT;
+const BAN = '不要输出代码块';
+const TABLE = '长期允许';
+const TEMP = '临时允许';
+if (m.ALLOW_TEMPORARY_CODE_BLOCKS !== false) { console.log('  X 临时放宽未收回：开关应为 false，实际 ' + m.ALLOW_TEMPORARY_CODE_BLOCKS); process.exit(1); }
+if (!s.includes(BAN)) { console.log('  X 收回不干净：SYSTEM_PROMPT 里应已恢复「' + BAN + '」'); process.exit(1); }
+if (s.includes(TEMP)) { console.log('  X 收回牵连了不该动的东西：仍出现「临时允许」'); process.exit(1); }
+if (!s.includes(TABLE)) { console.log('  X 表格被误收走：SYSTEM_PROMPT 里缺少「长期允许」那一条（它不归开关管）'); process.exit(1); }
+console.log('  OK 运行时提示词：代码块/JSON=已收回（禁令已恢复），表格=仍长期允许');
+"
+
+# 回归闸：表格测试文件必须在仓库里（它是渲染器补表格的验收标准，缺了就没人守）。
+for t in tests/markdown-table.test.mjs; do
+  test -f "$REPO/$t" || { echo "  ✗ 缺少回归测试 $t"; exit 1; }
+done
+
+# 回归闸：对抗性测试文件必须在仓库里（它是这 6 条的验收标准，缺了就没人守）
+for t in tests/markdown-adversarial.test.mjs; do
+  test -f "$REPO/$t" || { echo "  X 缺少回归测试 $t"; exit 1; }
+done
+
+# 回归闸：渲染器与接线各自的测试文件都必须在仓库里。
+for t in tests/markdown-render.test.mjs tests/markdown-wiring.test.mjs; do
+  test -f "$REPO/$t" || { echo "  X 缺少回归测试 $t"; exit 1; }
+done
+
+# 回归闸：这几条各自的测试文件必须在仓库里（部署不校验测试，但缺了要有人知道）
+for t in tests/audit-0.2.1-lead.test.mjs tests/abort-before-stream.test.mjs; do
+  test -f "$REPO/$t" || { echo "  ✗ 缺少回归测试 $t"; exit 1; }
+done
 
 if [ "$DO_RESTART" = 0 ]; then
   echo

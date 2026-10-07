@@ -51,6 +51,29 @@ export declare function renderMainline(mainline: {
 /**
  * 系统提示词正文。写死在这里而不是拼进每个请求，是为了让措辞可被测试逐条断言。
  */
+/**
+ * 临时放宽开关：允许小助手在回答里使用**代码块与 JSON**。
+ *
+ * 来由（2026-10-07，用户原话：「你可以暂时性放宽。Markdown 表格始终允许」）。
+ * 两档必须分开，因为它们**期限不同**：
+ *   · **Markdown 表格 = 长期放行**，不归本开关管（见下面提示词里单独那一行）。
+ *   · **代码块 / JSON = 临时放行**，就是本开关管的这一档。
+ *
+ * 为什么做成开关而不是直接删掉那句话：用户要的是「暂时性放宽、日后要能收回」。
+ * 留一个开关 → 收回时**只改这一个值**，提示词自动回到「代码块/JSON 禁止」的措辞，
+ * 不牵连其它任何改动，也不需要重新措辞。
+ *
+ * **当前状态：已收回（值 = false）**。用户 2026-10-07 放行「暂时性放宽」，
+ * 同一天又要求收回：把这里改成 false，禁令原话已自动回来（放宽只持续了不到一小时，
+ * 期间在 3082 上产出了表格与代码块的真实页面证据，见 docs/evidence/prompt-relax-acceptance.md）。
+ * 若要再次放行：把下面改成 true 即可。
+ *
+ * **注意：表格那一条不归本开关管** —— 它是「长期允许」（用户原话：「Markdown 表格始终允许」），
+ * 本开关置 true / false 两种状态下它都保留。若日后连表格也要重新禁掉，需要单独改下方
+ * 提示词里那行「长期允许」的表格项（放宽前的原文是「不要输出代码块、JSON、Markdown 表格。
+ * 用户看不懂，用短段落和短句子。」—— 其中表格那一项正是被长期放行替换掉的）。
+ */
+export declare const ALLOW_TEMPORARY_CODE_BLOCKS = false;
 export declare const SYSTEM_PROMPT: string;
 /** 依据条目的白话分级标签（§6.3）。 */
 export declare function evidenceTier(item: Pick<EvidenceEnvelope, 'evidenceState'>): string;
@@ -59,7 +82,7 @@ export declare function evidenceTier(item: Pick<EvidenceEnvelope, 'evidenceState
  * 拿不到摘要 / 状态为 unavailable 的条目**必须**带出「该步未提供足够信息」，
  * 而不是留给模型自行猜测。
  */
-export declare function renderEvidence(evidence: readonly unknown[] | undefined): string;
+export declare function renderEvidence(evidence: readonly unknown[] | undefined, hasMainline?: boolean): string;
 /** 一条既往问答，用于让追问能接上前面的话（§7「用户提问、追问后」）。 */
 export type ConversationTurn = {
     question?: string;

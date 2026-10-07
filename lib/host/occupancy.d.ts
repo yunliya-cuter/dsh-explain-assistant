@@ -26,8 +26,25 @@ export declare function estimateTextTokens(text: string): number;
 /** 一条小助手自己的问答记录（只取参与上下文的两个字段）。 */
 export type OccupancyRecord = {
     question?: string;
+    /**
+     * 回答正文。**落库的真实字段名**（routes.ts 写进磁盘的就是它）。
+     *
+     * 这里曾经只声明 `answer`，而 `answer` 是**客户端本地记录**的字段名，
+     * 落库记录里根本没有它 —— 于是占用把每条回答正文都算成 0 个字。
+     * 实测（3082 真实文件 session-7e1a8742）：回答正文 1107 字一个没算，
+     * ownTokens 601（应为 878）、ownChars 2286（应为 3393）。
+     */
+    answerText?: string;
+    /** 客户端本地追加的记录用的字段名（宿主落库记录没有它），保留以兼容既有形状。 */
     answer?: string;
 };
+/**
+ * 取一条记录的**回答正文**。字段名只能在这一处判定，不许两处各写一遍。
+ *
+ * 优先级：`answerText` 是字符串就用它（**空串也算数**——那是真实的空回答，
+ * 不是"字段缺失"，不能拿 `answer` 去兜底）；`answerText` 不是字符串时才退回 `answer`。
+ */
+export declare function answerTextOf(record: OccupancyRecord | undefined): string;
 export type OccupancyInput = {
     /** 小助手的系统提示词：每次请求都带，必须计入。 */
     systemPrompt: string;

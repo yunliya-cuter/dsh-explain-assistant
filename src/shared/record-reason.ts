@@ -109,7 +109,13 @@ export function recordReasonText(value: unknown): string | undefined {
  */
 export function deriveErrorReason(error: unknown): RecordReason {
   const code = (error as { code?: unknown } | undefined)?.code;
-  return code === 'ABORTED' ? 'stopped' : 'model_failed';
+  if (code === 'ABORTED') return 'stopped';
+  // 也要认 AbortError：实测 discoverCatalog 在 abort 时抛的正是 AbortError
+  // （DOMException，name='AbortError'，code=20），**不带**我们自己的 ABORTED 码。
+  // 只认 code 的话，一次用户主动停止会被记成 model_failed（界面显示「模型那边返回了错误」）。
+  const name = (error as { name?: unknown } | undefined)?.name;
+  if (name === 'AbortError') return 'stopped';
+  return 'model_failed';
 }
 
 export function deriveCompactReason(

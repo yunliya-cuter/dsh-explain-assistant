@@ -100,7 +100,11 @@ export async function clientVm() {
   return { entries, effects, context, react, cleanup() { cleanups.forEach(fn => fn()); dom.restore(); } };
 }
 export class FakeElement {
-  constructor(tag = 'div') { this.tagName = tag.toUpperCase(); this.attributes = new Map(); this.listeners = new Map(); this.style = {}; this.dataset = {}; this.children = []; this.parentElement = null; this.ownText = ''; this.tabIndex = ['BUTTON','TEXTAREA','INPUT','SELECT','SUMMARY'].includes(this.tagName) ? 0 : -1; }
+  constructor(tag = 'div') { this.tagName = tag.toUpperCase(); this.attributes = new Map(); this.listeners = new Map(); this.style = {}; this.dataset = {}; this.children = []; this.parentElement = null; this.ownText = ''; this.tabIndex = ['BUTTON','TEXTAREA','INPUT','SELECT','SUMMARY'].includes(this.tagName) ? 0 : -1;
+    // 被从父节点上摘下来过几次。真实浏览器里，一次「摘下来再挂回去」就会丢掉滚动锚点，
+    // 用户看到的是跳变 —— 而这个副作用在「元素对象还是同一个」时完全看不出来。
+    // 所以这里把它变成一个可数的量，让「原地不动」这条断言真的有区分力。
+    this.detachments = 0; }
   // 真实 DOM 的 textContent 会聚合所有子节点的文本。假 DOM 之前只返回自身文本，
   // 于是「按按钮文字找元素」的测试/调试永远找不到按钮，断言静默失败。
   get textContent() { return this.ownText + this.children.map(c => (c && c.textContent) || '').join(''); }
@@ -109,6 +113,16 @@ export class FakeElement {
   getAttribute(k) { return this.attributes.get(k) ?? null; }
   matches(selector) { return selector.split(',').some(part => { const s = part.trim(); if (s.startsWith('.')) return (this.className || '').split(' ').includes(s.slice(1)); if (s.startsWith('[')) return this.attributes.has(s.slice(1, -1)); return s.toUpperCase() === this.tagName; }); }
   closest(selector) { for (let el = this; el; el = el.parentElement) if (el.matches(selector)) return el; return null; }
+  // 真实 DOM 的 contains：自身或后代返回 true。
+  // 夹具原先**没有**这个方法，于是 window.ts:200 的 handle.contains(active) 在测试里
+  // 直接 TypeError —— 「焦点在浮窗子元素上时用方向键调整位置」这条路径因此
+  // 从未被任何测试走到（task-37 的 F1：改坏它全量仍全绿）。
+  // 补它是补一个**真实且 src 真的用到**的浏览器行为，不是为过测而编的规则。
+  contains(other) {
+    if (!other) return false
+    for (let node = other; node; node = node.parentElement) if (node === this) return true
+    return false
+  }
   append(...nodes) { nodes.forEach(node => this.appendChild(node)); }
   appendChild(node) { this.children.push(node); node.parentElement = this; return node; }
   addEventListener(name, fn, options) { if (!this.listeners.has(name)) this.listeners.set(name, new Set()); fn.capture = options === true || options?.capture === true; this.listeners.get(name).add(fn); }
@@ -129,16 +143,47 @@ export class FakeElement {
     for (const fn of ordered) { if (event.immediateStopped) break; fn(event); }
     return event;
   }
-  focus() { globalThis.document.activeElement = this; }
+  // P3（task-37 报出的夹具自身缺陷）：原写法直接写 globalThis.document.activeElement。
+  // 若在 dom.restore() 之后（典型场景：异步链跨过了 finally）被调用，
+  // globalThis.document 已被删除 → TypeError: Cannot set properties of undefined。
+  // 实测踩到过：同一进程先后建两个 fakeDom()、restore 第一个后，异步残留的 focus() 就崩。
+  // 真实语义上「所属文档已不存在」时 focus 本就无事可做，所以这里**先判存在再写**。
+  focus() { if (globalThis.document) globalThis.document.activeElement = this; }
   setPointerCapture(id) { this.pointerCapture = id; }
   hasAttribute(key) { return this.attributes.has(key); }
   removeAttribute(key) { this.attributes.delete(key); }
+  // 真实 DOM 的 cloneNode：深拷贝（含子节点、属性、ownText）。
+  // 缓存层「交付克隆」需要它 —— 之前没有，于是那次「命中返回克隆」的尝试
+  // 在假 DOM 里直接 TypeError（实测连锁红 9 条）。
+  cloneNode(deep = false) {
+    const copy = new FakeElement(this.tagName.toLowerCase())
+    for (const [k, v] of this.attributes) copy.attributes.set(k, v)
+    copy.className = this.className
+    copy.ownText = this.ownText
+    if (deep) for (const child of this.children) copy.appendChild(child.cloneNode ? child.cloneNode(true) : child)
+    return copy
+  }
   click() { return this.emit('click'); }
   get isConnected() { return true; }
-  remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(e=>e!==this); }
+  // 真 DOM 的 remove() 会把 parentElement 置空。假 DOM 早先只把自己从父节点的
+  // children 里过滤掉、**不动自己的 parentElement** —— 于是「把节点摘下来再挂回去」
+  // 这种在真实浏览器里会丢掉滚动锚点的操作，在测试里看不出任何差别
+  // （证伪过：把「只换尾部」改成整棵 replaceChildren，测试照样全绿）。
+  remove() {
+    if (!this.parentElement) return;
+    this.parentElement.children = this.parentElement.children.filter(e => e !== this);
+    this.parentElement = null;
+    this.detachments++;
+  }
   // 浮窗改成「骨架建一次 + 各区块原地重画」后用到 replaceChildren / firstElementChild，
   // 假 DOM 必须提供，否则真实代码在测试里直接 TypeError。
-  replaceChildren(...nodes) { this.children = []; nodes.forEach(node => this.appendChild(node)); }
+  // 真 DOM 的 replaceChildren 会先把**所有**旧子节点摘下来（parentElement 置空），
+  // 这里必须照做，否则「原地不动」这类断言在假 DOM 里永远成立、闸形同虚设。
+  replaceChildren(...nodes) {
+    for (const child of this.children) { child.parentElement = null; child.detachments++; }
+    this.children = [];
+    nodes.forEach(node => this.appendChild(node));
+  }
   get firstElementChild() { return this.children.find(c => !String(c.tagName || '').startsWith('#')) ?? null; }
   querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
   querySelectorAll(selector) { return this.children.flatMap(c => [ ...(c.matches?.(selector) ? [c] : []), ...(c.querySelectorAll?.(selector) || []) ]); }

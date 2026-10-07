@@ -38,6 +38,14 @@ export interface RouteService {
   /** §10：把该会话标记为已读（打开浮窗后清除未读）。 */
   markRead?: (id: string) => Promise<void>;
   selectModel?: (id: string, model: unknown, signal?: AbortSignal) => Promise<unknown>;
+  /**
+   * 记住浮窗的摆放位置与大小。
+   *
+   * 为什么需要：contracts 里早就有 `AssistantState.geometry` 字段，磁盘上也一直留着它，
+   * 但**从来没有任何代码往里写** —— 于是用户每次拖好位置、关掉浮窗再打开，又回到默认位置。
+   * 这是「只写了一半」的功能，不是新需求。
+   */
+  saveGeometry?: (id: string, geometry: unknown, signal?: AbortSignal) => Promise<unknown>;
   isSessionAllowed?: (id: string, signal?: AbortSignal) => Promise<boolean>;
   isArchived?: (id: string, signal?: AbortSignal) => Promise<boolean>;
 }
@@ -45,7 +53,7 @@ export interface RouteOptions { service: RouteService; active?: Map<string, { re
 type Handler = (request: Request) => Promise<Response>;
 
 function json(value: unknown, status = 200, headers?: HeadersInit): Response { return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json; charset=utf-8', ...headers } }); }
-function operation(path: string): Operation { const name = path.split('/').filter(Boolean).pop(); return (name === 'state' || name === 'history' || name === 'history-result' || name === 'models' || name === 'select-model' || name === 'ask' || name === 'compact' || name === 'cancel' || name === 'forget' || name === 'mark-read') ? name as Operation : name === 'in-flight' ? 'cancel' : 'state'; }
+function operation(path: string): Operation { const name = path.split('/').filter(Boolean).pop(); return (name === 'state' || name === 'history' || name === 'history-result' || name === 'models' || name === 'select-model' || name === 'ask' || name === 'compact' || name === 'cancel' || name === 'forget' || name === 'mark-read' || name === 'geometry') ? name as Operation : name === 'in-flight' ? 'cancel' : 'state'; }
 function failure(error: unknown, sessionId?: string, op?: Operation, status = 500, requestId?: string): Response { return json({ schemaVersion: SCHEMA_VERSION, ok: false, ...(sessionId ? { sessionId } : {}), ...(requestId ? { requestId } : {}), ...(op ? { operation: op } : {}), error: toErrorBody(error) }, status); }
 async function body(request: Request): Promise<Record<string, unknown>> { try { const value = await request.json(); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('body'); return value as Record<string, unknown>; } catch { throw new ExplainAssistantError('INVALID_REQUEST', '请求内容必须是一个 JSON 对象。'); } }
 function eventText(event: SseEvent): string { return 'event: ' + event.type + '\ndata: ' + JSON.stringify(event) + '\n\n'; }
@@ -94,6 +102,19 @@ export function createExplainAssistantRoutes(options: RouteOptions): Map<string,
         return json({ schemaVersion: SCHEMA_VERSION, sessionId: id, operation: op, payload: await service.loadHistoryResult(id, url.searchParams.get('recordId') ?? '', url.searchParams.get('cursor') ?? undefined, request.signal) });
       }
       if (op === 'models') return json({ schemaVersion: SCHEMA_VERSION, operation: op, payload: await service.listModels?.(request.signal) ?? {} });
+      // 记住浮窗位置（contracts 里早有 geometry 字段，此前没有任何写入方）。
+      // 走 guard 之后：已归档的会话不该再写状态。
+      if (op === 'geometry') {
+        if (!service.saveGeometry) throw new ExplainAssistantError('DEPENDENCY_UNAVAILABLE', '小助手当前版本不支持记住浮窗位置。');
+        const parsed = await body(request);
+        const raw = (parsed.payload ?? parsed) as Record<string, unknown>;
+        const source = (raw && typeof raw === 'object' && raw.geometry && typeof raw.geometry === 'object' && !Array.isArray(raw.geometry)) ? raw.geometry : raw;
+        const numbers = ['x', 'y', 'width', 'height'].map(key => (source as Record<string, unknown>)?.[key]);
+        // 四个数都必须是有限数：缺一个或写错就拒绝，绝不写一份半个位置进磁盘。
+        if (numbers.some(value => typeof value !== 'number' || !Number.isFinite(value))) throw new ExplainAssistantError('INVALID_REQUEST', '浮窗位置无效，需要 x、y、width、height 四个数。');
+        const geometry = { x: numbers[0] as number, y: numbers[1] as number, width: numbers[2] as number, height: numbers[3] as number };
+        return json({ schemaVersion: SCHEMA_VERSION, sessionId: id, operation: op, payload: { saved: true, geometry: await service.saveGeometry(id, geometry, request.signal) ?? geometry } });
+      }
       if (op === 'select-model') {
         const parsed = await body(request);
         // 客户端发的是 { payload: { model: { provider, model } } }，而这里曾只认顶层 provider/model，
@@ -235,6 +256,6 @@ export function createExplainAssistantRoutes(options: RouteOptions): Map<string,
     } catch (error) { if (id) clearActive(active, id, requestId); return failure(error, id, op, statusFor(error), requestId); }
   };
   return new Map([
-    ['/explain-assistant/state', plain], ['/explain-assistant/history', plain], ['/explain-assistant/history-result', plain], ['/explain-assistant/models', plain], ['/explain-assistant/select-model', plain], ['/explain-assistant/in-flight', plain], ['/explain-assistant/forget', plain], ['/explain-assistant/mark-read', plain], ['/explain-assistant/ask', stream], ['/explain-assistant/compact', stream]
+    ['/explain-assistant/state', plain], ['/explain-assistant/history', plain], ['/explain-assistant/history-result', plain], ['/explain-assistant/models', plain], ['/explain-assistant/select-model', plain], ['/explain-assistant/in-flight', plain], ['/explain-assistant/forget', plain], ['/explain-assistant/mark-read', plain], ['/explain-assistant/geometry', plain], ['/explain-assistant/ask', stream], ['/explain-assistant/compact', stream]
   ]);
 }

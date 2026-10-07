@@ -193,5 +193,9 @@ test('冷启动徽标 接线: HeaderButton 挂载时必须预取 unread', async 
   assert.match(entry, /plugin\.primeUnread\?\.\(id\)/, 'HeaderButton 必须在挂载时预取该会话的 unread');
   assert.match(pluginSource, /const primeUnread = /, 'client plugin 必须实现 primeUnread');
   assert.match(pluginSource, /primedUnread\.get\(sessionId\)/, '预取必须按会话去重（in-flight 复用）');
-  assert.match(pluginSource, /primeUnread \};/, 'primeUnread 必须被导出，否则按钮调不到');
+  // 这里原先写的是 /primeUnread \};/ —— 它把「primeUnread 是返回对象的**最后一个**键」
+  // 也当成了要求。2026-10-04 新增 saveGeometry 后，primeUnread 不再是最后一个键，
+  // 这条断言就红了，但**导出本身一直都在**（按钮一直调得到）。这属于「钉住了字面写法」，
+  // 改成与键顺序无关的写法，仍然只断言真正要断言的那件事：primeUnread 必须被导出。
+  assert.match(pluginSource, /primeUnread[,}]/, 'primeUnread 必须被导出，否则按钮调不到');
 });

@@ -17,6 +17,15 @@ type ActiveRequest = {
   startedAt: string;
   requestId?: string;
   recorded: boolean;
+  /**
+   * 用户**自己**按了「停止」（`cancel()`），不是超时/父级中断。
+   *
+   * 为什么必须单独记一个标记：`cancel()` 会把文案写成「已按你的要求停止本次解释」，
+   * 但 abort 之后 `run()` 的 `.catch()`（异步，必然晚于 cancel）又被触发，
+   * 它按 `aborted` 判定会把文案改成「请求已中断」—— **把用户的决定说成了系统出错**。
+   * 实测：t=911ms 正确文案 → t=926ms 被覆盖，连跑 3 次一致（MutationObserver 抓的）。
+   */
+  stoppedByUser?: boolean;
 };
 
 const EVENT_TYPES = new Set(['start', 'progress', 'reasoning', 'text', 'tool_start', 'tool_result', 'usage', 'complete', 'error', 'aborted']);
@@ -329,6 +338,22 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
             // 否则回答进行中的一次刷新会把悬停提示清掉。
             occupancyParts: isObject(payload.occupancyParts) ? payload.occupancyParts as never : undefined,
           }),
+        // 浮窗位置：宿主存了就必须读回来。
+        //
+        // 为什么这条不能省：只写不读 = 位置照样丢。用户拖动 → 写进宿主 → 整页重载 →
+        // registry 是全新的（没有 geometry）→ 界面回默认位置，磁盘上那份白存了。
+        // 实测就是这么暴露的（verify-3082 在页面上看到硬重载后回默认）。
+        //
+        // 守卫：用户刚拖过、这次写入还在防抖窗口里（pendingGeometry 里有值）时**不覆盖**，
+        // 否则「拖完立刻刷新」会用宿主的旧位置把用户刚摆好的位置顶掉 —— 正是同类倒退。
+        ...(() => {
+          const hostGeometry = payload.geometry;
+          if (pendingGeometry.has(sessionId)) return {};
+          if (!isObject(hostGeometry)) return {};
+          const keys = ['x', 'y', 'width', 'height'] as const;
+          if (!keys.every(key => typeof (hostGeometry as Record<string, unknown>)[key] === 'number')) return {};
+          return { geometry: hostGeometry as never };
+        })(),
         ...(catalog ? { catalog: catalog as never } : {}),
         // 只在宿主确实给了摘要时覆盖本地状态：正在压缩时不能用旧的落库值盖掉「压缩中」。
         //
@@ -467,7 +492,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
     const sessionId = current.id;
     if (active.has(sessionId) || phaseBusy(assistantRegistry.get(sessionId))) return Promise.reject(new Error('已有解释请求正在处理中'));
 
-    const request: ActiveRequest = { token: Symbol('explain-request'), controller: new AbortController(), sessionId, question, kind, startedAt: new Date().toISOString(), recorded: false };
+    const request: ActiveRequest = { token: Symbol('explain-request'), controller: new AbortController(), sessionId, question, kind, startedAt: new Date().toISOString(), recorded: false, stoppedByUser: false };
     active.set(sessionId, request);
     const state = assistantRegistry.get(sessionId, current.cwd);
     const evidence = state.evidence.slice();
@@ -483,10 +508,17 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
         const lastTerminal = terminalEvent.get(sessionId);
         terminalEvent.delete(sessionId);
         const aborted = isAbortLike(error, request.controller.signal, lastTerminal);
-        const message = aborted && !request.controller.signal.aborted ? errorMessage(error) : aborted ? '请求已中断' : errorMessage(error);
+        // 用户**自己**按的停止：文案由 `cancel()` 写好了（「已按你的要求停止本次解释」）。
+        // 这里只收尾状态，**不许再写 error** —— 否则会把用户的决定覆盖成「请求已中断」（=说成系统出错）。
+        // 注意不能只在 `cancel()` 里判：abort 之后这条 catch 是异步到达的，**必然晚于** cancel。
+        const byUser = request.stoppedByUser === true;
+        const message = byUser
+          ? undefined
+          : aborted && !request.controller.signal.aborted ? errorMessage(error) : aborted ? '请求已中断' : errorMessage(error);
         assistantRegistry.update(sessionId, current => {
-          current.phase = aborted ? 'interrupted' : 'error'; current.requestId = undefined; current.error = message; current.unread = true;
-          if (request.kind === 'compact') current.compactState = { ...current.compactState, status: aborted ? 'interrupted' : 'error', error: message };
+          current.phase = aborted ? 'interrupted' : 'error'; current.requestId = undefined; current.unread = true;
+          if (message !== undefined) current.error = message;
+          if (request.kind === 'compact') current.compactState = { ...current.compactState, status: aborted ? 'interrupted' : 'error', ...(message !== undefined ? { error: message } : {}) };
         });
         if (aborted) appendRecord(request, 'interrupted', assistantRegistry.get(sessionId));
       }
@@ -680,6 +712,8 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
     if (!current) return;
     const request = active.get(current.id);
     if (!request) return;
+    // 先立标记再 abort：abort 会同步触发下面的 catch 链，标记必须先就位。
+    request.stoppedByUser = true;
     request.controller.abort();
     // 先把 requestId 取到局部常量：放进闭包后 TS 无法沿用 if 的收窄。
     const cancelId = request.requestId;
@@ -698,12 +732,44 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
       if (cancelId) void callApi(() => api.cancel(request.sessionId, cancelId)).catch(() => undefined);
     }
     active.clear();
+    // 待写的浮窗位置必须**当场冲刷**：dispose 之后定时器不会再跑，
+    // 用户「拖完立刻关掉页面/切走」的那一次位置就会静默丢掉。
+    for (const sessionId of [...pendingGeometry.keys()]) flushGeometry(sessionId);
     assistantRegistry.sessions().forEach(state => { if (state.open) assistantRegistry.close(state.sessionId); });
     assistantRegistry.setCurrent(undefined);
   };
+  /**
+   * 记住浮窗位置。
+   *
+   * 拖动时 pointermove 触发频率很高，所以**防抖 400ms**：用户停手之后才写一次。
+   * 但「拖完立刻关页面」也很常见，所以 dispose 时把待写的那一次**立刻冲刷**，不能留在定时器里丢掉。
+   *
+   * 失败只记日志：位置记不住不影响任何核心功能，绝不能因此让浮窗报错。
+   */
+  const geometryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const pendingGeometry = new Map<string, { x: number; y: number; width: number; height: number }>();
+  const flushGeometry = (sessionId: string): void => {
+    const timer = geometryTimers.get(sessionId);
+    if (timer !== undefined) { clearTimeout(timer); geometryTimers.delete(sessionId); }
+    const geometry = pendingGeometry.get(sessionId);
+    if (!geometry) return;
+    pendingGeometry.delete(sessionId);
+    void callApi(() => api.geometry(sessionId, geometry)).catch(error => {
+      console.error('[dsh-explain-assistant] 记住浮窗位置失败（' + sessionId + '）：', errorMessage(error));
+    });
+  };
+  const saveGeometry = (sessionId: string, geometry: { x: number; y: number; width: number; height: number }): void => {
+    if (disposed || !sessionId) return;
+    if (!geometry || !(['x', 'y', 'width', 'height'] as const).every(key => typeof geometry[key] === 'number' && Number.isFinite(geometry[key]))) return;
+    pendingGeometry.set(sessionId, geometry);
+    const existing = geometryTimers.get(sessionId);
+    if (existing !== undefined) clearTimeout(existing);
+    geometryTimers.set(sessionId, setTimeout(() => flushGeometry(sessionId), 400));
+  };
+
   const setSession = (id?: string, cwd?: string) => {
     selectedSession = id ? { id, cwd } : undefined;
     assistantRegistry.setCurrent(id);
   };
-  return { api, registry: assistantRegistry, open, submit, loadEarlier, cancel, dispose, setSession, openHistoryDetail, loadMoreHistoryDetail, closeHistoryDetail, forget, primeUnread };
+  return { api, registry: assistantRegistry, open, submit, loadEarlier, cancel, dispose, setSession, openHistoryDetail, loadMoreHistoryDetail, closeHistoryDetail, forget, primeUnread, saveGeometry };
 }

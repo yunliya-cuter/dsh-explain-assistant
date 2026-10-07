@@ -106,13 +106,97 @@
 .ea-count-inline{margin-left:auto}
 
 /* ---------- 回答 / 运行中 ---------- */
+/* 回答正文。
+   注意这里**刻意不再写 white-space:pre-wrap**：正文现在按 Markdown 渲染成真正的
+   块级元素（<p>/<h2>/<ul>/<pre>…），块与块之间的换行由 margin 表达；
+   若还留着 pre-wrap，源码里那些换行会再被当成可见空行，段距会翻倍。
+   排版细节统一交给下面的 .ea-md-* 一组规则。 */
 .ea-answer{
-  white-space:pre-wrap;word-break:break-word;
+  word-break:break-word;
   font-size:13.5px;line-height:1.75;
   padding:12px 14px;border-radius:10px;
   background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06));
   border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1));
 }
+.ea-answer[hidden]{display:none}
+
+/* ---------- 正文里的 Markdown 排版 ---------- */
+/* .ea-md-scope 是「这里面的文字是模型写的、要按 Markdown 排版」的标记类。
+   压缩摘要、推理过程这类地方用它 —— 排版规则与正文一致，但作用域不止正文，
+   所以下面这组规则统一挂 .ea-md-scope 而不是 .ea-answer。 */
+.ea-md-scope .ea-md-p{margin:0 0 7px}
+.ea-md-scope .ea-md-p:last-child{margin-bottom:0}
+.ea-md-scope .ea-md-h{margin:10px 0 5px;font-size:13px;font-weight:650;line-height:1.4}
+.ea-md-scope .ea-md-list{margin:0 0 7px;padding-left:20px}
+.ea-md-scope .ea-md-code{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:.92em;padding:1px 4px;border-radius:4px;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.16))}
+.ea-md-scope .ea-md-pre{margin:0 0 7px;padding:8px 10px;border-radius:7px;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.13));overflow-x:auto}
+.ea-md-scope .ea-md-codeblock{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:11.5px;line-height:1.6;white-space:pre;display:block;min-width:max-content}
+.ea-md-scope .ea-md-link{color:var(--dsw-alias-link,#2f6bff);text-decoration:underline}
+.ea-md-scope .ea-md-quote{margin:0 0 7px;padding-left:9px;border-left:3px solid var(--dsw-alias-border-l3,rgba(0,0,0,.16))}
+.ea-md-scope .ea-md-strong{font-weight:650}
+.ea-md-scope .ea-md-del{text-decoration:line-through}
+/* Markdown 表格（0.2.12）。**长期允许**：提示词里表格那一项不随临时放宽收回（见 src/host/prompts.ts）。
+   渲染器产出 table/thead/tr/th/td，这里给它们排版。横向溢出用 wrap 兜住，
+   免得一张宽表把整个浮窗撑破（浮窗宽度是用户自己拖的，不能假设够宽）。 */
+.ea-md-scope .ea-md-table-wrap{margin:0 0 8px;overflow-x:auto}
+.ea-md-scope .ea-md-table{border-collapse:collapse;font-size:12.5px;line-height:1.5}
+.ea-md-scope .ea-md-th,.ea-md-scope .ea-md-td{padding:4px 8px;border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.14));text-align:left;vertical-align:top}
+.ea-md-scope .ea-md-th{font-weight:650;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.10))}
+.ea-md-scope .ea-md-th[data-align=center],.ea-md-scope .ea-md-td[data-align=center]{text-align:center}
+.ea-md-scope .ea-md-th[data-align=right],.ea-md-scope .ea-md-td[data-align=right]{text-align:right}
+
+.ea-answer .ea-md-p{margin:0 0 9px}
+.ea-answer .ea-md-p:last-child{margin-bottom:0}
+.ea-answer .ea-md-h{margin:14px 0 8px;line-height:1.4;font-weight:650}
+.ea-answer .ea-md-h:first-child{margin-top:0}
+.ea-answer .ea-md-h1{font-size:17px}
+.ea-answer .ea-md-h2{font-size:15.5px}
+.ea-answer .ea-md-h3{font-size:14.5px}
+.ea-answer .ea-md-h4,.ea-answer .ea-md-h5,.ea-answer .ea-md-h6{font-size:13.5px}
+.ea-answer .ea-md-list{margin:0 0 9px;padding-left:22px}
+.ea-answer .ea-md-list:last-child{margin-bottom:0}
+.ea-answer .ea-md-li{margin:2px 0}
+.ea-answer .ea-md-quote{
+  margin:0 0 9px;padding:2px 0 2px 11px;
+  border-left:3px solid var(--dsw-alias-border-l3,rgba(0,0,0,.16));
+  color:var(--dsw-alias-label-secondary,#555);
+}
+.ea-answer .ea-md-quote:last-child{margin-bottom:0}
+.ea-answer .ea-md-quote .ea-md-p{margin-bottom:6px}
+.ea-answer .ea-md-hr{margin:12px 0;border:0;border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.12))}
+/* 行内代码 */
+.ea-answer .ea-md-code{
+  font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);
+  font-size:.92em;padding:1px 5px;border-radius:4px;
+  background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.16));
+  word-break:break-word;
+}
+/* 代码块：长行横向滚动，不要撑破浮窗 */
+.ea-answer .ea-md-pre{
+  margin:0 0 9px;padding:10px 12px;border-radius:8px;
+  background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.13));
+  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));
+  overflow-x:auto;
+}
+.ea-answer .ea-md-pre:last-child{margin-bottom:0}
+.ea-answer .ea-md-codeblock{
+  font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);
+  font-size:12px;line-height:1.6;white-space:pre;
+  display:block;min-width:max-content;
+}
+.ea-answer .ea-md-link{color:var(--dsw-alias-link,#2f6bff);text-decoration:underline;text-underline-offset:2px}
+.ea-answer .ea-md-strong{font-weight:650}
+.ea-answer .ea-md-del{text-decoration:line-through;color:var(--dsw-alias-label-secondary,#666)}
+/* 正文里的表格（.ea-answer 作用域）：与 .ea-md-scope 同规则，只是选择器前缀不同 ——
+   两处都必须写，因为浮窗正文走 .ea-answer，压缩摘要/推理/历史走 .ea-md-scope。 */
+.ea-answer .ea-md-table-wrap{margin:0 0 9px;overflow-x:auto}
+.ea-answer .ea-md-table{border-collapse:collapse;font-size:12.5px;line-height:1.5}
+.ea-answer .ea-md-th,.ea-answer .ea-md-td{padding:4px 8px;border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.14));text-align:left;vertical-align:top}
+.ea-answer .ea-md-th{font-weight:650;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.10))}
+.ea-answer .ea-md-th[data-align=center],.ea-answer .ea-md-td[data-align=center]{text-align:center}
+.ea-answer .ea-md-th[data-align=right],.ea-answer .ea-md-td[data-align=right]{text-align:right}
+.ea-answer .ea-md-image{max-width:100%;height:auto;border-radius:6px}
+.ea-answer .ea-md-image-alt{color:var(--dsw-alias-label-tertiary,#777);font-style:italic}
 .ea-running{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--dsw-alias-label-secondary,#555)}
 .ea-spinner{
   width:14px;height:14px;flex:0 0 auto;border-radius:50%;
@@ -200,7 +284,36 @@
 .ea-record{display:flex;flex-direction:column;gap:5px;padding-top:9px;border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1))}
 .ea-record:first-of-type{border-top:0;padding-top:0}
 .ea-record-question{font-size:12.5px;word-break:break-word}
-.ea-record-answer{margin:0;font-size:12.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary,#444)}
+/* 历史正文同样走 Markdown 渲染：这里也不能留 pre-wrap（理由同 .ea-answer）。 */
+.ea-record-answer{margin:0;font-size:12.5px;line-height:1.65;word-break:break-word;color:var(--dsw-alias-label-secondary,#444)}
+.ea-record-answer .ea-md-p{margin:0 0 6px}
+.ea-record-answer .ea-md-p:last-child{margin-bottom:0}
+.ea-record-answer .ea-md-h{margin:9px 0 5px;font-size:13px;font-weight:650;line-height:1.4}
+.ea-record-answer .ea-md-list{margin:0 0 6px;padding-left:20px}
+.ea-record-answer .ea-md-code{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:.92em;padding:1px 4px;border-radius:4px;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.16))}
+.ea-record-answer .ea-md-pre{margin:0 0 6px;padding:8px 10px;border-radius:7px;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.13));overflow-x:auto}
+.ea-record-answer .ea-md-codeblock{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:11.5px;line-height:1.6;white-space:pre;display:block;min-width:max-content}
+.ea-record-answer .ea-md-link{color:var(--dsw-alias-link,#2f6bff);text-decoration:underline}
+.ea-record-answer .ea-md-quote{margin:0 0 6px;padding-left:9px;border-left:3px solid var(--dsw-alias-border-l3,rgba(0,0,0,.16))}
+.ea-detail-answer .ea-md-p{margin:0 0 8px}
+.ea-detail-answer .ea-md-code{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:.92em;padding:1px 4px;border-radius:4px;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.16))}
+.ea-detail-answer .ea-md-pre{margin:0 0 8px;padding:8px 10px;border-radius:7px;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.13));overflow-x:auto}
+.ea-detail-answer .ea-md-codeblock{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:11.5px;line-height:1.6;white-space:pre;display:block;min-width:max-content}
+.ea-detail-answer .ea-md-h{margin:10px 0 6px;font-weight:650}
+/* 详情面板原先**没有**标题字号规则，只因缺链接/列表/引用规则而比正文素净；
+   补上 ea-md-scope 后会被 :129 的 13px 接管。若放任，`##` 会从浏览器默认的 19.5px
+   **掉到 13px** —— 那是可见降级，且与 .ea-answer 的分级设计（h2=15.5px，见 :152）不一致。
+   这里补回与正文一致的分级。页面实测：改前 19.5px → 13px 会让标题与正文几乎一样粗。
+   （来源：verify-3082 的 WITH/WITHOUT 对照 + 我用 .ea-answer 的设计意图独立核对。） */
+.ea-detail-answer .ea-md-h1{font-size:17px}
+.ea-detail-answer .ea-md-h2{font-size:15.5px}
+.ea-detail-answer .ea-md-h3{font-size:14.5px}
+.ea-detail-answer .ea-md-h4,.ea-detail-answer .ea-md-h5,.ea-detail-answer .ea-md-h6{font-size:13.5px}
+/* 历史正文同理：.ea-record-answer 的 .ea-md-h 是 13px（:291），补类后若不管，
+   `##` 也会从默认 19.5px 掉到 13px。同样补回分级。 */
+.ea-record-answer .ea-md-h1{font-size:16px}
+.ea-record-answer .ea-md-h2{font-size:14.5px}
+.ea-record-answer .ea-md-h3{font-size:13.5px}
 .ea-warn{font-size:11.5px;color:var(--dsw-alias-state-warn-primary,#a15c00)}
 .ea-empty{color:var(--dsw-alias-label-tertiary,#777);font-size:12.5px;margin:0}
 
@@ -250,7 +363,9 @@
   border-radius:9px;
 }
 .ea-input::placeholder{color:var(--dsw-alias-label-tertiary,#888)}
-.ea-composer-actions{display:flex;align-items:center;justify-content:space-between;gap:10px}
+/* 右侧留出 18px：让「发送」按钮的命中区与右下角的热区**不相交**（原来重叠约 5×6px，
+   发送按钮的右下角压在 ◢ 的左上角上）。13(表单右内边距)+18 = 31px，已让开 12px 的角热区。 */
+.ea-composer-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-right:18px}
 .ea-ring-slot{display:flex;align-items:center;min-width:0}
 
 /* ---------- 选中模式提示 ---------- */
@@ -283,13 +398,66 @@
   border-radius:0 7px 7px 0;
 }
 
-/* ---------- 缩放手柄 ---------- */
+/* ---------- 改大小：像普通窗口一样拖「边」和「角」 ---------- */
+/* 用户对上一版（只有一个角落字符 ◢）的定性，原话是：
+     「不是，意思是这个设计不符合操作直觉，不是说它看不到用不了。」
+   也就是说：他嫌的**不是**字号小或颜色淡，而是「要去角落找一个符号才能改大小」这件事本身
+   不合他平时用窗口的经验 —— 普通窗口是**拖边、拖角**就能改。
+   所以这一版把入口形态换掉：四周各一条边 + 四个角，都是拖拽热区，方向与鼠标指针一致。
+   角落那个 ◢ 保留（有人习惯找它），但**不再是唯一入口**。 */
+
+/* 四条边 + 四个角：透明热区，只负责指针形状与拖拽。
+   厚度 7px 是权衡：再薄不好抓，再厚会压到下面的按钮。 */
+.ea-resize-edge{
+  position:absolute;z-index:3;
+  background:transparent;border:0;padding:0;
+  /* 这里**刻意不锁死触摸滚动**。
+     曾经加过一条「禁用触摸手势」的声明来保证按下不被当成滚动，但撞上了一条既有闸：
+     tests/scroll-stability.test.mjs「防抽搐: 不得用禁用滚动/拦截滚轮来换平静」——
+     那条闸是对的（保护用户的滚动体验），**不该为了我的便利放宽它**。
+     改用别的方式让拖拽不被滚动抢走：见 window.ts 的 pointerdown 里已有 setPointerCapture。 */
+}
+/* 上/下边：横向铺满，两端各让开 24px（= 角的宽度），避免两层热区抢同一次按下。 */
+.ea-resize-n,.ea-resize-s{left:24px;right:24px;height:7px;cursor:ns-resize}
+.ea-resize-n{top:0}
+.ea-resize-s{bottom:0}
+/* 左/右边：纵向铺满，同样让开 24px 的角。 */
+.ea-resize-e,.ea-resize-w{top:24px;bottom:24px;width:7px;cursor:ew-resize}
+.ea-resize-e{right:0}
+.ea-resize-w{left:0}
+/* 四个角：**24×24**（不是 12×12）。
+   原因是一条闸查出来的（tests/ui-affordance.test.mjs）：
+   四角是「关键动作控件」（拖拽改窗口几何），命中区不得小于 24×24（WCAG 2.5.8 Target Size Minimum）。
+   12×12 时实测被判不合格 —— 用户拖到一半脱手的概率明显更高。
+   角放到 24 之后，边热区两端各让开 24（见上），避免两个热区抢同一次按下。 */
+.ea-resize-ne,.ea-resize-nw,.ea-resize-se,.ea-resize-sw{width:24px;height:24px}
+.ea-resize-nw{top:0;left:0;cursor:nwse-resize}
+.ea-resize-se{bottom:0;right:0;cursor:nwse-resize}
+.ea-resize-ne{top:0;right:0;cursor:nesw-resize}
+.ea-resize-sw{bottom:0;left:0;cursor:nesw-resize}
+/* 拖动时给整个浮窗一个「正在改大小」的可见反馈，松手即恢复。 */
+.dsh-explain-assistant-overlay[data-resizing=true]{user-select:none}
+.dsh-explain-assistant-overlay[data-resizing=true]::after{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  border:2px solid var(--dsw-alias-button-primary-fill,#2f6bff);border-radius:inherit;
+}
+
+/* 角落那个 ◢：保留为快捷入口，但**不再承担唯一入口**。
+   它同时是「右下角」热区的一部分，所以做成可见但不拦截指针（pointer-events:none），
+   由上面的 .ea-resize-se 负责响应 —— 避免两个热区抢同一次按下。 */
 .dsh-explain-assistant-resize{
-  position:absolute;right:0;bottom:0;width:18px;height:18px;
-  cursor:nwse-resize;border:0;background:transparent;
-  color:var(--dsw-alias-label-tertiary,#888);font-size:11px;line-height:1;
-  display:flex;align-items:flex-end;justify-content:flex-end;
-  padding:0 2px 2px 0;
+  position:absolute;right:0;bottom:0;width:20px;height:20px;
+  z-index:2;pointer-events:none;
+  /* 光标是「这里能拖」最直接的告示：闸（tests/ui-affordance.test.mjs）要求它带 resize 光标。
+     指针事件交给上层的 .ea-resize-se，但光标仍要由这个可见元素表达出来。 */
+  cursor:nwse-resize;
+  color:var(--dsw-alias-label-secondary,#555);
+  font-size:0;line-height:0;
+  background-image:repeating-linear-gradient(45deg,currentColor 0 1.5px,transparent 1.5px 5px);
+  background-repeat:no-repeat;
+  background-size:13px 13px;
+  background-position:right 1px bottom 1px;
+  border-radius:0 0 12px 0;
 }
 
 /* ---------- 焦点可见 ---------- */

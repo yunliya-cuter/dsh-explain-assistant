@@ -1,7 +1,7 @@
 /** Shared wire and durable contracts for dsh-explain-assistant. */
 export declare const SCHEMA_VERSION: 1;
 export type SchemaVersion = typeof SCHEMA_VERSION;
-export type Operation = 'state' | 'history' | 'history-result' | 'models' | 'select-model' | 'ask' | 'compact' | 'cancel' | 'forget' | 'mark-read';
+export type Operation = 'state' | 'history' | 'history-result' | 'models' | 'select-model' | 'ask' | 'compact' | 'cancel' | 'forget' | 'mark-read' | 'geometry';
 export type SseEventType = 'start' | 'progress' | 'reasoning' | 'text' | 'tool_start' | 'tool_result' | 'usage' | 'complete' | 'error' | 'aborted';
 export interface Envelope<T> {
     schemaVersion: number;

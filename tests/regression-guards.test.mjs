@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -63,9 +63,14 @@ test('llm.stream 必须传顶层 provider（否则静默返回空回答）', () 
 });
 
 // 产物里中文必须是可读 UTF-8，否则无法用 grep 核对，出问题也难排查。
-test('客户端产物以 UTF-8 输出中文，而不是 \\uXXXX 转义', () => {
-  let built;
-  try { built = readFileSync(join(root, 'lib/client.js'), 'utf8'); } catch { return; }
+//
+// ⚠️ 这条原先是 `try { ... } catch { return }` —— 产物不存在时**0 断言却报 ✔ pass**（task-44 修正）。
+// 实测：把 lib/client.js 移走后它仍报 ✔ pass、skipped = 0。与 real-shape-replay:203 是同一类假绿。
+// 现在没产物时改用**显式 skip**，并在有产物时照常真断言。
+test('客户端产物以 UTF-8 输出中文，而不是 \\uXXXX 转义',
+  { skip: existsSync(join(root, 'lib/client.js')) ? false : '本机没有构建产物 lib/client.js（需先 npm run build）' },
+  () => {
+  const built = readFileSync(join(root, 'lib/client.js'), 'utf8');
   assert.ok((built.match(/[\u4e00-\u9fff]/g) || []).length > 50, 'lib/client.js 里应有可读中文');
   const buildScript = readFileSync(join(root, 'scripts/build-client.mjs'), 'utf8');
   assert.match(buildScript, /charset:\s*'utf8'/, '构建脚本必须显式声明 charset utf8');

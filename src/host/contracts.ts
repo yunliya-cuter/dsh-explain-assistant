@@ -3,7 +3,7 @@
 export const SCHEMA_VERSION = 1 as const;
 export type SchemaVersion = typeof SCHEMA_VERSION;
 
-export type Operation = 'state' | 'history' | 'history-result' | 'models' | 'select-model' | 'ask' | 'compact' | 'cancel' | 'forget' | 'mark-read';
+export type Operation = 'state' | 'history' | 'history-result' | 'models' | 'select-model' | 'ask' | 'compact' | 'cancel' | 'forget' | 'mark-read' | 'geometry';
 export type SseEventType = 'start' | 'progress' | 'reasoning' | 'text' | 'tool_start' | 'tool_result' | 'usage' | 'complete' | 'error' | 'aborted';
 
 export interface Envelope<T> {
@@ -250,7 +250,7 @@ export function assertState(value: unknown, expectedSessionId?: string): asserts
 export function validateEnvelope(value: unknown, expectedOperation?: Operation): asserts value is Envelope<unknown> {
   if (!isRecord(value) || value.schemaVersion !== SCHEMA_VERSION || typeof value.sessionId !== 'string' || typeof value.operation !== 'string' || !('payload' in value)) throw new ExplainAssistantError(value && isRecord(value) && value.schemaVersion !== SCHEMA_VERSION ? 'UNSUPPORTED_SCHEMA' : 'INVALID_REQUEST', '请求格式无效或版本不受支持。');
   validateSessionId(value.sessionId);
-  if (!(['state','history','history-result','models','select-model','ask','compact','cancel','forget','mark-read'] as string[]).includes(value.operation)) throw new ExplainAssistantError('INVALID_REQUEST', '未知的操作。');
+  if (!(['state','history','history-result','models','select-model','ask','compact','cancel','forget','mark-read','geometry'] as string[]).includes(value.operation)) throw new ExplainAssistantError('INVALID_REQUEST', '未知的操作。');
   if (expectedOperation !== undefined && value.operation !== expectedOperation) throw new ExplainAssistantError('INVALID_REQUEST', '操作与请求不匹配。');
   if (value.requestId !== undefined && (typeof value.requestId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.requestId))) throw new ExplainAssistantError('INVALID_REQUEST', '请求标识无效。');
 }

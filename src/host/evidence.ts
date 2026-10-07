@@ -40,7 +40,13 @@ export function makeEvidence(input: Omit<EvidenceEnvelope, 'schemaVersion'|'time
 }
 
 export function assertRelativeWorkspacePath(relative: string): void {
-  if (typeof relative !== 'string' || !relative || relative === '.' && relative.length !== 1 || path.isAbsolute(relative) || relative.includes('\\0')) throw new Error('WORKSPACE_PATH_INVALID');
+  // 空字符（NUL）必须在这里挡住。
+  //
+  // 这一句原本写的是 includes('\\0') —— 在**源码**里那是「反斜杠 + 0」两个普通字符，
+  // 不是空字符；实测（node 复现）含真正 NUL 的路径**能通过**这道检查。
+  // 危险度低（后面还有 resolveWorkspacePath 的前缀校验与 ensureContained 的 realpath 兜底），
+  // 但既然本意就是挡空字符，就该挡真货。
+  if (typeof relative !== 'string' || !relative || relative === '.' && relative.length !== 1 || path.isAbsolute(relative) || relative.includes('\u0000')) throw new Error('WORKSPACE_PATH_INVALID');
   const parts = relative.split(/[\\\\/]+/u);
   if (parts.some(part => part === '..')) throw new Error('WORKSPACE_PATH_INVALID');
 }

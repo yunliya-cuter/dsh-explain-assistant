@@ -360,6 +360,27 @@ export function apply(ctx: any): void {
       }
       throw new ExplainAssistantError(resolved.kind === 'required' ? 'MODEL_UNAVAILABLE' : 'MODEL_NOT_FOUND', resolved.message);
     },
+    /**
+     * 记住浮窗的摆放位置与大小。
+     *
+     * 为什么需要：`AssistantState.geometry` 字段与磁盘形状一直都在，但**没有任何写入方** ——
+     * 用户拖好位置、关掉浮窗再打开就又回到默认位置。这里补上写入路径。
+     *
+     * 与其它写入同样过 `isForgotten` 把关：已归档清理过的会话，其文件已被删除，
+     * 而 store.update 对不存在的文件会走 load→save **把文件重新创建出来**。
+     */
+    saveGeometry: async (id: string, geometry: unknown) => {
+      if (!store) return geometry;
+      const value = geometry as { x?: unknown; y?: unknown; width?: unknown; height?: number };
+      // 再校验一次（路由已校验，服务层不信任调用方）：四个有限数才写。
+      const keys: Array<'x' | 'y' | 'width' | 'height'> = ['x', 'y', 'width', 'height'];
+      const valid = Boolean(value) && typeof value === 'object'
+        && keys.every(key => typeof (value as Record<string, unknown>)[key] === 'number' && Number.isFinite((value as Record<string, unknown>)[key] as number));
+      if (!valid) return geometry;
+      if (await isForgotten(id)) return geometry;
+      await store.update(id, (state: any) => { state.geometry = { x: value.x, y: value.y, width: value.width, height: value.height }; });
+      return value;
+    },
     selectModel: async (id: string, model: unknown, signal?: AbortSignal) => {
       const selection = toModelSelection(model);
       const catalog = await loadCatalog(signal).catch(() => undefined);
@@ -527,6 +548,8 @@ export function apply(ctx: any): void {
     // （apply 注册用的是这个键；而 createExplainAssistantRoutes 返回的 Map 键不带，两套都出现在代码里）。
     ['/api/explain-assistant/forget', ['POST']],
     ['/api/explain-assistant/mark-read', ['POST']],
+    // 记住浮窗位置。与 mark-read 一样是「收尾动作」，但仍走 guard：已归档会话不该再写状态。
+    ['/api/explain-assistant/geometry', ['POST']],
   ] as const;
   for (const [path, methods] of entries) connection.fetch.register({
     path, methods: [...methods] as any,
