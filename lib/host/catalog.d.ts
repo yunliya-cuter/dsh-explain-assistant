@@ -17,6 +17,7 @@ export declare const CATALOG_MESSAGES: {
     readonly providerEmpty: (provider: string) => string;
     readonly selectionRequired: '请先为解释小助手选择一个模型，然后再提问。小助手不会自动替你使用默认模型。';
     readonly catalogUnavailable: '当前没有可用的模型，无法为解释小助手生成回答。请检查模型配置后再试。';
+    readonly readFailed: (reason: string) => string;
     readonly invalidSelection: '模型选择无效：provider 与 model 都必须是非空字符串。';
 };
 export type CatalogModel = {
@@ -60,6 +61,17 @@ export type SelectionResolution = {
  * 抛异常会让路由派生错误响应，用户体验是"点了没反应"。
  */
 export declare function discoverCatalog(llm: unknown, signal?: AbortSignal): Promise<Catalog>;
+/**
+ * 把一次**整体失败**包成目录形状：空 groups + 一条中文 failures。
+ *
+ * ⚠️ 存在的唯一理由就是**不要**再写 `.catch(() => ({ groups: [], failures: [] }))`。
+ * 那种兜底把「目录读取失败」与「目录真的是空的」变成同一个形状，
+ * 而客户端只能靠这两个数组区分二者（见 overlay.tsx 的 catalogUnavailable）——
+ * 于是 /state 仍然 200、stateError 为 undefined、界面判为 ready，
+ * 显示「还没有选择模型 / 共 0 个可选 / 还没有小助手历史 / 占用未知」且不说一句「没读到」。
+ * 这正是用户点名要消掉的那类**会被读成结论**的文案。
+ */
+export declare function catalogReadFailure(error: unknown): Catalog;
 /** 目录里是否至少有一个可选模型。 */
 export declare function catalogHasModels(catalog: Catalog | undefined): boolean;
 /**

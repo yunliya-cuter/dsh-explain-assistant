@@ -48,6 +48,37 @@ export function clampGeometry(input: Partial<Geometry> | undefined, viewportWidt
   return { x, y, width, height };
 }
 
+/**
+ * 读回一个**已经渲染好的浮窗根元素**当前生效的几何。
+ *
+ * 用途：切会话时 entry.ts 会重建整棵浮窗 DOM，而新会话此刻还没有任何几何
+ * （它的 /state 还没回来），于是 renderOverlay 会退回默认值 ——
+ * 用户看到浮窗**先跳回默认位置/大小、过一会再跳到该会话真实几何**（t8 的 F-A）。
+ * 重建前把旧元素的实际几何读出来交给新元素，这段跳动就不存在。
+ *
+ * 为什么读 style 而不是 getBoundingClientRect：
+ *   · 浮窗的位置/大小本来就由 renderOverlay 与 applyGeometry 写进 style，
+ *     读 style 拿到的是**同一份真值**，不引入测量误差，也不受缩放/变换影响；
+ *   · 它在没有真实布局引擎的环境（单测的假 DOM）里同样可用，判据因此可被机检。
+ * 四个值**都**读得到才算数：缺一个就返回 undefined —— 宁可退回默认值，也不给半个几何。
+ */
+export function readAppliedGeometry(element: HTMLElement | null | undefined): Geometry | undefined {
+  const style = element?.style as Record<string, unknown> | undefined
+  if (!style) return undefined
+  const read = (key: string): number | undefined => {
+    const raw = style[key]
+    if (typeof raw !== 'string' || !raw.trim()) return undefined
+    const value = Number.parseFloat(raw)
+    return Number.isFinite(value) ? value : undefined
+  }
+  const x = read('left')
+  const y = read('top')
+  const width = read('width')
+  const height = read('height')
+  if (x === undefined || y === undefined || width === undefined || height === undefined) return undefined
+  return { x, y, width, height }
+}
+
 function applyGeometry(root: HTMLElement, geometry: Geometry): void {
   root.style.left = geometry.x + 'px';
   root.style.top = geometry.y + 'px';

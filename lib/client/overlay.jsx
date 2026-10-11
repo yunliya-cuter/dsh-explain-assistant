@@ -4,6 +4,126 @@ import { clampGeometry, attachWindowInteractions } from './window.js';
 import { mountMarkdown, cachedMarkdownNodes } from './markdown.js';
 // §10/D1：记录为什么没完成的中文文案与宿主**共用同一份**（src/shared/）。刻意不复制第二份。
 import { recordReasonText, RECORD_REASON_PREFIX, RECORD_INCOMPLETE_TEXT } from '../shared/record-reason.js';
+/**
+ * 目录级失败的码：表示「整份目录没读到」，与「读到了但某个 provider 有问题」相对。
+ *
+ * 声明刻意放在两个用到它的函数**之前**：它们体内会引用这个常量，
+ * 放后面虽然因为「函数是延后调用」而不构成真 TDZ，但那是**靠调用时机巧合**成立的，
+ * 一旦有人把调用时机前移就会变成运行期崩溃。顺序显式写对，不依赖巧合。
+ */
+const CATALOG_UNAVAILABLE_CODE = 'MODEL_CATALOG_UNAVAILABLE';
+/**
+ * 是否已经有**来自宿主/用户的真实内容**。
+ *
+ * 判据刻意只认这些「不可能凭空出现」的字段：它们要么来自一次成功的 /state，
+ * 要么来自用户自己的动作（选模型、提问）。**不**把 records.length===0、catalog 缺失
+ * 这类「空」算作内容 —— 那正是我们不让界面当成结论的东西。
+ */
+function hasLoadedContent(state) {
+    return Boolean(state.records.length ||
+        state.text ||
+        state.tools.length ||
+        state.evidence.length ||
+        state.model ||
+        state.historyDetail ||
+        state.compactState?.summary ||
+        // 目录：有模型组才算内容；失败条目里**只有非目录级**的（例如 MODEL_CATALOG_PARTIAL）
+        // 才算「读到了但有 provider 出问题」。
+        // 目录级失败（MODEL_CATALOG_UNAVAILABLE）不是内容，而是「这次没读到目录」——
+        // 把它算成内容会让界面判为 ready，从而把「没读到」渲染成一批「真的没有」的结论
+        // （t6 评审的 F2）。
+        (state.catalog && ((state.catalog.groups?.length ?? 0) > 0
+            || (state.catalog.failures || []).some(failure => failure?.code !== CATALOG_UNAVAILABLE_CODE))));
+}
+/**
+ * 「这次没读到」的原因（t6 评审的 F2）。
+ *
+ * 两种来源，界面上是同一件事：**数据没到位**，而不是**数据是空的**。
+ *   1. /state 整体失败 → state.stateError（t2 已有的路径）；
+ *   2. /state 成功、但随它下发的模型目录是「读取失败」的形状
+ *      （空 groups + 一条 MODEL_CATALOG_UNAVAILABLE）。
+ *
+ * 为什么第 2 条必须在这里认出来：宿主修好之前，目录读取失败被 catch 成
+ * `{groups: [], failures: []}` —— 与「目录真的是空的」形状完全相同，
+ * 客户端无从分辨。宿主改成如实填 failures 之后，这里就能**区分**
+ * 「没读到」（有目录级失败）与「真的没有」（failures 为空）。
+ */
+function readFailure(state) {
+    if (typeof state.stateError === 'string' && state.stateError) {
+        return { title: '没有读到小助手的当前状态', message: state.stateError };
+    }
+    const catalog = state.catalog;
+    // 只有在「一个模型组都没有」时才算整份目录没读到；有组的目录是**读到了**的。
+    if (!catalog || (catalog.groups?.length ?? 0) > 0)
+        return undefined;
+    const failure = (catalog.failures || []).find(item => item?.code === CATALOG_UNAVAILABLE_CODE && item.message);
+    if (!failure)
+        return undefined;
+    return { title: '没有读到模型目录', message: String(failure.message) };
+}
+/**
+ * 决定这次渲染走哪一档。
+ *
+ * 关于 `state.stateReady === false` 这个写法的说明（**不是**把 undefined 当成已就绪的偷懒）：
+ * stateReady 的唯一来源是 store 的 initial()（恒为 false）与 index.ts 里 /state 的两种结局。
+ * 凡是从 registry 取出来的状态这个字段**一定是布尔值**，所以真实用户路径上
+ * 「未就绪」永远命中 `=== false` 这一支。写成显式比较是为了让**手工构造的状态对象**
+ * （几十条既有单测直接传字面量）保持原行为，不被这次改动连带影响。
+ * 新增的单测走的是真实 registry（见 tests/state-readiness.test.mjs），
+ * 那里断言的是 initial() 的初值与两种结局，不受这个兼容写法影响。
+ */
+/**
+ * 这个档位下「提交」是否合法（t8 的 F-B）。
+ *
+ * 加载页与失败页上都**不允许**提交：这两档下数据还没到位/没读到，
+ * 而按下去却会真的发出 /api/explain-assistant/ask ——
+ * 实测（t8 在真实页面上）：加载页打字后点发送，请求确实发出去了（命中 t1 清单 L15）。
+ *
+ * 抽成纯函数是为了让「真的不许发出去」这条判据能被逐条断言，
+ * 而不是只测到「按钮变灰」—— 后者在 submit 路径没被拦住时照样会绿。
+ */
+export function canSubmit(state) {
+    return surfaceGate(state) === 'ready' && !isBusy(state);
+}
+/**
+ * 发送按钮的文案。
+ *
+ * 不能提交的档位必须**看得出**不可提交，而不是仍然写着「发送」并只靠灰化表达 ——
+ * 灰化在浅色主题下很弱，用户仍会以为按得动（t8 的 F-B 现象就是这个）。
+ */
+export function sendLabel(state, gate) {
+    if (gate === 'loading')
+        return '读取中…';
+    if (gate === 'failed')
+        return '暂时不可用';
+    return isBusy(state) ? '处理中' : '发送';
+}
+function surfaceGate(state) {
+    if (state.stateReady === false)
+        return 'loading';
+    // 「没读到」且**没有任何已经正确的旧内容**时，整块内容区交给明确的中文说明 + 重试。
+    // 这里用 readFailure 而不是只看 stateError：目录读取失败同样是「没读到」，
+    // 旧写法（只看 stateError）会让它落到 ready，于是渲染出一批「真的没有」的结论（F2）。
+    if (readFailure(state) && !hasLoadedContent(state))
+        return 'failed';
+    return 'ready';
+}
+/** 明确的加载页。第一眼必须被读成「正在加载」，而不是「没有数据」「插件坏了」。 */
+function loadingNodes() {
+    return [el('section', { class: 'ea-loading', 'aria-label': '正在加载' }, el('div', { class: 'ea-loading-row', role: 'status', 'aria-live': 'polite' }, el('span', { class: 'ea-spinner', 'aria-hidden': 'true' }), el('span', { class: 'ea-loading-text', text: '正在读取小助手的当前状态…' })), el('p', { class: 'ea-loading-hint', text: '模型列表、历史记录与上下文占用会在数据到位后一次性显示出来。这里现在什么都没有显示，是因为还没读到，不是因为你没有数据。' }))];
+}
+/**
+ * /state 失败（或超时）且没有旧内容时的明确中文错误 + 重试。
+ *
+ * 这段文案刻意**明说「不是你没有数据」**：失败路径最容易犯的错就是让界面看起来
+ * 和「真的没有内容」一模一样 —— 那等于又制造一次错值窗口（契约判据 3 直接禁止）。
+ */
+function stateErrorNodes(state, plugin, failure) {
+    // 标题与原因都取自 readFailure：这样「/state 整体失败」与「/state 成功但目录没读到」
+    // 各自说自己那句实话，而不是笼统地都说「没读到当前状态」（F2 里后者根本不是状态的问题）。
+    const info = failure || readFailure(state) || { title: '没有读到小助手的当前状态', message: state.stateError };
+    return [el('section', { class: 'ea-state-error ea-card', 'aria-label': '状态读取失败' }, el('h3', { class: 'ea-card-title', text: info.title }), el('p', { class: 'ea-state-error-reason ea-error', role: 'alert', text: info.message }), el('p', { class: 'ea-state-error-hint', text: '注意：这不是「没有内容」。模型列表、历史记录与上下文占用这次都没有取到，所以下面不显示空的列表或「还没有历史」这类结论 —— 那会把「没读到」说成「真的没有」。' }), button('重试', '重新读取小助手状态', () => { void plugin.retryState?.(state.sessionId); }, { class: 'ea-btn ea-btn-primary ea-state-retry' }))];
+}
 let previouslyFocused = null;
 function appendChildren(node, children) {
     for (const child of children) {
@@ -177,6 +297,19 @@ function modelNodes(state, plugin, open, onToggle) {
     const failures = state.catalog?.failures || [];
     let total = 0;
     groups.forEach(group => { total += (group.models || []).length; });
+    /*
+     * 目录**整份没读到**时，这一块不能再说「共 0 个可选」。
+     *
+     * 「共 0 个」是从目录里数出来的**结论**；目录根本没读到的时候，这个数是编的
+     * （用户会读成「你没有模型」）。t6 评审的 F2 正是这一类：宿主把读取失败吞成空目录。
+     * 宿主已改成如实填 failures，这里据此把「没读到」与「真的是空的」分开呈现。
+     *
+     * 注意**不是**把空态也一起改掉：目录真的返回且确实为空（failures 为空、groups 为空）时，
+     * 下面的「暂时没有可用的模型」仍照旧 —— 那是真实结论，不是错值。
+     */
+    const catalogFailure = (state.catalog?.groups?.length ?? 0) === 0
+        ? (state.catalog?.failures || []).find(item => item?.code === CATALOG_UNAVAILABLE_CODE && item.message)
+        : undefined;
     // §7/§11.8：未选模型时必须明确提示去选，不能让用户以为已经在用某个模型。
     const current = el('span', { class: 'dsh-explain-assistant-model-current ea-model-current' });
     current.textContent = state.model ? '本对话已选 · ' + state.model.provider + ' / ' + state.model.model : '还没有选择模型：请先选一个，小助手不会自动替你挑';
@@ -208,7 +341,9 @@ function modelNodes(state, plugin, open, onToggle) {
             return;
         list.appendChild(el('div', { class: 'ea-model-group' }, el('div', { class: 'ea-model-group-name' }, el('span', { text: String(group.displayName || group.provider || '未命名提供方') }), el('span', { class: 'ea-count', text: String(options.length) })), el('div', { class: 'ea-model-options' }, ...options)));
     });
-    if (!rendered)
+    // 空态只在「目录确实读到了、确实是空的」时才出现。读失败时不画它 ——
+    // 那句「暂时没有可用的模型」会被读成结论，而真实情况是「没读到」。
+    if (!rendered && !catalogFailure)
         list.appendChild(el('p', { class: 'dsh-explain-assistant-empty ea-empty', text: '暂时没有可用的模型，请先检查模型配置' }));
     const refresh = button('刷新模型', '刷新可用模型', (event) => {
         if (!plugin.api?.models)
@@ -223,7 +358,11 @@ function modelNodes(state, plugin, open, onToggle) {
     // 不用原生 <details>/<summary>：真实浏览器里 UIA 把它暴露成 expand 动作，合成点击点不开
     // （3082 实测连点三次都停在折叠态，用户也就永远看不到模型列表）。
     // 这里改成自己控制的按钮 + 展开状态：点得动，也能被测试断言。
-    const toggle = button(open ? '收起模型列表' : (state.model ? '换一个模型（共 ' + total + ' 个）' : '点这里选择模型（共 ' + total + ' 个可选）'), open ? '收起模型列表' : '展开可选模型列表', () => onToggle?.(!open), { class: 'ea-model-summary', pressed: open });
+    // 没读到目录时**不报数**：把自己数出来的 0 当「共 0 个可选」显示，就是拿没读到的数据当结论。
+    const toggleLabel = catalogFailure
+        ? '没有读到模型目录'
+        : (open ? '收起模型列表' : (state.model ? '换一个模型（共 ' + total + ' 个）' : '点这里选择模型（共 ' + total + ' 个可选）'));
+    const toggle = button(toggleLabel, open ? '收起模型列表' : '展开可选模型列表', () => onToggle?.(!open), { class: 'ea-model-summary', pressed: open });
     const details = el('div', { class: 'ea-model-details', 'data-unselected': state.model ? undefined : 'true', 'data-open': open ? 'true' : undefined }, toggle, open ? list : null);
     const failureNodes = failures.filter(failure => failure?.message).map(failure => el('small', { class: 'dsh-explain-assistant-model-failure ea-model-failure', text: failure.message }));
     return [el('section', { class: 'dsh-explain-assistant-model ea-card', 'aria-labelledby': 'dsh-explain-assistant-model-title' }, el('div', { class: 'ea-card-head' }, el('h3', { class: 'ea-card-title', id: 'dsh-explain-assistant-model-title', text: '模型' }), refresh), current, details, ...failureNodes)];
@@ -539,7 +678,22 @@ function ringNode(state) {
     return box;
 }
 const contexts = new WeakMap();
-export function renderOverlay(state, plugin) {
+/**
+ * @param initialGeometry 重建前那个浮窗**实际显示在屏幕上的**几何。
+ *
+ *   为什么需要它（t8 的 F-A）：切会话时 entry.ts 会重建整棵浮窗 DOM，而新会话此刻
+ *   还没有几何（它的 /state 还没回来）。不传这个值时 renderOverlay 只能退回
+ *   window.ts 的默认值，用户就会看到浮窗**先跳回默认位置/大小、过一会再跳到该会话
+ *   真实几何** —— 位置和大小都变。
+ *
+ *   传进来之后：加载页首帧几何 == 重建前的实际几何，从「浮窗可见」到「数据到位」
+ *   全程零几何变化；只有目标会话的 /state 带回**不同的**存储几何时，才会在
+ *   「内容到位那一刻」一次性归位（这是允许的，且不是「先跳默认值再跳回来」）。
+ *
+ *   没有已知位置时（第一次打开某个会话、且从未有过浮窗）不传 → 仍落默认值，
+ *   这正是默认值唯一该服务的场景。
+ */
+export function renderOverlay(state, plugin, initialGeometry) {
     previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : previouslyFocused;
     const like = plugin;
     const root = el('section', {
@@ -612,7 +766,11 @@ export function renderOverlay(state, plugin) {
     // 展开面板放在最前面：用户点的是「查看完整内容」，结果必须在打开的那一刻就被看见，
     // 否则在长长的历史列表里点完之后什么都不会变化（内容其实在下面，用户以为按钮坏了）。
     const detailSlot = el('div', { class: 'ea-slot' });
-    body.append(detailSlot, errorSlot, currentSlot, answerSlot, heroSlot, quickSlot, modelSlot, evidenceSlot, compactSlot, historySlot, selectionStatus);
+    // 加载页与「状态没读到」的错误页各占一个槽位，且**排在所有内容区块之前**：
+    // 未就绪/失败时它们是唯一有内容的东西，用户第一眼看到的就是它（不是空态列表）。
+    const loadingSlot = el('div', { class: 'ea-slot ea-loading-slot' });
+    const stateErrorSlot = el('div', { class: 'ea-slot ea-state-error-slot' });
+    body.append(stateErrorSlot, loadingSlot, detailSlot, errorSlot, currentSlot, answerSlot, heroSlot, quickSlot, modelSlot, evidenceSlot, compactSlot, historySlot, selectionStatus);
     const input = el('textarea', { class: 'ea-input', placeholder: '问小助手主 agent 正在做什么…', 'aria-label': '向解释小助手提问', rows: '2' });
     const send = button(isBusy(state) ? '处理中' : '发送', '发送问题', () => { form.requestSubmit(); }, { class: 'ea-btn ea-btn-primary ea-send' });
     const ringSlot = el('div', { class: 'ea-ring-slot' });
@@ -646,7 +804,9 @@ export function renderOverlay(state, plugin) {
         }),
     }));
     const resize = button('◢', '调整窗口大小；使用方向键调整', undefined, { class: 'dsh-explain-assistant-resize ea-resize' });
-    const geometry = clampGeometry(state.geometry, window.innerWidth, window.innerHeight);
+    // 首帧几何的优先级：本会话已知几何（/state 已回来）> 重建前的实际几何 > 默认值。
+    // 中间那一档是本轮加的：它让「切会话」不再经过默认值。
+    const geometry = clampGeometry(state.geometry ?? initialGeometry, window.innerWidth, window.innerHeight);
     root.style.left = geometry.x + 'px';
     root.style.top = geometry.y + 'px';
     root.style.width = geometry.width + 'px';
@@ -657,6 +817,7 @@ export function renderOverlay(state, plugin) {
         // 见 updateOverlay：用来判断「后面来的几何值是不是新值」。
         // 不这样做的话，每次重画都会把用户刚拖好的位置按旧值拽回去。
         errorSlot, currentSlot, answerSlot, answerView, heroSlot, quickSlot, modelSlot, evidenceSlot, compactSlot, historySlot, detailSlot, ringSlot, targetBar,
+        loadingSlot, stateErrorSlot, root,
         // 默认折叠模型列表：一开就摊开 33 个模型会把「使用说明 + 快捷问题」顶出可视区。
         // 未选模型时由摘要行 + 醒目的提示承担「先选一个」的引导（§7/§11.8）。
         form, input, send, modelOpen: false,
@@ -671,8 +832,17 @@ export function renderOverlay(state, plugin) {
         const current = contexts.get(root);
         if (!current)
             return;
+        /*
+         * 闸门必须是 canSubmit（= ready 且不忙），**不是** !isBusy。
+         *
+         * 旧写法只判 !isBusy，于是加载页上「不忙」→ 放行 → 真的发出 /ask（t8 的 F-B）。
+         * 按钮 disabled 只是**视觉**上的挡板：requestSubmit() 与回车都能绕过它，
+         * 所以拦截必须落在这一层。两条一起才对：按钮挡鼠标，这里挡一切。
+         */
+        if (!canSubmit(current.state))
+            return;
         const question = input.value.trim();
-        if (question && !isBusy(current.state))
+        if (question)
             void current.plugin.submit(question);
     });
     updateOverlay(root, state, like);
@@ -755,9 +925,68 @@ export function updateOverlay(root, state, plugin) {
         }
     }
     ctx.phase.textContent = phaseLabel(state);
+    // ── 三档界面在这里分叉（判据与理由见 surfaceGate 的说明）────────────────────
+    // 未就绪：只画加载页，下面那些区块**一个都不画**。
+    // 这是「错值窗口」的根治点：空态文案（「暂时没有可用的模型」「还没有小助手历史」
+    // 「占用未知」）在数据到位之前**根本没有机会**出现在界面上。
+    const gate = surfaceGate(state);
+    ctx.root.setAttribute('data-surface', gate);
+    if (gate === 'loading') {
+        // 正文/当前请求等槽位一律清空：加载期不许残留任何会被当成结论的内容。
+        ctx.errorSlot.replaceChildren();
+        ctx.currentSlot.replaceChildren();
+        ctx.answerSlot.hidden = true;
+        ctx.answerView.update('', false);
+        fill(ctx.modelSlot, []);
+        fill(ctx.evidenceSlot, []);
+        fill(ctx.compactSlot, []);
+        fill(ctx.historySlot, []);
+        fill(ctx.detailSlot, []);
+        ctx.ringSlot.replaceChildren();
+        // A4（F1 的前置条件）：使用说明与快捷问题也必须清掉。
+        //
+        // 现在它们是「切会话时整棵 DOM 重建」顺带消失的，所以 t6 那条 F1 判为不可达。
+        // 但那是**靠重建**成立的：一旦以后改成「同一棵 DOM 从 ready 原地切到 loading」，
+        // 上一会话的 hero 三句与 4 个快捷问题就会原样留在加载页上。
+        // 显式清掉之后，这条路径不论怎么切换都成立，不再依赖「恰好重建过」。
+        fill(ctx.heroSlot, []);
+        fill(ctx.quickSlot, []);
+        // A3：加载期不许提交。按钮挡鼠标 + disabled 让读屏也知道不可用；
+        // 真正的拦截在 form 的 submit 监听里（见 canSubmit）。
+        ctx.send.textContent = sendLabel(state, 'loading');
+        ctx.send.disabled = true;
+        fill(ctx.loadingSlot, loadingNodes());
+        return;
+    }
+    fill(ctx.loadingSlot, []);
     ctx.errorSlot.replaceChildren();
-    if (state.error)
+    // 失败但有旧内容时：错误原因显示在顶部，旧内容照常留在下面（契约允许的另一条出路）。
+    if (state.stateError && gate === 'ready')
+        ctx.errorSlot.appendChild(el('div', { class: 'dsh-explain-assistant-error ea-error', role: 'alert', text: state.stateError }));
+    else if (state.error)
         ctx.errorSlot.appendChild(el('div', { class: 'dsh-explain-assistant-error ea-error', role: 'alert', text: state.error }));
+    // 失败且没有任何旧内容：整块内容区交给明确的中文错误 + 重试，
+    // **不再**渲染模型/历史/占用那些区块 —— 否则它们会显示空态文案，用户读成「真的没有」。
+    if (gate === 'failed') {
+        ctx.currentSlot.replaceChildren();
+        ctx.answerSlot.hidden = true;
+        ctx.answerView.update('', false);
+        fill(ctx.modelSlot, []);
+        fill(ctx.evidenceSlot, []);
+        fill(ctx.compactSlot, []);
+        fill(ctx.historySlot, []);
+        fill(ctx.detailSlot, []);
+        ctx.ringSlot.replaceChildren();
+        // A4 同理：失败页也不许残留上一会话的使用说明与快捷问题。
+        fill(ctx.heroSlot, []);
+        fill(ctx.quickSlot, []);
+        // A3：失败页同样不许提交（数据没读到，提问没有可用上下文）。
+        ctx.send.textContent = sendLabel(state, 'failed');
+        ctx.send.disabled = true;
+        fill(ctx.stateErrorSlot, stateErrorNodes(state, ctx.plugin, readFailure(state)));
+        return;
+    }
+    fill(ctx.stateErrorSlot, []);
     fill(ctx.currentSlot, [...currentStatusNodes(state, ctx.plugin), ...currentDetailNodes(state), ...offlineFallbackNodes(state)]);
     // 正文：走增量渲染。
     //
@@ -808,8 +1037,9 @@ export function updateOverlay(root, state, plugin) {
     // 只在草稿真的被外部改写（例如提交后清空）时回写输入框，避免打字时被顶掉光标。
     if (ctx.input.value !== state.draft)
         ctx.input.value = state.draft;
-    const busy = isBusy(state);
-    ctx.send.textContent = busy ? '处理中' : '发送';
-    ctx.send.disabled = busy;
+    // 走到这里必然是 ready 档：文案与可用性都由 canSubmit 统一决定 ——
+    // 这样「加载/失败时禁用、回到 ready 后恢复」只有一处真相，不会两边漂移。
+    ctx.send.textContent = sendLabel(state, 'ready');
+    ctx.send.disabled = !canSubmit(state);
     // 注意：这里**不再回写 scrollTop**。见函数开头说明。
 }

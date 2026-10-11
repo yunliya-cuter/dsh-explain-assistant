@@ -92,7 +92,7 @@ export async function clientVm() {
   const built = await build({ entryPoints: [path.join(root, 'src/client/entry.ts')], bundle: true, format: 'cjs', platform: 'browser', write: false, external: ['react','*.css'], logLevel: 'silent' });
   const dom = fakeDom();
   const exports = {}; const cleanups = []; const entries = []; const effects = [];
-  const react = { createElement(type, props, ...children) { return { type, props: props || {}, children }; }, useEffect(effect) { effects.push(effect); }, useReducer() { return [0, () => {}]; }, useRef() { return {current:null}; } };
+  const react = { createElement(type, props, ...children) { return { type, props: props || {}, children }; }, useEffect(effect) { effects.push(effect); }, useReducer() { return [0, () => {}]; }, useState(init) { return [typeof init === 'function' ? init() : init, () => {}]; }, useRef() { return {current:null}; } };
   const context = vm.createContext({ exports, module: { exports }, require(name) { if (name === 'react') return react; if (name.endsWith('.css')) return {}; throw Error('Unexpected external: ' + name); }, AbortController, console, Symbol, TextEncoder, TextDecoder, queueMicrotask, setTimeout, clearTimeout, document: dom.document, window: dom.window, Element: FakeElement, HTMLElement: FakeElement, crypto: globalThis.crypto, fetch: async () => new Response(JSON.stringify({ payload: { records: [] } })), Response });
   vm.runInContext(built.outputFiles[0].text, context, { filename: 'client-entry.bundle.cjs' });
   const ctx = { effect(effect) { const cleanup = effect(); if (typeof cleanup === 'function') cleanups.push(cleanup); }, slots: { inject(name, provider) { const result = provider(); if (result?.[Symbol.iterator]) [...result]; return () => {}; }, register(meta, component) { entries.push({ meta, component }); return () => {}; } } };
@@ -163,7 +163,28 @@ export class FakeElement {
     if (deep) for (const child of this.children) copy.appendChild(child.cloneNode ? child.cloneNode(true) : child)
     return copy
   }
+  // 真 DOM 的 el.disabled = true **会反映到属性上**（hasAttribute('disabled') 为真）。
+  // 假 DOM 早先只有普通属性赋值，于是两个真实后果都测不到：
+  //   · 测试里 hasAttribute('disabled') 恒为 false → 「按钮被禁用」这条断言永远不成立；
+  //   · overlay 的 focusable() 用 !element.hasAttribute('disabled') 过滤焦点顺序，
+  //     于是「禁用的控件不进 Tab 序列」这条**真实行为**在夹具里从头到尾没生效。
+  // 补它是补一个真实且 src 真的用到的浏览器行为，不是为过测而编的规则。
+  get disabled() { return this.attributes.has('disabled'); }
+  set disabled(value) { if (value) this.attributes.set('disabled', ''); else this.attributes.delete('disabled'); }
+  // 真 DOM 的**元素**也有 dispatchEvent（不只是 document）。
+  // entry.ts 释放浮窗时会 element.dispatchEvent(new Event('dsh-explain-assistant:dispose'))
+  // 来通知各监听者（overlay 的 keydown / controller / markdown 增量器都挂在它上面）。
+  // 夹具只有 document.dispatchEvent，于是**凡是走完整 dispose 链的测试**都会在这里
+  // TypeError —— 而那个错误发生在清理阶段，容易被误读成「测试自身的问题」。
+  // 补它是补一个真实且 src 真的用到的浏览器行为。
+  dispatchEvent(event) { return this.emit(event?.type || String(event), { detail: event?.detail }); }
   click() { return this.emit('click'); }
+  // 真 DOM 的 form.requestSubmit() 会跑一遍校验并触发 submit 事件。
+  // 发送按钮的处理器正是调它（overlay.tsx 的 send 构造处）；夹具缺这个方法时
+  // 「点发送 → 走表单」这条路径在测试里直接 TypeError，于是**从来没有被测到** ——
+  // 而 t8 在真实页面上正是从这条路径发出了 /ask（加载页也能发）。
+  // 补它是补一个**真实且 src 真的用到**的浏览器行为，不是为过测而编的规则。
+  requestSubmit() { return this.emit('submit', { preventDefault() {} }); }
   get isConnected() { return true; }
   // 真 DOM 的 remove() 会把 parentElement 置空。假 DOM 早先只把自己从父节点的
   // children 里过滤掉、**不动自己的 parentElement** —— 于是「把节点摘下来再挂回去」

@@ -149,6 +149,31 @@ export type AssistantClientState = {
     compactState?: CompactState;
     /** §5.1：当前展开的那条记录的完整内容（含分页游标）。 */
     historyDetail?: HistoryDetailState;
+    /**
+     * 本轮「加载页」的地基：这个会话的 /state 是否已经有了**结局**。
+     *
+     * 为什么必须是一个显式、按会话独立、且初值为「未就绪」的标记：
+     * 浮窗打开的那一刻 /state 还没回来，此时 store 里全是**初始空值**（records 空、catalog
+     * 未定义、occupancyKnown=false）。界面照常结构渲染，就会把这些空值当成结论显示出来
+     * ——「暂时没有可用的模型」「还没有小助手历史」「占用未知」。用户看到的不是「正在加载」，
+     * 而是「这插件是坏的 / 我的数据没了」。这就是要消掉的「错值窗口」。
+     *
+     * 三条不许违反的性质（都有单测钉住，见 tests/state-readiness.test.mjs）：
+     * 1. **初值是 false**（未就绪）——不能靠「时间久了就算就绪」蒙混；
+     * 2. **成功与失败两种结局都会置 true**——失败也必须置位，否则界面无限期停在加载态；
+     * 3. **按会话独立**——A 的就绪不得让 B 被放行（Map<SessionId, State> 天然满足，
+     *    但这一点必须被显式断言，否则将来一次「提到模块级」的重构就会静默破坏它）。
+     */
+    stateReady: boolean;
+    /**
+     * /state **没有拿到结局**时的明确中文原因（与 `error` 区分开）。
+     *
+     * `error` 是「一次提问/一次操作失败了」；`stateError` 是「这个会话的状态根本没读到」。
+     * 两者对界面的含义不同：后者意味着**下面的模型、历史、占用全都不可信**，
+     * 因此界面必须显示这句中文错误，而**不得**退回各区块的空态文案（那等于把「没读到」
+     * 说成「真的没有」，又是一次错值窗口）。就绪且本字段有值 = 「已就绪，但是失败结局」。
+     */
+    stateError?: string;
     error?: string;
     dependencyWarnings?: string[];
     archived?: boolean;

@@ -68,6 +68,38 @@ pnpm install --offline --force --ignore-scripts 2>&1 | tail -6
 echo "=== 3) 已装版本 ==="
 node -e "console.log(require('$PROFILE/node_modules/dsh-explain-assistant/package.json').version)"
 
+# ══════════════════════════════════════════════════════════════════════════
+# 3.5) 装上的确实是**这个** tgz（本轮血泪教训）
+#
+# 症状：改了代码、重新 npm pack 出**同一个版本号**的包，脚本一路「部署完成」，
+#   但页面行为还是旧的 —— 因为 pnpm 见到 package.json 里依赖没变，直接
+#   「Already up to date」跳过安装，profile 里仍是上一次那份产物。
+#   实测代价：t11 的修复因此**根本没上到 3082**，我在页面上看到旧行为，
+#   一度怀疑修复无效 —— 差点据此改错方向。
+#
+# 判据：逐字节比对「已装产物」与「这个 tgz 里的产物」。
+#   比对的是 **tgz 解出来的内容**而不是仓库工作区的 lib/，因为要证明的正是
+#   「profile 装的就是这次 pack 出来的那份」，而不是「仓库里文件对」。
+# ══════════════════════════════════════════════════════════════════════════
+echo "=== 3.5) 已装产物 vs 本次 tgz（逐字节）==="
+INSTALLED_LIB="$PROFILE/node_modules/dsh-explain-assistant/lib/client.js"
+TMP_EXTRACT="$(mktemp -d)"
+trap 'rm -rf "$TMP_EXTRACT"' EXIT
+tar -xzf "$TGZ" -C "$TMP_EXTRACT"
+PACKED_LIB="$TMP_EXTRACT/package/lib/client.js"
+test -f "$PACKED_LIB" || { echo "  ✗ tgz 里没有 lib/client.js，无法核对"; exit 1; }
+INSTALLED_MD5="$(md5sum "$INSTALLED_LIB" | cut -d' ' -f1)"
+PACKED_MD5="$(md5sum "$PACKED_LIB" | cut -d' ' -f1)"
+echo "  已装 : $INSTALLED_MD5"
+echo "  tgz  : $PACKED_MD5"
+if [ "$INSTALLED_MD5" != "$PACKED_MD5" ]; then
+  echo "  ✗ 已装产物与本次 tgz **不一致** —— profile 里跑的不是这次打的包。"
+  echo "    最常见原因：改了代码但**没升版本号**，pnpm 认为「已是最新」直接跳过安装。"
+  echo "    处理：递增 package.json 的 version 后重新 npm pack，再跑本脚本。"
+  exit 1
+fi
+echo "  OK 已装产物与本次 tgz 逐字节一致"
+
 echo "=== 4) 校验产物里确有本次改动（缺失即失败，不是只打印）==="
 # 教训：这里原来只检查 0.1.24 时代的三个字符串，而且**只打印不报错** ——
 # 于是装上一份旧包、或新功能没打进产物时，脚本照样报「部署完成」。
@@ -425,6 +457,222 @@ if (!s.includes(TABLE)) { console.log('  X 表格被误收走：SYSTEM_PROMPT �
 console.log('  OK 运行时提示词：代码块/JSON=已收回（禁令已恢复），表格=仍长期允许');
 "
 
+# ══════════════════════════════════════════════════════════════════════════
+# 本轮：打开浮窗的「错值窗口」——加载页地基（就绪标记 + 加载态的终止条件）
+#
+# 要消掉的现象：点开浮窗时 /state 还没回来，store 里全是**初始空值**
+# （records 空、catalog 未定义、occupancyKnown=false），界面照常结构渲染，
+# 于是用户第一眼看到的是「暂时没有可用的模型」「还没有小助手历史」「占用未知」——
+# 这些在**读法**上都是结论，不是「正在加载」。
+#
+# 校验设计的两条要点（都是这次最容易假装做到的地方）：
+#   ① 就绪标记必须是**显式布尔 + 初值为 false**，不能靠「有字段就算就绪」；
+#   ② 超时必须走**失败结局**（中文错误 + 重试），不能是「到点就算就绪、放行空值」——
+#      后者看起来「加载页不卡了」，实际把初始空值当真实数据渲染，与旧缺陷一模一样。
+# ══════════════════════════════════════════════════════════════════════════
+
+# ① 两个字段都真的在客户端产物里（否则渲染侧的判据无从谈起）
+check "stateReady" "$LIB/client.js"
+check "stateError" "$LIB/client.js"
+# ② 加载页与失败页的文案在产物里（缺失说明这次改动没打进包）
+check "正在读取小助手的当前状态" "$LIB/client.js"
+check "没有读到小助手的当前状态" "$LIB/client.js"
+check "这不是「没有内容」" "$LIB/client.js"
+# ③ 三档分叉与兜底读取的符号在产物里
+check "surfaceGate" "$LIB/client.js"
+check "hasLoadedContent" "$LIB/client.js"
+check "ensureState" "$LIB/client.js"
+check "retryState" "$LIB/client.js"
+# ④ 运行时核验「初值 = 未就绪」：这是**唯一**能证明「界面在看到真实数据前只能显示加载页」
+#    的那个值。查字符串证明不了它（initial() 里还有一堆字段），必须真的求值。
+# ⚠️ 目标必须是 **lib/client/index.js**（tsc 产出的 ESM 模块），**不能**是 lib/client.js：
+# 后者是给浏览器用的 bundle，首行就调 window.__ModuleLoader__.load(...)，
+# 在 node 里 require 会直接 ReferenceError: window is not defined（本轮实际踩到）。
+node --input-type=module -e "
+const m = await import('file://$LIB/client/index.js');
+const plugin = m.createClientPlugin({ session: { id: 'deploy-probe' } });
+const s = plugin.registry.get('deploy-probe');
+if (s.stateReady !== false) { console.log('  X 就绪标记初值不是 false：实际 ' + JSON.stringify(s.stateReady)); process.exit(1); }
+if (typeof s.stateReady !== 'boolean') { console.log('  X 就绪标记不是显式布尔：实际 ' + typeof s.stateReady); process.exit(1); }
+// 会话隔离：另一个会话也必须各自是未就绪
+const other = plugin.registry.get('deploy-probe-2');
+if (other.stateReady !== false) { console.log('  X 第二个会话的就绪初值不是 false'); process.exit(1); }
+plugin.registry.update('deploy-probe', { stateReady: true });
+if (plugin.registry.get('deploy-probe-2').stateReady !== false) { console.log('  X 就绪值在会话之间串了'); process.exit(1); }
+plugin.dispose();
+console.log('  OK 运行时就绪标记：初值=false、显式布尔、按会话独立');
+"
+# ⑤ 失败路径的运行时核验：/state 失败后**也必须**就绪并留下中文错误。
+#    这条正是「不得无限期停在加载态」的判据，且它必须与「不得把空值当数据」同时成立。
+node --input-type=module -e "
+const m = await import('file://$LIB/client/index.js');
+const plugin = m.createClientPlugin({
+  api: { state: async () => { throw new Error('deploy-probe 故意失败'); } },
+  session: { id: 'deploy-probe' },
+});
+try {
+  await plugin.retryState('deploy-probe');
+  const s = plugin.registry.get('deploy-probe');
+  if (s.stateReady !== true) { console.log('  X 失败后没有置为已就绪：界面会无限期停在加载态'); process.exit(1); }
+  if (typeof s.stateError !== 'string' || !/没有读到/.test(s.stateError)) { console.log('  X 失败后没有明确的中文错误：' + s.stateError); process.exit(1); }
+  if (!/[一-鿿]/.test(s.stateError)) { console.log('  X 失败文案不是中文'); process.exit(1); }
+  console.log('  OK 运行时失败结局：已就绪 + 中文错误（不无限期停在加载态）');
+} finally { plugin.dispose(); }
+"
+
+# 回归闸：本轮的验收测试文件必须在仓库里（缺了就没人守这四条判据）
+for t in tests/state-readiness.test.mjs; do
+  test -f "$REPO/$t" || { echo "  ✗ 缺少回归测试 $t"; exit 1; }
+done
+
+# ══════════════════════════════════════════════════════════════════════════
+# t4 · 延后挂载（点击「?」后先不显示浮窗，等 /state 有结局再一次性挂出来）
+#
+# 要消掉的现象：+62.7ms 浮窗就带着**初始空值**画出来了，+391.5ms 才换成正确内容
+# （t1/t3 在 3082 实测）。把 /state 拖到 5 秒，这段窗口就变成 5.4 秒。
+# 延后挂载让这段窗口**在结构上不存在**：浮窗第一次出现时已经是最终形态。
+#
+# 校验设计的要点（都是最容易假装做到的地方）：
+#   ① 「未就绪不挂载」必须是**运行时求值**的判定，不能只查字符串 ——
+#      判定写成反向（未就绪也挂载）时字符串检查照样全绿，而缺陷会原样复现；
+#   ② 慢宿主下必须有**浮窗之外**的反馈，否则用户以为点击没生效（契约把「靠弹浮窗反馈」堵死了）。
+# ══════════════════════════════════════════════════════════════════════════
+
+# ① 挂载判定与忙碌态反馈的符号真的在客户端产物里
+check "shouldMountOverlay" "$LIB/client.js"
+check "isOpening" "$LIB/client.js"
+check "data-opening" "$LIB/client.js"
+check "正在打开解释小助手" "$LIB/client.js"
+check "ea-overlay-in" "$LIB/client.js"
+
+# ② 运行时核验挂载门：这几条正是本轮验收判据的可执行形式。
+node --input-type=module -e "
+const m = await import('file://$LIB/client/open-gate.js');
+const cases = [
+  [{ open: true, stateReady: false }, false, '未就绪、首次打开时不得挂载'],
+  [{ open: true, stateReady: true }, true, '有结局（成功或失败）必须挂载'],
+  [{ open: false, stateReady: true }, false, '没打开不得挂载'],
+  [{ open: true, stateReady: false, currentlyVisible: true }, true, '已可见时切到未就绪会话不得藏起来（闪跳）'],
+];
+for (const c of cases) {
+  const got = m.shouldMountOverlay(c[0]);
+  if (got !== c[1]) { console.log('  X ' + c[2] + '：期望 ' + c[1] + ' 实际 ' + got); process.exit(1); }
+}
+// 忙碌反馈：只在「已打开且未就绪」时为真（慢宿主下用户仍知道点击生效了）
+if (m.isOpening({ open: true, stateReady: false }) !== true) { console.log('  X 未就绪且已打开时必须给出忙碌反馈'); process.exit(1); }
+if (m.isOpening({ open: true, stateReady: true }) !== false) { console.log('  X 已就绪后不得仍显示忙碌反馈'); process.exit(1); }
+if (!/…/.test(m.openingLabel(true)) || m.openingLabel(false) !== '') { console.log('  X 忙碌态文案不成立'); process.exit(1); }
+console.log('  OK 运行时挂载门：未就绪不挂载 / 有结局才挂载 / 已可见不藏 / 忙碌反馈只在打开中');
+"
+
+# 回归闸：延后挂载的验收测试必须在仓库里（缺了就没人守这一批判据）
+for t in tests/open-mount.test.mjs; do
+  test -f "$REPO/$t" || { echo "  ✗ 缺少回归测试 $t"; exit 1; }
+done
+
+# ══════════════════════════════════════════════════════════════════════════
+# t9 · F2：模型目录**读取失败**不得被吞成「真的没有模型」
+#
+# 缺陷：宿主把目录读取失败 catch 成 {groups:[],failures:[]}（= 与「目录真的是空的」同形状），
+# 客户端又把「有 failures 条目」当成「已加载内容」→ 档位判 ready →
+# 显示「共 0 个可选 / 还没有选择模型 / 还没有小助手历史 / 占用未知」且不说一句「没读到」。
+#
+# 校验设计的要点（最容易假装做到的地方）：
+#   「没读到」必须与「真的没有」**可区分**，且这个区分要能被执行到 ——
+#   只查字符串的话，接线接错了照样全绿。
+# ══════════════════════════════════════════════════════════════════════════
+
+# ① 失败形状构造函数与中文文案真的在产物里
+check "catalogReadFailure" "$LIB/host/catalog.js"
+check "没有读到模型目录" "$LIB/host/catalog.js"
+check "这不代表" "$LIB/host/catalog.js"
+# ② 客户端侧的区分逻辑在产物里
+check "MODEL_CATALOG_UNAVAILABLE" "$LIB/client.js"
+check "readFailure" "$LIB/client.js"
+
+# ③ 运行时核验：目录读取失败 → 失败可见（且与「真的空目录」形状可区分）。
+#    必须**求值**而不是查字符串 —— 判定写反时字符串检查照样全绿，缺陷却会原样复现。
+node --input-type=module -e "
+const m = await import('file://$LIB/host/catalog.js');
+const failure = m.catalogReadFailure(new Error('ECONNREFUSED 测试用'));
+if (failure.groups.length !== 0) { console.log('  X 失败时不该有模型组'); process.exit(1); }
+if (failure.failures.length !== 1) { console.log('  X 目录读取失败必须留下一条 failures（旧实现这里是 0，等于吞掉）'); process.exit(1); }
+if (failure.failures[0].code !== 'MODEL_CATALOG_UNAVAILABLE') { console.log('  X 失败码不对：' + failure.failures[0].code); process.exit(1); }
+if (!/没有读到模型目录/.test(failure.failures[0].message)) { console.log('  X 必须是「没读到」的中文说明：' + failure.failures[0].message); process.exit(1); }
+if (!/[一-鿿]/.test(failure.failures[0].message)) { console.log('  X 文案不是中文'); process.exit(1); }
+if (JSON.stringify(failure) === JSON.stringify({ groups: [], failures: [] })) { console.log('  X 不得退化成「真的空目录」的形状'); process.exit(1); }
+console.log('  OK 运行时目录失败形状：空 groups + 一条中文 MODEL_CATALOG_UNAVAILABLE（与真为空可区分）');
+"
+
+# 回归闸：F2 的验收测试必须在仓库里（缺了就没人守这一批判据）
+for t in tests/catalog-read-failure.test.mjs; do
+  test -f "$REPO/$t" || { echo "  ✗ 缺少回归测试 $t"; exit 1; }
+done
+
+# ══════════════════════════════════════════════════════════════════════════
+# t11 · 切会话路径：加载页不得跳位、不得可提交
+#
+# t8 在真实页面上走通了「浮窗已可见 → 切到未就绪会话」这条路，抓到两条：
+#   F-A：加载页用 window.ts 的默认几何绘制（1004,264 420x620），停留约 8 秒后
+#        跳到该会话真实几何 → 用户看到浮窗跳位 + 改大小；
+#   F-B：loading 分支提前 return，send.disabled 那行从不执行，
+#        且 form 的 submit 只判 !isBusy → 加载页打字后点发送**真的发出了** /ask。
+#
+# 校验设计要点：这两条都不能只查字符串。尤其 F-A 的修复是「entry 把旧几何传给
+# renderOverlay」，只查「readAppliedGeometry 存在」的话，接线漏传照样全绿。
+# ══════════════════════════════════════════════════════════════════════════
+
+# ① 新增的符号真的在客户端产物里
+check "readAppliedGeometry" "$LIB/client.js"
+check "canSubmit" "$LIB/client.js"
+check "sendLabel" "$LIB/client.js"
+check "读取中…" "$LIB/client.js"
+
+# ② 运行时核验：几何读取与「哪一档可以提交」这两条判据。
+node --input-type=module -e "
+const m = await import('file://$LIB/client/window.js');
+// readAppliedGeometry：四个值齐全才返回（半个几何宁可不要）
+const el = { style: { left: '605px', top: '43px', width: '509px', height: '506px' } };
+const g = m.readAppliedGeometry(el);
+if (!g || g.x !== 605 || g.y !== 43 || g.width !== 509 || g.height !== 506) { console.log('  X 四个值齐全时必须读回完整几何，实际=' + JSON.stringify(g)); process.exit(1); }
+const half = m.readAppliedGeometry({ style: { left: '1px', top: '2px', width: '3px' } });
+if (half !== undefined) { console.log('  X 缺一个值时必须返回 undefined（不得给出半个几何）'); process.exit(1); }
+if (m.readAppliedGeometry(null) !== undefined) { console.log('  X 没有元素时必须返回 undefined'); process.exit(1); }
+// 默认值只服务「没有任何已知位置」：显式传 undefined 时才落默认
+const dflt = m.clampGeometry(undefined, 1024, 768);
+if (dflt.width !== 420 || dflt.height !== 620) { console.log('  X 无已知位置时应落默认 420x620，实际=' + JSON.stringify(dflt)); process.exit(1); }
+console.log('  OK 运行时几何：readAppliedGeometry 读回/拒半个/拒空；默认值仅在无已知位置时使用');
+"
+
+# ③ 运行时核验：加载/失败档不可提交，ready 档可提交（纯函数，可直接求值）
+#
+# ⚠️ 不能直接 import overlay.jsx：node 按扩展名决定模块类型，`.jsx` 不在它的 ESM 表里，
+# 会抛 ERR_UNKNOWN_FILE_EXTENSION（本轮实际踩到，部署因此中止在标记校验这一步）。
+# 做法：把它**在同一目录**下复制成 .mjs 再 import —— 同目录保证里面的
+# './window.js' / './markdown.js' 相对导入仍能解析；用完立即删除，不留痕。
+PROBE_JSX="$LIB/client/overlay.__probe.mjs"
+cp "$LIB/client/overlay.jsx" "$PROBE_JSX"
+node --input-type=module -e "
+const m = await import('file://$PROBE_JSX');
+const base = { sessionId: 's', open: true, records: [], text: '', tools: [], evidence: [], phase: 'idle' };
+const loading = { ...base, stateReady: false };
+const failed = { ...base, stateReady: true, stateError: '没有读到：x' };
+const ready = { ...base, stateReady: true, records: [{ id: 'r' }] };
+if (m.canSubmit(loading) !== false) { console.log('  X 加载档不得可提交'); process.exit(1); }
+if (m.canSubmit(failed) !== false) { console.log('  X 失败档不得可提交'); process.exit(1); }
+if (m.canSubmit(ready) !== true) { console.log('  X ready 档必须可提交（否则发送按钮永远点不动）'); process.exit(1); }
+if (m.canSubmit({ ...ready, phase: 'running' }) !== false) { console.log('  X 回答进行中不得重复提交'); process.exit(1); }
+if (m.sendLabel(loading, 'loading') === '发送') { console.log('  X 加载档按钮文案不得仍是「发送」'); process.exit(1); }
+if (m.sendLabel(ready, 'ready') !== '发送') { console.log('  X ready 档文案必须是「发送」'); process.exit(1); }
+console.log('  OK 运行时提交闸门：loading/failed 不可提交、ready 可提交、进行中不重复提交');
+"
+rm -f "$PROBE_JSX"
+
+# 回归闸：t11 的验收测试必须在仓库里（缺了就没人守这一批判据）
+for t in tests/switch-geometry-submit.test.mjs; do
+  test -f "$REPO/$t" || { echo "  ✗ 缺少回归测试 $t"; exit 1; }
+done
+
 # 回归闸：表格测试文件必须在仓库里（它是渲染器补表格的验收标准，缺了就没人守）。
 for t in tests/markdown-table.test.mjs; do
   test -f "$REPO/$t" || { echo "  ✗ 缺少回归测试 $t"; exit 1; }
@@ -489,7 +737,21 @@ sleep 30
 
 echo "=== 6) 监听确认（两次，间隔 15 秒）==="
 # 为什么查两次：0.1.34 那次就是「第一次查还在、几十秒后进程消失」，只查一次会给出假信号。
-ss -ltnp 2>/dev/null | grep ":$START_PORT " || { echo "NO LISTENER（首次）"; exit 1; }
+#
+# 但「查两次」必须配**轮询**，不能在第一次立刻判死：本轮实际踩到 —— 进程正在起来
+# （30 秒 sleep 之后仍差一点），首次检查落空 → 脚本 exit 1 → 后面的第 7 步
+# 「写新 token 到 url-3082.txt」根本没执行。于是页面拿着**上一轮的旧 token** 访问，
+# 表现为 401，而进程其实是好的、产物也是对的。假失败比真失败更费时间。
+# 做法：给首次确认 60 秒宽限（每 2 秒一次），之后仍按原样验证「15 秒后还在不在」。
+wait_listen() {
+  for _ in $(seq 1 30); do
+    if ss -ltnp 2>/dev/null | grep -q ":$START_PORT "; then return 0; fi
+    sleep 2
+  done
+  return 1
+}
+wait_listen || { echo "NO LISTENER（60 秒内始终未监听）"; exit 1; }
+echo "  已监听（首次确认通过）"
 sleep 15
 ss -ltnp 2>/dev/null | grep ":$START_PORT " || { echo "NO LISTENER（15 秒后掉线，进程被会话带走）"; exit 1; }
 echo "  两次都在，进程稳定"

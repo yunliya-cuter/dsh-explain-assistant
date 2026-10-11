@@ -19,6 +19,9 @@ export const CATALOG_MESSAGES = {
   providerEmpty: (provider: string) => '模型提供方「' + provider + '」暂时没有可用模型。',
   selectionRequired: '请先为解释小助手选择一个模型，然后再提问。小助手不会自动替你使用默认模型。',
   catalogUnavailable: '当前没有可用的模型，无法为解释小助手生成回答。请检查模型配置后再试。',
+  // 「整份目录没读到」——刻意与 catalogUnavailable（读到了、确实是空的）分开写。
+  // 这两件事在界面上必须是两个样子，否则用户会把「没读到」读成「真的没有」。
+  readFailed: (reason: string) => '没有读到模型目录：' + reason + '。这不代表「没有可用的模型」，请稍后重试。',
   invalidSelection: '模型选择无效：provider 与 model 都必须是非空字符串。',
 } as const;
 
@@ -170,6 +173,23 @@ export async function discoverCatalog(llm: unknown, signal?: AbortSignal): Promi
   }
 
   return { groups, failures };
+}
+
+/**
+ * 把一次**整体失败**包成目录形状：空 groups + 一条中文 failures。
+ *
+ * ⚠️ 存在的唯一理由就是**不要**再写 `.catch(() => ({ groups: [], failures: [] }))`。
+ * 那种兜底把「目录读取失败」与「目录真的是空的」变成同一个形状，
+ * 而客户端只能靠这两个数组区分二者（见 overlay.tsx 的 catalogUnavailable）——
+ * 于是 /state 仍然 200、stateError 为 undefined、界面判为 ready，
+ * 显示「还没有选择模型 / 共 0 个可选 / 还没有小助手历史 / 占用未知」且不说一句「没读到」。
+ * 这正是用户点名要消掉的那类**会被读成结论**的文案。
+ */
+export function catalogReadFailure(error: unknown): Catalog {
+  return {
+    groups: [],
+    failures: [{ code: 'MODEL_CATALOG_UNAVAILABLE', message: CATALOG_MESSAGES.readFailed(reasonOf(error)) }],
+  };
 }
 
 /** 目录里是否至少有一个可选模型。 */

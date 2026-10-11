@@ -197,6 +197,36 @@
 .ea-answer .ea-md-th[data-align=right],.ea-answer .ea-md-td[data-align=right]{text-align:right}
 .ea-answer .ea-md-image{max-width:100%;height:auto;border-radius:6px}
 .ea-answer .ea-md-image-alt{color:var(--dsw-alias-label-tertiary,#777);font-style:italic}
+/* ---------- 加载页（未就绪）----------
+   未就绪期间界面上只有这一段，所以它必须**一眼被读成「正在加载」**：
+   有转圈、有明确的进行中文案，并且额外写清「这里现在什么都没有，是因为还没读到，
+   不是因为你没有数据」—— 空态文案（「暂时没有可用的模型」「还没有小助手历史」）
+   在这段时间里一个都不会出现。 */
+.ea-loading{padding:18px 4px;display:flex;flex-direction:column;gap:9px}
+.ea-loading-row{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--dsw-alias-label-secondary,#555)}
+.ea-loading-text{font-weight:600}
+.ea-loading-hint{margin:0;font-size:12px;line-height:1.6;color:var(--dsw-alias-label-tertiary,#777)}
+
+/* ---------- 从不可见到可见的那一次（t4）----------
+ * 浮窗现在等 /state 有结局才挂载，所以它**第一次出现在页面上时就已经是最终形态**：
+ * 最终几何 + 真实内容。此时唯一还需要的过渡就是「淡入」——让出现这件事不显得生硬。
+ *
+ * 三条硬约束（对应验收判据 2/9）：
+ *   1. **只做透明度，不做位置/尺寸**：不得出现补间动画。from/to 里没有
+ *      left/top/width/height/transform，窗口的几何从第一帧起就是最终值、此后不变。
+ *   2. **不得影响布局与命中测试**：opacity 不参与布局，所以第一帧的
+ *      getBoundingClientRect 就已经等于最终几何（几何不因动画而改变）。
+ *   3. **reduced-motion 下不动画**：见文件末尾的媒体查询。 */
+@keyframes ea-overlay-in{
+  from{opacity:0}
+  to{opacity:1}
+}
+.dsh-explain-assistant-overlay{animation:ea-overlay-in 140ms ease-out}
+/* 「状态没读到」的错误页：与加载页互斥，是失败结局的出路（含重试）。 */
+.ea-state-error{display:flex;flex-direction:column;gap:9px;align-items:flex-start}
+.ea-state-error-reason{margin:0}
+.ea-state-error-hint{margin:0;font-size:12px;line-height:1.6;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-state-retry{align-self:flex-start}
 .ea-running{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--dsw-alias-label-secondary,#555)}
 .ea-spinner{
   width:14px;height:14px;flex:0 0 auto;border-radius:50%;
@@ -205,7 +235,12 @@
   animation:ea-spin .8s linear infinite;
 }
 @keyframes ea-spin{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){.ea-spinner{animation:none}}
+@media (prefers-reduced-motion:reduce){
+  .ea-spinner{animation:none}
+  /* t4：减少动态偏好下**不做**淡入，但落点不变 —— 浮窗仍是直接以最终几何出现。
+     关的只是动画，不是「不显示」：不会因此空白，也不会跳位或露错值。 */
+  .dsh-explain-assistant-overlay{animation:none}
+}
 
 /* ---------- 错误 ---------- */
 .dsh-explain-assistant-error,.ea-error{

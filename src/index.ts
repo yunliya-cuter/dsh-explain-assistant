@@ -1,7 +1,7 @@
 import { createExplainAssistantRoutes } from './host/routes.js';
 import { readConfiguredTimeouts } from './host/timeout-config.js';
 import { JsonSessionStore } from './host/persistence.js';
-import { catalogContains, discoverCatalog, resolveSelection, toModelSelection } from './host/catalog.js';
+import { catalogContains, catalogReadFailure, discoverCatalog, resolveSelection, toModelSelection } from './host/catalog.js';
 import { buildMessages, SYSTEM_PROMPT } from './host/prompts.js';
 import { carriedRecords, measureAssistantOccupancy } from './host/occupancy.js';
 import { readMainlineContext } from './host/session-context.js';
@@ -228,7 +228,12 @@ export function apply(ctx: any): void {
       // 0.2：主 agent 上下文同时驱动两件事——占用数字（圆环）与悬停显示的构成。
       const mainline = await readMainlineCached(id, signal);
       const occupancy = await readOccupancy(ctx, state, mainline);
-      const catalog = await loadCatalog(signal).catch(() => ({ groups: [], failures: [] }));
+      // 目录读取失败**不得**被吞成「空目录」（t6 评审的 F2）：
+      // 旧写法 .catch(() => ({ groups: [], failures: [] })) 让「没读到」与「真的没有」
+      // 变成同一个形状 —— /state 依然 200、stateError 为 undefined、界面判为 ready，
+      // 于是显示「还没有选择模型 / 共 0 个可选 / 还没有小助手历史 / 占用未知」且没有任何「没读到」的提示。
+      // 现在把失败如实填进 failures（带中文原因），由客户端已有的 failures 渲染路径显示出来。
+      const catalog = await loadCatalog(signal).catch(error => catalogReadFailure(error));
       // §5.1/§8：首屏只给最近一页，更早的靠「查看更早历史」按页取。
       // 一次全给会在记录变多后把浮窗塞满，也让首屏变慢。
       const allRecords: any[] = Array.isArray(state?.records) ? state.records : [];
