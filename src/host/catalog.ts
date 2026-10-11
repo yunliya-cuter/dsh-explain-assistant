@@ -8,7 +8,7 @@
  * 本模块不 import 任何 DSH 内部包：llm 服务由调用方注入，便于单测。
  */
 
-import { ExplainAssistantError, type ModelSelection } from './contracts.js';
+import { ExplainAssistantError, isRecord, type ModelSelection } from './contracts.js';
 
 /** 所有面向用户的中文文案集中在此，避免散落硬编码。 */
 export const CATALOG_MESSAGES = {
@@ -51,10 +51,6 @@ export type SelectionResolution =
   | { kind: 'explicit'; provider: string; model: string; reasoningEffort?: string }
   | { kind: 'required'; message: string }
   | { kind: 'unavailable'; message: string };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;

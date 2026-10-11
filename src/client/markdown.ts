@@ -268,7 +268,10 @@ function codeSpanText(raw: string): string {
 export function renderInlineNodes(src: string, depth = 0, index?: CloseIndex): Node[] {
   const out: Node[] = []
   if (!src) return out
-  // 预计算表整段只建一次，递归与循环共用 —— 这是把行内扫描压回线性的关键。
+  // 预计算表由模块级 closeIndexOf 按 src 记忆（memo）：循环与递归都经它命中同一份，
+  // 这是把行内扫描压回线性的关键（没闭合的 '[' 不再逐个扫到结尾）。
+  // index 形参没有调用方传：保留它是为了 scripts/falsify-real-corpus-gate.mjs 的
+  // 注入口 —— 该脚本按整行字面量匹配签名，所以签名必须逐字符不变。
   let buffer = ''
   const flush = () => { if (buffer) { out.push(document.createTextNode(buffer)); buffer = '' } }
 
