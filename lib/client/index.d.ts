@@ -1,5 +1,5 @@
 import type { AssistantApi } from './api.js';
-export type ClientPluginOptions = {
+type ClientPluginOptions = {
     api?: AssistantApi;
     session?: {
         id: string;
@@ -43,3 +43,4 @@ export declare function createClientPlugin(options?: ClientPluginOptions): {
     retryState: (sessionId?: string) => Promise<void>;
     ensureState: (sessionId?: string) => Promise<void>;
 };
+export {};

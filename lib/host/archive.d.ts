@@ -25,7 +25,7 @@
  * **几乎不会删掉任何东西** —— 这是正确的安全行为，不是缺陷。等 DSH 将来提供归档信号，
  * 本文件无需改动即可生效。
  */
-export type ArchiveVerdict = 'archived' | 'alive' | 'unknown';
+type ArchiveVerdict = 'archived' | 'alive' | 'unknown';
 /**
  * 判定一个会话对象的归档状态。
  *
@@ -34,7 +34,7 @@ export type ArchiveVerdict = 'archived' | 'alive' | 'unknown';
  * 本函数**永不抛异常**，认不出就是 `unknown`。
  */
 export declare function classifySessionArchive(session: unknown): ArchiveVerdict;
-export interface ArchiveSweepDeps {
+interface ArchiveSweepDeps {
     /** 枚举**我们自己**存储目录里的会话标识（不去列 DSH 的全局会话列表——没有可靠接口）。 */
     listSessionIds: () => readonly string[] | Promise<readonly string[]>;
     /** 向 sessions 服务询问这个会话当前是什么状态。返回值原样交给 classifySessionArchive。 */
@@ -43,7 +43,7 @@ export interface ArchiveSweepDeps {
     removeSession: (id: string) => Promise<void>;
     logger?: (message: string) => void;
 }
-export interface ArchiveSweepResult {
+interface ArchiveSweepResult {
     /** 本次看了几个会话。 */
     examined: number;
     /** 其中判定「确定已归档」并执行删除的个数。 */
@@ -67,7 +67,7 @@ export interface ArchiveSweepResult {
 export declare function sweepArchivedSessions(deps: ArchiveSweepDeps): Promise<ArchiveSweepResult>;
 /** 周期检查的最短间隔：5 分钟（任务书要求「不要短于 5 分钟」）。 */
 export declare const ARCHIVE_SWEEP_INTERVAL_MS: number;
-export interface ArchiveSweeperOptions extends ArchiveSweepDeps {
+interface ArchiveSweeperOptions extends ArchiveSweepDeps {
     intervalMs?: number;
     /** 可注入的时钟，便于测试「短时间内不会被反复触发」。 */
     now?: () => number;
@@ -91,3 +91,4 @@ export declare function createArchiveSweeper(options: ArchiveSweeperOptions): {
     stop(): void;
     readonly intervalMs: number;
 };
+export {};

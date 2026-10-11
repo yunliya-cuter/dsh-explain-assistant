@@ -1,9 +1,9 @@
 /** Shared wire and durable contracts for dsh-explain-assistant. */
 export declare const SCHEMA_VERSION: 1;
-export type SchemaVersion = typeof SCHEMA_VERSION;
+type SchemaVersion = typeof SCHEMA_VERSION;
 export type Operation = 'state' | 'history' | 'history-result' | 'models' | 'select-model' | 'ask' | 'compact' | 'cancel' | 'forget' | 'mark-read' | 'geometry';
-export type SseEventType = 'start' | 'progress' | 'reasoning' | 'text' | 'tool_start' | 'tool_result' | 'usage' | 'complete' | 'error' | 'aborted';
-export interface Envelope<T> {
+type SseEventType = 'start' | 'progress' | 'reasoning' | 'text' | 'tool_start' | 'tool_result' | 'usage' | 'complete' | 'error' | 'aborted';
+interface Envelope<T> {
     schemaVersion: number;
     sessionId: string;
     requestId?: string;
@@ -11,13 +11,13 @@ export interface Envelope<T> {
     historyRevision?: number;
     payload: T;
 }
-export interface ErrorBody {
+interface ErrorBody {
     code: ErrorCode | string;
     message: string;
     retryable: boolean;
     details?: Record<string, unknown>;
 }
-export type ErrorCode = 'INVALID_REQUEST' | 'UNSUPPORTED_SCHEMA' | 'SESSION_NOT_FOUND' | 'SESSION_ARCHIVED' | 'SESSION_FORBIDDEN' | 'WORKSPACE_UNAVAILABLE' | 'PATH_INVALID' | 'PATH_OUTSIDE_WORKSPACE' | 'MODEL_UNAVAILABLE' | 'MODEL_NOT_FOUND' | 'IMAGE_UNSUPPORTED' | 'REQUEST_IN_FLIGHT' | 'HISTORY_CONFLICT' | 'RECORD_NOT_FOUND' | 'TOOL_NOT_ALLOWED' | 'TOOL_INVALID_ARGUMENTS' | 'TOOL_FAILED' | 'TOOL_TIMEOUT' | 'LIMIT_EXCEEDED' | 'PERSISTENCE_FAILED' | 'PERSISTENCE_CORRUPT' | 'DEPENDENCY_UNAVAILABLE' | 'ABORTED' | 'INTERNAL_ERROR';
+type ErrorCode = 'INVALID_REQUEST' | 'UNSUPPORTED_SCHEMA' | 'SESSION_NOT_FOUND' | 'SESSION_ARCHIVED' | 'SESSION_FORBIDDEN' | 'WORKSPACE_UNAVAILABLE' | 'PATH_INVALID' | 'PATH_OUTSIDE_WORKSPACE' | 'MODEL_UNAVAILABLE' | 'MODEL_NOT_FOUND' | 'IMAGE_UNSUPPORTED' | 'REQUEST_IN_FLIGHT' | 'HISTORY_CONFLICT' | 'RECORD_NOT_FOUND' | 'TOOL_NOT_ALLOWED' | 'TOOL_INVALID_ARGUMENTS' | 'TOOL_FAILED' | 'TOOL_TIMEOUT' | 'LIMIT_EXCEEDED' | 'PERSISTENCE_FAILED' | 'PERSISTENCE_CORRUPT' | 'DEPENDENCY_UNAVAILABLE' | 'ABORTED' | 'INTERNAL_ERROR';
 export declare class ExplainAssistantError extends Error {
     readonly code: ErrorCode | string;
     readonly retryable: boolean;
@@ -30,7 +30,7 @@ export declare class ExplainAssistantError extends Error {
 }
 export type EvidenceSource = 'session_snapshot' | 'selected_frozen' | 'workspace_latest' | 'assistant_history';
 export type EvidenceState = 'observed' | 'reported_only' | 'unavailable';
-export type EvidenceKind = 'session' | 'node' | 'tool' | 'file' | 'image' | 'history' | 'model';
+type EvidenceKind = 'session' | 'node' | 'tool' | 'file' | 'image' | 'history' | 'model';
 export interface EvidenceEnvelope {
     schemaVersion: SchemaVersion;
     sessionId: string;
@@ -58,12 +58,12 @@ export interface ModelSelection {
     model: string;
     reasoningEffort?: string;
 }
-export interface ModelCapability {
+interface ModelCapability {
     inputModalities?: readonly ('text' | 'image')[];
     contextWindow?: number;
     maxOutputTokens?: number;
 }
-export interface Usage {
+interface Usage {
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
@@ -181,9 +181,9 @@ export interface SseEvent<T = unknown> {
     payload?: T;
 }
 export declare function isRecord(value: unknown): value is Record<string, unknown>;
-export declare function validateSessionId(sessionId: unknown): asserts sessionId is string;
 export declare function safeSessionId(sessionId: string): string;
 export declare function createEmptyState(sessionId: string, now?: string): AssistantState;
 export declare function assertState(value: unknown, expectedSessionId?: string): asserts value is PersistedState;
 export declare function validateEnvelope(value: unknown, expectedOperation?: Operation): asserts value is Envelope<unknown>;
 export declare function toErrorBody(error: unknown, fallbackCode?: ErrorCode): ErrorBody;
+export {};

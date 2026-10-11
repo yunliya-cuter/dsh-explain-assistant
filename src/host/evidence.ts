@@ -5,8 +5,8 @@ import type { EvidenceEnvelope, ImageSnapshotRef } from './contracts.js';
 
 export type EvidenceSource = 'session_snapshot' | 'selected_frozen' | 'workspace_latest' | 'assistant_history';
 export type EvidenceState = 'observed' | 'reported_only' | 'unavailable';
-export interface EvidenceLimits { maxBytes?: number; maxItems?: number; maxText?: number; }
-export interface ImageSnapshotOptions { sessionId: string; snapshotRoot: string; signal?: AbortSignal; maxBytes?: number; }
+interface EvidenceLimits { maxBytes?: number; maxItems?: number; maxText?: number; }
+interface ImageSnapshotOptions { sessionId: string; snapshotRoot: string; signal?: AbortSignal; maxBytes?: number; }
 
 const DEFAULTS = { maxBytes: 128 * 1024, maxItems: 200, maxText: 64 * 1024, imageBytes: 10 * 1024 * 1024 } as const;
 
@@ -17,7 +17,7 @@ export function stableJson(value: unknown): string {
   const object = value as Record<string, unknown>;
   return '{' + Object.keys(object).sort().map(k => JSON.stringify(k) + ':' + stableJson(object[k])).join(',') + '}';
 }
-export function hashBytes(value: Uint8Array | string): string { return createHash('sha256').update(value).digest('hex'); }
+function hashBytes(value: Uint8Array | string): string { return createHash('sha256').update(value).digest('hex'); }
 export function byteLength(value: unknown): number { return Buffer.byteLength(typeof value === 'string' ? value : stableJson(value), 'utf8'); }
 
 export function truncateValue<T>(value: T, limits: EvidenceLimits = {}): { value: T; truncated: boolean; bytes: number } {
@@ -34,7 +34,7 @@ export function truncateValue<T>(value: T, limits: EvidenceLimits = {}): { value
   return { value: { truncated: true, availableBytes: bytes, sentBytes: max } as T, truncated: true, bytes };
 }
 
-export function makeEvidence(input: Omit<EvidenceEnvelope, 'schemaVersion'|'timestamp'|'capturedAt'|'truncated'|'incomplete'> & Partial<Pick<EvidenceEnvelope,'timestamp'|'capturedAt'|'truncated'|'incomplete'>>): EvidenceEnvelope {
+function makeEvidence(input: Omit<EvidenceEnvelope, 'schemaVersion'|'timestamp'|'capturedAt'|'truncated'|'incomplete'> & Partial<Pick<EvidenceEnvelope,'timestamp'|'capturedAt'|'truncated'|'incomplete'>>): EvidenceEnvelope {
   const now = new Date().toISOString();
   return { schemaVersion: 1, timestamp: input.timestamp ?? now, capturedAt: input.capturedAt ?? now, truncated: input.truncated ?? false, incomplete: input.incomplete ?? false, ...input };
 }

@@ -1,11 +1,11 @@
-export type ApiErrorInfo = {
+type ApiErrorInfo = {
   code: string;
   message: string;
   retryable?: boolean;
   details?: Record<string, unknown>;
 };
 
-export type ApiEnvelope<T> = {
+type ApiEnvelope<T> = {
   schemaVersion?: number;
   sessionId?: string;
   requestId?: string;
@@ -15,7 +15,7 @@ export type ApiEnvelope<T> = {
   [key: string]: unknown;
 };
 
-export type SseEnvelope = {
+type SseEnvelope = {
   schemaVersion: number;
   sessionId: string;
   requestId: string;
@@ -49,7 +49,7 @@ export type AssistantApi = {
   geometry(sessionId: string, geometry: { x: number; y: number; width: number; height: number }, signal?: AbortSignal): Promise<ApiEnvelope<unknown>>;
 };
 
-export class AssistantApiError extends Error {
+class AssistantApiError extends Error {
   readonly code: string;
   readonly status?: number;
   readonly url: string;

@@ -35,7 +35,7 @@
 import { estimateTextTokens } from './occupancy.js';
 
 /** 一条表面事件（只声明本模块用得到的字段，避免依赖宿主的完整类型）。 */
-export type MainlineEvent = {
+type MainlineEvent = {
   type?: string;
   seq?: number;
   data?: {
@@ -48,7 +48,7 @@ export type MainlineEvent = {
   };
 };
 
-export type MainlineRenderOptions = {
+type MainlineRenderOptions = {
   /** 整个主 agent 段的总字符上限；超了**从头部丢**（保留最近发生的）。 */
   maxChars?: number;
   /** 主 agent 正文单条上限。 */
@@ -69,7 +69,7 @@ export type MainlineRenderOptions = {
  * 60000 字符 ≈ 15000 tokens，落在 90 分位附近——只有极端会话会被截，
  * 而不设上限则可能出现一次提问突然很慢很贵、甚至撑爆小助手自己的模型容量。
  */
-export const MAINLINE_DEFAULTS = {
+const MAINLINE_DEFAULTS = {
   maxChars: 60_000,
   assistantChars: 300,
   toolResultChars: 240,
@@ -79,7 +79,7 @@ export const MAINLINE_DEFAULTS = {
 } as const;
 
 /** 渲染结果：文本 + 记账。 */
-export type MainlineRender = {
+type MainlineRender = {
   /** 渲染好的中文主线（不含标题行）。 */
   text: string;
   /** 用掉多少条表面事件。 */
@@ -97,13 +97,13 @@ export type MainlineRender = {
 };
 
 /** 读回来的主 agent 上下文。 */
-export type MainlineContext = MainlineRender & {
+type MainlineContext = MainlineRender & {
   /** 主 agent 段的标题（供提示词分区用）。 */
   sessionId: string;
 };
 
 /** 内容块的纯文本（只认 text 块；reasoning 块**故意**不取，见文件头）。 */
-export function textOfBlocks(blocks: unknown): string {
+function textOfBlocks(blocks: unknown): string {
   if (!Array.isArray(blocks)) return '';
   return blocks
     .filter((block): block is { type: string; text: string } =>
@@ -115,7 +115,7 @@ export function textOfBlocks(blocks: unknown): string {
 }
 
 /** 把空白压平并截断；返回是否真的截断过。 */
-export function clipText(value: unknown, limit: number): { text: string; truncated: boolean } {
+function clipText(value: unknown, limit: number): { text: string; truncated: boolean } {
   const flat = String(value ?? '').replace(/\s+/gu, ' ').trim();
   if (flat.length <= limit) return { text: flat, truncated: false };
   return { text: flat.slice(0, limit), truncated: true };
@@ -129,7 +129,7 @@ export function clipText(value: unknown, limit: number): { text: string; truncat
  * 正文在 <compacted-summary> 标签里，末尾还有一个多余的闭合标签。
  * 直接整段交给模型，会白送一段英文样板文字。
  */
-export function extractCompactedSummary(raw: unknown): string {
+function extractCompactedSummary(raw: unknown): string {
   const text = String(raw ?? '');
   const open = text.indexOf('<compacted-summary>');
   const close = text.lastIndexOf('</compacted-summary>');
@@ -293,7 +293,7 @@ export function renderMainline(events: readonly MainlineEvent[] | undefined, opt
 }
 
 /** 读当前表面的宿主接口（只声明用得到的部分）。 */
-export type SurfaceReader = { readSurface?: (sessionId: string) => Promise<unknown> };
+type SurfaceReader = { readSurface?: (sessionId: string) => Promise<unknown> };
 
 /**
  * 读主 agent 的当前上下文并渲染。

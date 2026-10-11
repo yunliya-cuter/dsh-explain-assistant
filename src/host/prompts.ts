@@ -26,7 +26,7 @@ export const INSUFFICIENT_MARKER = '该步未提供足够信息';
 /** §6.3 依据分级用词。 */
 export const EVIDENCE_TIERS = ['已观察到', '仅据汇报', '无从得知'] as const;
 
-export type TermHint = { term: string; plain: string };
+type TermHint = { term: string; plain: string };
 
 /**
  * 术语即时解释表（§6.2）。命中术语时把对应白话连同术语一起给用户，
@@ -58,12 +58,12 @@ export function describeTerm(term: string): string | undefined {
 }
 
 /** 一句话能塞下的术语解释清单，供提示词正文引用。 */
-export function termGlossary(): string {
+function termGlossary(): string {
   return TERM_HINTS.map(hint => '「' + hint.term + '」= ' + hint.plain).join('\n');
 }
 
 /** 0.2：主 agent 上下文的标题行（分区用，界面与提示词同源）。 */
-export const MAINLINE_TITLE = '【主 agent 的上下文】（小助手自己读到的，不是用户提供的）';
+const MAINLINE_TITLE = '【主 agent 的上下文】（小助手自己读到的，不是用户提供的）';
 
 /**
  * 0.2：把主 agent 的上下文渲染成一个消息块。
@@ -230,7 +230,7 @@ export function renderEvidence(evidence: readonly unknown[] | undefined, hasMain
 }
 
 /** 一条既往问答，用于让追问能接上前面的话（§7「用户提问、追问后」）。 */
-export type ConversationTurn = {
+type ConversationTurn = {
   question?: string;
   answer?: string;
   /**
@@ -240,7 +240,7 @@ export type ConversationTurn = {
   reason?: string;
 };
 
-export type BuildMessagesDeps = {
+type BuildMessagesDeps = {
   /** 覆盖系统提示词（测试或将来做用户自定义提示词时用）。 */
   systemPrompt?: string;
   /** §7/§11.6：本会话既往问答，按时间正序。让「那它为什么这么做」这类追问能接上。 */

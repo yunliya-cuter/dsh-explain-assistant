@@ -11,7 +11,7 @@
 import { ExplainAssistantError, isRecord, type ModelSelection } from './contracts.js';
 
 /** 所有面向用户的中文文案集中在此，避免散落硬编码。 */
-export const CATALOG_MESSAGES = {
+const CATALOG_MESSAGES = {
   llmMissing: '暂时无法获取模型目录：宿主没有提供模型服务。',
   providersEmpty: '暂时没有可用的模型提供方。',
   providerListFailed: (reason: string) => '读取模型提供方列表失败：' + reason,
@@ -25,7 +25,7 @@ export const CATALOG_MESSAGES = {
   invalidSelection: '模型选择无效：provider 与 model 都必须是非空字符串。',
 } as const;
 
-export type CatalogModel = {
+type CatalogModel = {
   provider: string;
   id: string;
   name: string;
@@ -34,20 +34,20 @@ export type CatalogModel = {
   contextWindow?: number;
 };
 
-export type CatalogGroup = {
+type CatalogGroup = {
   provider: string;
   displayName?: string;
   models: CatalogModel[];
 };
 
-export type CatalogFailure = { code: string; message: string };
+type CatalogFailure = { code: string; message: string };
 
-export type Catalog = {
+type Catalog = {
   groups: CatalogGroup[];
   failures: CatalogFailure[];
 };
 
-export type SelectionResolution =
+type SelectionResolution =
   | { kind: 'explicit'; provider: string; model: string; reasoningEffort?: string }
   | { kind: 'required'; message: string }
   | { kind: 'unavailable'; message: string };
@@ -189,7 +189,7 @@ export function catalogReadFailure(error: unknown): Catalog {
 }
 
 /** 目录里是否至少有一个可选模型。 */
-export function catalogHasModels(catalog: Catalog | undefined): boolean {
+function catalogHasModels(catalog: Catalog | undefined): boolean {
   return Boolean(catalog && catalog.groups.some(group => group.models.length > 0));
 }
 

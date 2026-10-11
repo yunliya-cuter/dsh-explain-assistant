@@ -1,6 +1,6 @@
 import type { AssistantClientState } from './store.js';
 import type { createClientPlugin } from './index.js';
-export type OverlayProps = {
+type OverlayProps = {
     state: AssistantClientState;
     plugin: ReturnType<typeof createClientPlugin>;
     onClose?: () => void;

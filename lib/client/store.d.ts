@@ -1,5 +1,5 @@
-export type SessionId = string;
-export type AssistantPhase = 'idle' | 'connecting' | 'running' | 'complete' | 'error' | 'interrupted';
+type SessionId = string;
+type AssistantPhase = 'idle' | 'connecting' | 'running' | 'complete' | 'error' | 'interrupted';
 export type EvidenceSource = 'session_snapshot' | 'selected_frozen' | 'workspace_latest' | 'assistant_history';
 export type EvidenceState = 'observed' | 'reported_only' | 'unavailable';
 export type EvidenceItem = {
@@ -16,7 +16,7 @@ export type EvidenceItem = {
     sessionId?: string;
     [key: string]: unknown;
 };
-export type ToolProgress = {
+type ToolProgress = {
     id: string;
     name: string;
     label?: string;
@@ -79,7 +79,7 @@ export type CompactState = {
     status?: 'idle' | 'running' | 'complete' | 'error' | 'interrupted';
     error?: string;
 };
-export type ModelOption = {
+type ModelOption = {
     provider: string;
     model: string;
     source: 'explicit' | 'default';

@@ -1,7 +1,7 @@
 import { type HistoryResultPayload } from './contracts.js';
 import { type AssistantMessage, type AssistantModel } from './llm.js';
 import type { ToolContext } from './tools.js';
-export interface RouteService {
+interface RouteService {
     loadState?: (id: string, signal?: AbortSignal) => Promise<unknown>;
     loadHistory?: (id: string, cursor?: string, signal?: AbortSignal) => Promise<unknown>;
     /** §5.1/§8：展开单条记录的完整内容（分页）。未实现时路由会给中文错误，不再静默返回空对象。 */
@@ -53,7 +53,7 @@ export interface RouteService {
     isSessionAllowed?: (id: string, signal?: AbortSignal) => Promise<boolean>;
     isArchived?: (id: string, signal?: AbortSignal) => Promise<boolean>;
 }
-export interface RouteOptions {
+interface RouteOptions {
     service: RouteService;
     active?: Map<string, {
         requestId: string;

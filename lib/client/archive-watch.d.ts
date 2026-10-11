@@ -25,29 +25,22 @@
  *    （避免把「读失败」误当成「集合变空了」，那会让下次成功时的一批老 id 被当成新归档）。
  */
 /** 只依赖我们真正用到的那一小块形状，便于测试注入假服务；不引入对 DSH 包的静态依赖。 */
-export interface WorkspaceSnapshotLike {
+interface WorkspaceSnapshotLike {
     archivedSessionIds?: readonly unknown[];
     /** follow 生命周期。模型初始为 'pending'，baseline 到达后转 'ready'。 */
     phase?: unknown;
 }
-export interface WorkspaceSourceLike {
+interface WorkspaceSourceLike {
     getSnapshot(): WorkspaceSnapshotLike | undefined;
     subscribe(listener: () => void): () => void;
 }
-/**
- * 算出「这一份集合里，哪些是相对上一份**新进入**的」。
- *
- * `previous === undefined` 表示这是第一份快照：只建基线，返回空数组（见文件头第 1 条）。
- * 本函数永不抛异常，认不出的值直接忽略。
- */
-export declare function diffNewlyArchived(previous: ReadonlySet<string> | undefined, next: unknown): string[];
-export interface ArchiveWatcherOptions {
+interface ArchiveWatcherOptions {
     source: WorkspaceSourceLike;
     /** 收到「某个会话刚刚被归档」时调用。抛出的异常必须被吞掉，不能影响后续。 */
     onArchived: (sessionId: string) => void | Promise<void>;
     logger?: (message: string) => void;
 }
-export interface ArchiveWatcher {
+interface ArchiveWatcher {
     /** 手动同步一次（测试与兜底都用它）。返回本次新进入的 id 列表。 */
     sync(): string[];
     dispose(): void;
@@ -60,3 +53,4 @@ export interface ArchiveWatcher {
  * 不抛给调用方、不触发任何清理。返回的对象始终可用（`sync` 变 no-op）。
  */
 export declare function createArchiveWatcher(options: ArchiveWatcherOptions): ArchiveWatcher;
+export {};

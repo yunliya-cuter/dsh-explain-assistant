@@ -28,7 +28,7 @@ export declare const MAX_CONFIGURABLE_TIMEOUT_MS: number;
  * 判定顺序刻意保守：任何一步不确定就回退，绝不猜。
  */
 export declare function parseTimeoutMs(raw: unknown): number | undefined;
-export interface ConfiguredTimeouts {
+interface ConfiguredTimeouts {
     totalTimeoutMs?: number;
     idleTimeoutMs?: number;
 }
@@ -39,3 +39,4 @@ export interface ConfiguredTimeouts {
  * @returns 只包含**合法**的项；非法项直接省略，让 llm.ts 用默认值。
  */
 export declare function readConfiguredTimeouts(env?: Record<string, unknown> | undefined): ConfiguredTimeouts;
+export {};

@@ -12,7 +12,7 @@ import {
   safeSessionId,
 } from './contracts.js';
 
-export interface PersistenceOptions {
+interface PersistenceOptions {
   rootDir: string;
   /** Optional clock to make migration and cleanup tests deterministic. */
   now?: () => Date;
@@ -20,7 +20,7 @@ export interface PersistenceOptions {
   readOnlyFutureVersions?: boolean;
 }
 
-export interface StateStore {
+interface StateStore {
   load(sessionId: string): Promise<StateLoadResult>;
   save(state: AssistantState): Promise<void>;
   update(sessionId: string, mutator: (state: AssistantState) => AssistantState | void): Promise<AssistantState>;

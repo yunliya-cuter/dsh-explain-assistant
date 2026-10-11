@@ -1,10 +1,10 @@
-export type ApiErrorInfo = {
+type ApiErrorInfo = {
     code: string;
     message: string;
     retryable?: boolean;
     details?: Record<string, unknown>;
 };
-export type ApiEnvelope<T> = {
+type ApiEnvelope<T> = {
     schemaVersion?: number;
     sessionId?: string;
     requestId?: string;
@@ -13,7 +13,7 @@ export type ApiEnvelope<T> = {
     error?: ApiErrorInfo;
     [key: string]: unknown;
 };
-export type SseEnvelope = {
+type SseEnvelope = {
     schemaVersion: number;
     sessionId: string;
     requestId: string;
@@ -49,18 +49,5 @@ export type AssistantApi = {
         height: number;
     }, signal?: AbortSignal): Promise<ApiEnvelope<unknown>>;
 };
-export declare class AssistantApiError extends Error {
-    readonly code: string;
-    readonly status?: number;
-    readonly url: string;
-    readonly raw?: unknown;
-    readonly retryable?: boolean;
-    constructor(message: string, options: {
-        code?: string;
-        status?: number;
-        url: string;
-        raw?: unknown;
-        retryable?: boolean;
-    });
-}
 export declare function createAssistantApi(base?: string): AssistantApi;
+export {};

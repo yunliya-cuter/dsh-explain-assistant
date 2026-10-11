@@ -51,33 +51,9 @@ type CloseIndex = {
  * depth 是防御性的深度上限：异常深层嵌套不该把页面拖死。
  */
 export declare function renderInlineNodes(src: string, depth?: number, index?: CloseIndex): Node[];
-export type MarkdownBlock = {
-    type: 'paragraph' | 'heading' | 'code' | 'list' | 'quote' | 'hr' | 'table';
-    start: number;
-    end: number;
-    /** 已经被确定终结（后面跟着空行，或代码围栏已闭合）。只有终结的块才允许冻结。 */
-    closed: boolean;
-    level?: number;
-    text?: string;
-    info?: string;
-    ordered?: boolean;
-    /** 有序列表的起始号（CommonMark 的 <ol start>）。仅当不是 1 时才需要写进 DOM。 */
-    startNumber?: number;
-    items?: {
-        text: string;
-    }[];
-    /** 表格表头单元格（已按未转义竖线切开、已 trim）。 */
-    header?: string[];
-    /** 表格每列对齐（GFM 的 :--- / :---: / ---:）。null = 默认左对齐。 */
-    align?: (string | null)[];
-    /** 表格正文行；短行在渲染时补空、长行丢弃，保证列不错位。 */
-    rows?: string[][];
-};
-/** 把 src[from..) 扫成块。调用方负责把已冻结的前缀排除在外。 */
-export declare function scanBlocks(src: string, from?: number): MarkdownBlock[];
 /** 一次性渲染（已定稿的文本）。 */
 export declare function renderMarkdownNodes(text: string): Node[];
-export type MarkdownStats = {
+type MarkdownStats = {
     /** 被真正解析并建过 DOM 的块数（冻结后不再增长）。 */
     blockRenders: number;
     /** render() 被调用的次数。 */
@@ -96,7 +72,7 @@ export type MarkdownStats = {
      */
     codeChars: number;
 };
-export type MarkdownRenderer = {
+type MarkdownRenderer = {
     render(text: string, streaming: boolean): Node[];
     /** 返回序列中前多少个节点是「已冻结、不会再变」的。 */
     readonly frozenCount: number;

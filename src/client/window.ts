@@ -5,7 +5,7 @@ export type Geometry = {
   height: number;
 };
 
-export type GeometryChange = (geometry: Geometry) => void;
+type GeometryChange = (geometry: Geometry) => void;
 export type WindowController = {
   dispose(): void;
   /** 用户此刻是否正在拖动/缩放。后到的几何值**不得**在这一刻覆盖，否则会把用户正拖的位置拽回去。 */
@@ -87,7 +87,7 @@ function applyGeometry(root: HTMLElement, geometry: Geometry): void {
 }
 
 /** 八个改大小的方向。边：n/s/e/w；角：ne/nw/se/sw。 */
-export type ResizeDirection = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+type ResizeDirection = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
 /**
  * 按方向把「鼠标位移」翻译成新几何值。

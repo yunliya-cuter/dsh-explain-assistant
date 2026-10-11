@@ -32,7 +32,7 @@
  * - 内容是被解释的**数据**，不是给模型的指令（§7）。
  */
 /** 一条表面事件（只声明本模块用得到的字段，避免依赖宿主的完整类型）。 */
-export type MainlineEvent = {
+type MainlineEvent = {
     type?: string;
     seq?: number;
     data?: {
@@ -55,7 +55,7 @@ export type MainlineEvent = {
         [key: string]: unknown;
     };
 };
-export type MainlineRenderOptions = {
+type MainlineRenderOptions = {
     /** 整个主 agent 段的总字符上限；超了**从头部丢**（保留最近发生的）。 */
     maxChars?: number;
     /** 主 agent 正文单条上限。 */
@@ -69,22 +69,8 @@ export type MainlineRenderOptions = {
     /** 工具调用只发参数**名**，这串名字的上限。 */
     argKeysChars?: number;
 };
-/**
- * 默认上限。依据（223 个真实会话实测的全量包含开销）：
- * 中位 564 tokens / 75 分位 2860 / 90 分位 13972 / **最大 63575**。
- * 60000 字符 ≈ 15000 tokens，落在 90 分位附近——只有极端会话会被截，
- * 而不设上限则可能出现一次提问突然很慢很贵、甚至撑爆小助手自己的模型容量。
- */
-export declare const MAINLINE_DEFAULTS: {
-    readonly maxChars: 60000;
-    readonly assistantChars: 300;
-    readonly toolResultChars: 240;
-    readonly summaryChars: 1500;
-    readonly userChars: 300;
-    readonly argKeysChars: 80;
-};
 /** 渲染结果：文本 + 记账。 */
-export type MainlineRender = {
+type MainlineRender = {
     /** 渲染好的中文主线（不含标题行）。 */
     text: string;
     /** 用掉多少条表面事件。 */
@@ -101,26 +87,10 @@ export type MainlineRender = {
     dropped: number;
 };
 /** 读回来的主 agent 上下文。 */
-export type MainlineContext = MainlineRender & {
+type MainlineContext = MainlineRender & {
     /** 主 agent 段的标题（供提示词分区用）。 */
     sessionId: string;
 };
-/** 内容块的纯文本（只认 text 块；reasoning 块**故意**不取，见文件头）。 */
-export declare function textOfBlocks(blocks: unknown): string;
-/** 把空白压平并截断；返回是否真的截断过。 */
-export declare function clipText(value: unknown, limit: number): {
-    text: string;
-    truncated: boolean;
-};
-/**
- * 主 agent 的压缩摘要：只取 <compacted-summary> 之间的正文。
- *
- * 实测那条 user/message 的结构：前面 302 字符是英文前言
- * （"This is an automatically generated checkpoint condensing..."），
- * 正文在 <compacted-summary> 标签里，末尾还有一个多余的闭合标签。
- * 直接整段交给模型，会白送一段英文样板文字。
- */
-export declare function extractCompactedSummary(raw: unknown): string;
 /**
  * 把一批表面事件渲染成中文主线。**纯函数**：同样输入必然同样输出。
  *
@@ -137,7 +107,7 @@ export declare function extractCompactedSummary(raw: unknown): string;
  */
 export declare function renderMainline(events: readonly MainlineEvent[] | undefined, options?: MainlineRenderOptions): MainlineRender;
 /** 读当前表面的宿主接口（只声明用得到的部分）。 */
-export type SurfaceReader = {
+type SurfaceReader = {
     readSurface?: (sessionId: string) => Promise<unknown>;
 };
 /**
@@ -153,3 +123,4 @@ export declare function readMainlineContext(deps: {
     signal?: AbortSignal;
     options?: MainlineRenderOptions;
 }): Promise<MainlineContext | undefined>;
+export {};

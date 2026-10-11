@@ -28,14 +28,6 @@ export declare const RECORD_REASON_FIELD = "reason";
 export declare const RECORD_REASON_TEXT: Record<RecordReason, string>;
 /** 记录重建时给这三句加的**前缀**（让用户明白这句话讲的是「历史里那条」为什么没完成）。 */
 export declare const RECORD_REASON_PREFIX = "\u8FD9\u6761\u8BB0\u5F55\u6CA1\u6709\u5B8C\u6210\uFF1A";
-/**
- * 各原因的**简短事实标签**（给追问上下文用）。
- *
- * 为什么单独一套：用户看到的是「怎么补救」（RECORD_REASON_TEXT），
- * 而模型需要先知道**事实是什么**，才知道该建议「缩小范围」还是「换个模型」。
- * 但两者仍同源 —— 建议那句仍从 RECORD_REASON_TEXT 取，不做第二份拷贝。
- */
-export declare const RECORD_REASON_LABEL: Record<RecordReason, string>;
 /** 供追问上下文使用的一句话；原因未知时返回 undefined。 */
 export declare function recordReasonContextLine(value: unknown): string | undefined;
 /** 老记录（没有 reason 字段）的兜底提示，与既有行为一致。 */

@@ -24,9 +24,9 @@ import { stableJson, truncateValue } from './evidence.js';
 
 /** 单条记录里依据与工具过程的条数上限（与 evidence.ts 的 maxItems 同量级）。 */
 export const RECORD_MAX_EVIDENCE = 200;
-export const RECORD_MAX_TOOLS = 64;
+const RECORD_MAX_TOOLS = 64;
 /** 单条记录里这三组内容加起来的字节上限；超了就从尾部丢并留痕。 */
-export const RECORD_MAX_CONTENT_BYTES = 256 * 1024;
+const RECORD_MAX_CONTENT_BYTES = 256 * 1024;
 
 const EVIDENCE_STATES = new Set(['observed', 'reported_only', 'unavailable']);
 
@@ -69,7 +69,7 @@ function isSnapshotRef(value: unknown): value is ImageSnapshotRef {
  * - `{ evidence, snapshot }`（读图工具，snapshot 是 ImageSnapshotRef）。
  * 都不匹配时返回空数组，由调用方决定是否包一层「已观察到工具输出」的依据。
  */
-export function collectEvidence(value: unknown): { evidence: EvidenceEnvelope[]; images: ImageSnapshotRef[] } {
+function collectEvidence(value: unknown): { evidence: EvidenceEnvelope[]; images: ImageSnapshotRef[] } {
   const evidence: EvidenceEnvelope[] = [];
   const images: ImageSnapshotRef[] = [];
   const visit = (item: unknown): void => {
@@ -100,7 +100,7 @@ function toolProvenance(tool: string): { kind: EvidenceEnvelope['kind']; source:
  * startedAt/finishedAt/truncated/sentBytes/availableBytes），所以这里只做**白名单拷贝**——
  * 不认识的字段不带进落库文件，避免把将来的内部字段固化进磁盘格式。
  */
-export function fromToolTrace(trace: readonly unknown[], sessionId: string, now: string): {
+function fromToolTrace(trace: readonly unknown[], sessionId: string, now: string): {
   tools: ToolTrace[];
   evidence: EvidenceEnvelope[];
   images: ImageSnapshotRef[];
@@ -170,7 +170,7 @@ export function fromToolTrace(trace: readonly unknown[], sessionId: string, now:
  * 因为那才是看着真实 DOM 属性分出来的级别；拿不到就退成 unavailable，绝不默认 observed。
  * §5.2：选择结果在选中那一刻就冻结为 selected_frozen，这里保持一致。
  */
-export function fromSelectedEvidence(selected: unknown, sessionId: string, now: string): EvidenceEnvelope[] {
+function fromSelectedEvidence(selected: unknown, sessionId: string, now: string): EvidenceEnvelope[] {
   if (!Array.isArray(selected)) return [];
   const result: EvidenceEnvelope[] = [];
   for (const raw of selected) {
@@ -236,7 +236,7 @@ function capByBytes(
   return { ...state, dropped };
 }
 
-export interface RecordContentInput {
+interface RecordContentInput {
   sessionId: string;
   selectedEvidence?: unknown;
   toolTrace?: readonly unknown[];

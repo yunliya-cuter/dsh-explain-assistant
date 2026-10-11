@@ -8,19 +8,7 @@
  * 本模块不 import 任何 DSH 内部包：llm 服务由调用方注入，便于单测。
  */
 import { type ModelSelection } from './contracts.js';
-/** 所有面向用户的中文文案集中在此，避免散落硬编码。 */
-export declare const CATALOG_MESSAGES: {
-    readonly llmMissing: '暂时无法获取模型目录：宿主没有提供模型服务。';
-    readonly providersEmpty: '暂时没有可用的模型提供方。';
-    readonly providerListFailed: (reason: string) => string;
-    readonly providerFailed: (provider: string, reason: string) => string;
-    readonly providerEmpty: (provider: string) => string;
-    readonly selectionRequired: '请先为解释小助手选择一个模型，然后再提问。小助手不会自动替你使用默认模型。';
-    readonly catalogUnavailable: '当前没有可用的模型，无法为解释小助手生成回答。请检查模型配置后再试。';
-    readonly readFailed: (reason: string) => string;
-    readonly invalidSelection: '模型选择无效：provider 与 model 都必须是非空字符串。';
-};
-export type CatalogModel = {
+type CatalogModel = {
     provider: string;
     id: string;
     name: string;
@@ -28,20 +16,20 @@ export type CatalogModel = {
     inputModalities?: readonly string[];
     contextWindow?: number;
 };
-export type CatalogGroup = {
+type CatalogGroup = {
     provider: string;
     displayName?: string;
     models: CatalogModel[];
 };
-export type CatalogFailure = {
+type CatalogFailure = {
     code: string;
     message: string;
 };
-export type Catalog = {
+type Catalog = {
     groups: CatalogGroup[];
     failures: CatalogFailure[];
 };
-export type SelectionResolution = {
+type SelectionResolution = {
     kind: 'explicit';
     provider: string;
     model: string;
@@ -72,8 +60,6 @@ export declare function discoverCatalog(llm: unknown, signal?: AbortSignal): Pro
  * 这正是用户点名要消掉的那类**会被读成结论**的文案。
  */
 export declare function catalogReadFailure(error: unknown): Catalog;
-/** 目录里是否至少有一个可选模型。 */
-export declare function catalogHasModels(catalog: Catalog | undefined): boolean;
 /**
  * 判定当前该用哪个模型。
  *
@@ -85,3 +71,4 @@ export declare function resolveSelection(explicit: unknown, catalog: Catalog | u
 export declare function toModelSelection(value: unknown): ModelSelection;
 /** 目录中是否存在这个精确的 provider/model 组合。用于选中后回显校验。 */
 export declare function catalogContains(catalog: Catalog | undefined, provider: string, model: string): boolean;
+export {};

@@ -30,7 +30,7 @@ export function headerButtonTitle(unread: unknown): string {
 }
 
 /** 只需要 subscribe / get 两个能力，便于注入真实的 AssistantRegistry 或测试替身。 */
-export interface RegistryLike {
+interface RegistryLike {
   subscribe(listener: () => void): () => void;
   get(sessionId: string): { unread?: boolean } | undefined;
 }

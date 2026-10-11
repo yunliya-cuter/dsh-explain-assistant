@@ -399,7 +399,7 @@ export function renderInlineNodes(src: string, depth = 0, index?: CloseIndex): N
  * 块级扫描
  * ------------------------------------------------------------------ */
 
-export type MarkdownBlock = {
+type MarkdownBlock = {
   type: 'paragraph' | 'heading' | 'code' | 'list' | 'quote' | 'hr' | 'table'
   start: number
   end: number
@@ -521,7 +521,7 @@ function alignOf(cell: string): string | null {
 }
 
 /** 把 src[from..) 扫成块。调用方负责把已冻结的前缀排除在外。 */
-export function scanBlocks(src: string, from = 0): MarkdownBlock[] {
+function scanBlocks(src: string, from = 0): MarkdownBlock[] {
   const lines = splitLines(src, from)
   const blocks: MarkdownBlock[] = []
   let i = 0
@@ -826,7 +826,7 @@ export function renderMarkdownNodes(text: string): Node[] {
  * 增量渲染器
  * ------------------------------------------------------------------ */
 
-export type MarkdownStats = {
+type MarkdownStats = {
   /** 被真正解析并建过 DOM 的块数（冻结后不再增长）。 */
   blockRenders: number
   /** render() 被调用的次数。 */
@@ -846,7 +846,7 @@ export type MarkdownStats = {
   codeChars: number
 }
 
-export type MarkdownRenderer = {
+type MarkdownRenderer = {
   render(text: string, streaming: boolean): Node[]
   /** 返回序列中前多少个节点是「已冻结、不会再变」的。 */
   readonly frozenCount: number

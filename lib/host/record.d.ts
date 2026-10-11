@@ -21,9 +21,6 @@ import { type EvidenceEnvelope, type ImageSnapshotRef, type ToolTrace } from './
  */
 /** 单条记录里依据与工具过程的条数上限（与 evidence.ts 的 maxItems 同量级）。 */
 export declare const RECORD_MAX_EVIDENCE = 200;
-export declare const RECORD_MAX_TOOLS = 64;
-/** 单条记录里这三组内容加起来的字节上限；超了就从尾部丢并留痕。 */
-export declare const RECORD_MAX_CONTENT_BYTES: number;
 /** §6.3：认不出来源的状态时，宁可写「无从得知」，也不假装「已观察到」。 */
 export declare function normalizeEvidenceState(value: unknown): EvidenceEnvelope['evidenceState'];
 /**
@@ -33,40 +30,7 @@ export declare function normalizeEvidenceState(value: unknown): EvidenceEnvelope
  * （失败证实的也是「这次失败」这个事实）；只有还没定论（preparing/running）才算「无从得知」。
  */
 export declare function evidenceStateForToolStatus(status: unknown): EvidenceEnvelope['evidenceState'];
-/**
- * 从工具返回的 `result.value` 里挑出依据与图片快照。
- *
- * 三种形态都要认（都是既有代码产出的，不是猜的）：
- * - 单个 EvidenceEnvelope（readWorkspaceText / saveWorkspaceImageSnapshot 的 value.evidence）；
- * - EvidenceEnvelope 数组（listWorkspace / searchWorkspace）；
- * - `{ evidence, snapshot }`（读图工具，snapshot 是 ImageSnapshotRef）。
- * 都不匹配时返回空数组，由调用方决定是否包一层「已观察到工具输出」的依据。
- */
-export declare function collectEvidence(value: unknown): {
-    evidence: EvidenceEnvelope[];
-    images: ImageSnapshotRef[];
-};
-/**
- * 把 `llm.ts` 返回的 toolTrace 转成落库用的 tools，并顺带抽出依据与图片。
- *
- * toolTrace 的形状本来就与 `contracts.ts` 的 ToolTrace 对齐（tool/callId/arguments/status/result/
- * startedAt/finishedAt/truncated/sentBytes/availableBytes），所以这里只做**白名单拷贝**——
- * 不认识的字段不带进落库文件，避免把将来的内部字段固化进磁盘格式。
- */
-export declare function fromToolTrace(trace: readonly unknown[], sessionId: string, now: string): {
-    tools: ToolTrace[];
-    evidence: EvidenceEnvelope[];
-    images: ImageSnapshotRef[];
-};
-/**
- * 把客户端随请求带上来的「已选择依据」转成 EvidenceEnvelope。
- *
- * §6.3：分级**原样沿用客户端的判定**（selection.ts 的 classifyEvidence），
- * 因为那才是看着真实 DOM 属性分出来的级别；拿不到就退成 unavailable，绝不默认 observed。
- * §5.2：选择结果在选中那一刻就冻结为 selected_frozen，这里保持一致。
- */
-export declare function fromSelectedEvidence(selected: unknown, sessionId: string, now: string): EvidenceEnvelope[];
-export interface RecordContentInput {
+interface RecordContentInput {
     sessionId: string;
     selectedEvidence?: unknown;
     toolTrace?: readonly unknown[];
@@ -81,3 +45,4 @@ export declare function buildRecordContent(input: RecordContentInput): {
     tools: ToolTrace[];
     images: ImageSnapshotRef[];
 };
+export {};

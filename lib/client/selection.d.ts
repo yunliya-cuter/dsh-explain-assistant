@@ -15,7 +15,8 @@ import type { EvidenceItem } from './store.js';
  */
 export declare function classifyEvidence(element: Element): EvidenceItem['evidenceState'];
 export declare function evidenceFromElement(element: Element, sessionId: string): EvidenceItem;
-export type SelectionController = {
+type SelectionController = {
     dispose(): void;
 };
 export declare function attachSelection(root: Document, sessionId: string, onSelect: (item: EvidenceItem) => void): SelectionController;
+export {};

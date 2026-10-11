@@ -23,7 +23,7 @@ export declare function headerButtonText(unread: unknown): string;
 /** 按钮的 title（鼠标悬停提示）。未读时明确说「有新内容」。 */
 export declare function headerButtonTitle(unread: unknown): string;
 /** 只需要 subscribe / get 两个能力，便于注入真实的 AssistantRegistry 或测试替身。 */
-export interface RegistryLike {
+interface RegistryLike {
     subscribe(listener: () => void): () => void;
     get(sessionId: string): {
         unread?: boolean;
@@ -40,3 +40,4 @@ export interface RegistryLike {
  * @returns 取消订阅函数（组件卸载时必须调用，否则泄漏）。
  */
 export declare function watchUnread(registry: RegistryLike, sessionId: string, onChange: (unread: boolean) => void): () => void;
+export {};

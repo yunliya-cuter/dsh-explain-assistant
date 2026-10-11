@@ -1,12 +1,12 @@
 /** Shared wire and durable contracts for dsh-explain-assistant. */
 
 export const SCHEMA_VERSION = 1 as const;
-export type SchemaVersion = typeof SCHEMA_VERSION;
+type SchemaVersion = typeof SCHEMA_VERSION;
 
 export type Operation = 'state' | 'history' | 'history-result' | 'models' | 'select-model' | 'ask' | 'compact' | 'cancel' | 'forget' | 'mark-read' | 'geometry';
-export type SseEventType = 'start' | 'progress' | 'reasoning' | 'text' | 'tool_start' | 'tool_result' | 'usage' | 'complete' | 'error' | 'aborted';
+type SseEventType = 'start' | 'progress' | 'reasoning' | 'text' | 'tool_start' | 'tool_result' | 'usage' | 'complete' | 'error' | 'aborted';
 
-export interface Envelope<T> {
+interface Envelope<T> {
   schemaVersion: number;
   sessionId: string;
   requestId?: string;
@@ -15,14 +15,14 @@ export interface Envelope<T> {
   payload: T;
 }
 
-export interface ErrorBody {
+interface ErrorBody {
   code: ErrorCode | string;
   message: string;
   retryable: boolean;
   details?: Record<string, unknown>;
 }
 
-export type ErrorCode =
+type ErrorCode =
   | 'INVALID_REQUEST' | 'UNSUPPORTED_SCHEMA' | 'SESSION_NOT_FOUND' | 'SESSION_ARCHIVED'
   | 'SESSION_FORBIDDEN' | 'WORKSPACE_UNAVAILABLE' | 'PATH_INVALID' | 'PATH_OUTSIDE_WORKSPACE'
   | 'MODEL_UNAVAILABLE' | 'MODEL_NOT_FOUND' | 'IMAGE_UNSUPPORTED' | 'REQUEST_IN_FLIGHT'
@@ -45,7 +45,7 @@ export class ExplainAssistantError extends Error {
 
 export type EvidenceSource = 'session_snapshot' | 'selected_frozen' | 'workspace_latest' | 'assistant_history';
 export type EvidenceState = 'observed' | 'reported_only' | 'unavailable';
-export type EvidenceKind = 'session' | 'node' | 'tool' | 'file' | 'image' | 'history' | 'model';
+type EvidenceKind = 'session' | 'node' | 'tool' | 'file' | 'image' | 'history' | 'model';
 
 export interface EvidenceEnvelope {
   schemaVersion: SchemaVersion;
@@ -76,13 +76,13 @@ export interface ModelSelection {
   reasoningEffort?: string;
 }
 
-export interface ModelCapability {
+interface ModelCapability {
   inputModalities?: readonly ('text' | 'image')[];
   contextWindow?: number;
   maxOutputTokens?: number;
 }
 
-export interface Usage {
+interface Usage {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
@@ -214,7 +214,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-export function validateSessionId(sessionId: unknown): asserts sessionId is string {
+function validateSessionId(sessionId: unknown): asserts sessionId is string {
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId)) throw new ExplainAssistantError('INVALID_REQUEST', '会话标识无效。');
 }
 

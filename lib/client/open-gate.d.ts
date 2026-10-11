@@ -35,7 +35,7 @@ export declare function isOpening(state: {
  */
 export declare function openingLabel(opening: boolean): string;
 export declare function openingTitle(): string;
-export type OverlayVisibilityInput = {
+type OverlayVisibilityInput = {
     /** 用户是否已经点开了浮窗（意图）。 */
     open?: boolean;
     /** 该会话的 /state 是否已有结局；false = 未就绪。 */
@@ -73,3 +73,4 @@ export declare function watchOpening(registry: {
         stateReady?: boolean;
     } | undefined;
 }, sessionId: string, onChange: (opening: boolean) => void): () => void;
+export {};

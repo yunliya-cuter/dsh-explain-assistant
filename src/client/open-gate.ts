@@ -42,7 +42,7 @@ export function openingTitle(): string {
   return '正在打开解释小助手，正在读取当前状态…';
 }
 
-export type OverlayVisibilityInput = {
+type OverlayVisibilityInput = {
   /** 用户是否已经点开了浮窗（意图）。 */
   open?: boolean;
   /** 该会话的 /state 是否已有结局；false = 未就绪。 */

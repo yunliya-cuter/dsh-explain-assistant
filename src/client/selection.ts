@@ -42,7 +42,7 @@ export function classifyEvidence(element: Element): EvidenceItem['evidenceState'
 }
 
 export function evidenceFromElement(element: Element, sessionId: string): EvidenceItem { const tool = element.closest('[data-tool]'); const source = 'selected_frozen'; const state = (element.getAttribute('data-state') || '').toLowerCase(); return { id: element.getAttribute('data-chat-node-key') || element.getAttribute('data-tool') || crypto.randomUUID(), title: tool?.getAttribute('data-tool') || element.getAttribute('data-chat-flow-kind') || undefined, summary: (element.textContent || '').trim().slice(0, 4000), source, capturedAt: new Date().toISOString(), evidenceState: classifyEvidence(element), sessionId, version: element.getAttribute('data-version') || null, truncated: false, incomplete: state === 'running' || state === 'ongoing' || state === 'preparing' } }
-export type SelectionController = { dispose(): void }
+type SelectionController = { dispose(): void }
 
 /** 左键按下到抬起之间允许的最大位移（像素）。超过就认为是拖动选字，不算「点击选步骤」。 */
 const CLICK_SLOP_PX = 5

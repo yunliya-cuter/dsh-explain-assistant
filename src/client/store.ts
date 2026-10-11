@@ -1,5 +1,5 @@
-export type SessionId = string;
-export type AssistantPhase = 'idle' | 'connecting' | 'running' | 'complete' | 'error' | 'interrupted';
+type SessionId = string;
+type AssistantPhase = 'idle' | 'connecting' | 'running' | 'complete' | 'error' | 'interrupted';
 export type EvidenceSource = 'session_snapshot' | 'selected_frozen' | 'workspace_latest' | 'assistant_history';
 export type EvidenceState = 'observed' | 'reported_only' | 'unavailable';
 export type EvidenceItem = {
@@ -16,7 +16,7 @@ export type EvidenceItem = {
   sessionId?: string;
   [key: string]: unknown;
 };
-export type ToolProgress = { id: string; name: string; label?: string; status: 'running' | 'ok' | 'error'; detail?: string; result?: unknown; callId?: string; startedAt?: string; completedAt?: string; truncated?: boolean; availableBytes?: number; sentBytes?: number };
+type ToolProgress = { id: string; name: string; label?: string; status: 'running' | 'ok' | 'error'; detail?: string; result?: unknown; callId?: string; startedAt?: string; completedAt?: string; truncated?: boolean; availableBytes?: number; sentBytes?: number };
 export type AssistantRecord = { id: string; question: string; answer?: string; reasoning?: string; status: AssistantPhase; createdAt: string; completedAt?: string; tools?: ToolProgress[]; usage?: Record<string, unknown>; incomplete?: boolean; [key: string]: unknown };
 export type Geometry = { x: number; y: number; width: number; height: number };
 /**
@@ -38,7 +38,7 @@ export type HistoryDetailState = {
   error?: string;
 };
 export type CompactState = { summary?: string; reasoning?: string; updatedAt?: string; historyRevision?: number; status?: 'idle' | 'running' | 'complete' | 'error' | 'interrupted'; error?: string };
-export type ModelOption = { provider: string; model: string; source: 'explicit' | 'default'; contextWindow?: number; inputModalities?: readonly string[] };
+type ModelOption = { provider: string; model: string; source: 'explicit' | 'default'; contextWindow?: number; inputModalities?: readonly string[] };
 
 export type AssistantClientState = {
   sessionId: SessionId;

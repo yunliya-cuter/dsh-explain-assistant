@@ -47,7 +47,7 @@ export const RECORD_REASON_PREFIX = '这条记录没有完成：';
  * 而模型需要先知道**事实是什么**，才知道该建议「缩小范围」还是「换个模型」。
  * 但两者仍同源 —— 建议那句仍从 RECORD_REASON_TEXT 取，不做第二份拷贝。
  */
-export const RECORD_REASON_LABEL: Record<RecordReason, string> = {
+const RECORD_REASON_LABEL: Record<RecordReason, string> = {
   timeout: '超时（等太久，已停止）',
   model_failed: '模型调用失败',
   limit: '触及安全上限（轮次/工具/体积限制）',

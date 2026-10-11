@@ -19,7 +19,7 @@ export declare const FOUR_ELEMENTS: readonly ['在干什么', '为什么做', '�
 export declare const INSUFFICIENT_MARKER = "\u8BE5\u6B65\u672A\u63D0\u4F9B\u8DB3\u591F\u4FE1\u606F";
 /** §6.3 依据分级用词。 */
 export declare const EVIDENCE_TIERS: readonly ['已观察到', '仅据汇报', '无从得知'];
-export type TermHint = {
+type TermHint = {
     term: string;
     plain: string;
 };
@@ -30,10 +30,6 @@ export type TermHint = {
 export declare const TERM_HINTS: readonly TermHint[];
 /** 命中则返回白话解释，否则 undefined。大小写不敏感。 */
 export declare function describeTerm(term: string): string | undefined;
-/** 一句话能塞下的术语解释清单，供提示词正文引用。 */
-export declare function termGlossary(): string;
-/** 0.2：主 agent 上下文的标题行（分区用，界面与提示词同源）。 */
-export declare const MAINLINE_TITLE = "\u3010\u4E3B agent \u7684\u4E0A\u4E0B\u6587\u3011\uFF08\u5C0F\u52A9\u624B\u81EA\u5DF1\u8BFB\u5230\u7684\uFF0C\u4E0D\u662F\u7528\u6237\u63D0\u4F9B\u7684\uFF09";
 /**
  * 0.2：把主 agent 的上下文渲染成一个消息块。
  *
@@ -82,7 +78,7 @@ export declare function evidenceTier(item: Pick<EvidenceEnvelope, 'evidenceState
  */
 export declare function renderEvidence(evidence: readonly unknown[] | undefined, hasMainline?: boolean): string;
 /** 一条既往问答，用于让追问能接上前面的话（§7「用户提问、追问后」）。 */
-export type ConversationTurn = {
+type ConversationTurn = {
     question?: string;
     answer?: string;
     /**
@@ -91,7 +87,7 @@ export type ConversationTurn = {
      */
     reason?: string;
 };
-export type BuildMessagesDeps = {
+type BuildMessagesDeps = {
     /** 覆盖系统提示词（测试或将来做用户自定义提示词时用）。 */
     systemPrompt?: string;
     /** §7/§11.6：本会话既往问答，按时间正序。让「那它为什么这么做」这类追问能接上。 */
@@ -135,3 +131,4 @@ export type BuildMessagesDeps = {
  * 每条 message 的 content 都是内容块数组，符合 dsh-llm 的适配器要求。
  */
 export declare function buildMessages(question: string, payload?: Record<string, unknown> | null, deps?: BuildMessagesDeps): AssistantMessage[];
+export {};

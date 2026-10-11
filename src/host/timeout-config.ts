@@ -44,7 +44,7 @@ export function parseTimeoutMs(raw: unknown): number | undefined {
   return value;
 }
 
-export interface ConfiguredTimeouts {
+interface ConfiguredTimeouts {
   totalTimeoutMs?: number;
   idleTimeoutMs?: number;
 }

@@ -15,16 +15,10 @@
  * 容量来自宿主 llm.resolveModelInfo(provider, model) 的 context.contextWindow，
  * 这是适配器自报的可信容量；拿不到就返回 undefined，由界面显示「占用未知」。
  */
-/** 固定文本密度：与宿主 token-meter 的启发式保持同一口径，避免两处数字互相矛盾。 */
-export declare const CHARS_PER_TOKEN = 4;
-/** 每个内容块的结构开销（JSON 框、类型标签）。 */
-export declare const BLOCK_OVERHEAD = 4;
-/** 每条消息的 role 字段开销。 */
-export declare const ROLE_OVERHEAD = 4;
 /** 纯文本的启发式 token 数。 */
 export declare function estimateTextTokens(text: string): number;
 /** 一条小助手自己的问答记录（只取参与上下文的两个字段）。 */
-export type OccupancyRecord = {
+type OccupancyRecord = {
     question?: string;
     /**
      * 回答正文。**落库的真实字段名**（routes.ts 写进磁盘的就是它）。
@@ -45,7 +39,7 @@ export type OccupancyRecord = {
  * 不是"字段缺失"，不能拿 `answer` 去兜底）；`answerText` 不是字符串时才退回 `answer`。
  */
 export declare function answerTextOf(record: OccupancyRecord | undefined): string;
-export type OccupancyInput = {
+type OccupancyInput = {
     /** 小助手的系统提示词：每次请求都带，必须计入。 */
     systemPrompt: string;
     /** §9.1 压缩摘要：压缩后小助手后续参考的就是它 + 新问答。 */
@@ -70,7 +64,7 @@ export type OccupancyInput = {
     mainAgentChars?: number;
 };
 /** 这份上下文的构成：两块各自的量。两块之和 = usedTokens。 */
-export type OccupancyParts = {
+type OccupancyParts = {
     /** 主 agent 转移进来的那部分。 */
     mainAgentTokens: number;
     mainAgentChars: number;
@@ -78,7 +72,7 @@ export type OccupancyParts = {
     ownTokens: number;
     ownChars: number;
 };
-export type Occupancy = {
+type Occupancy = {
     percent: number;
     usedTokens: number;
     contextWindow: number;
@@ -104,3 +98,4 @@ export declare function carriedRecords(records: readonly (OccupancyRecord & {
     startedAt?: string;
     createdAt?: string;
 })[] | undefined, compactCreatedAt?: string): OccupancyRecord[];
+export {};

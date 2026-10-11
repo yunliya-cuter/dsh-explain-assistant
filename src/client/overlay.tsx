@@ -7,7 +7,7 @@ import type { createClientPlugin } from './index.js'
 // §10/D1：记录为什么没完成的中文文案与宿主**共用同一份**（src/shared/）。刻意不复制第二份。
 import { recordReasonText, RECORD_REASON_PREFIX, RECORD_INCOMPLETE_TEXT } from '../shared/record-reason.js'
 
-export type OverlayProps = { state: AssistantClientState; plugin: ReturnType<typeof createClientPlugin>; onClose?: () => void }
+type OverlayProps = { state: AssistantClientState; plugin: ReturnType<typeof createClientPlugin>; onClose?: () => void }
 type PluginLike = OverlayProps['plugin'] & {
   api?: {
     models?: (signal?: AbortSignal) => Promise<{ payload?: Record<string, unknown> }>

@@ -6,10 +6,10 @@ import { ExplainAssistantError } from './contracts.js';
 
 export interface AssistantModel { provider:string; model:string; reasoningEffort?:string; contextWindow?:number; inputModalities?:readonly string[]; }
 export interface AssistantMessage { role:'system'|'user'|'assistant'|'tool'; content:unknown; id?:string; toolCallId?:string; isError?:boolean; source?:unknown; }
-export interface LlmContext { llm?:any; tokenMeter?:any; model:AssistantModel; tools?:ToolContext; signal?:AbortSignal; maxRounds?:number; maxTools?:number; maxToolBytes?:number; totalTimeoutMs?:number; idleTimeoutMs?:number; onEvent?:(event:Record<string,unknown>)=>Promise<void>|void; }
+interface LlmContext { llm?:any; tokenMeter?:any; model:AssistantModel; tools?:ToolContext; signal?:AbortSignal; maxRounds?:number; maxTools?:number; maxToolBytes?:number; totalTimeoutMs?:number; idleTimeoutMs?:number; onEvent?:(event:Record<string,unknown>)=>Promise<void>|void; }
 /** 模型调用失败的原因（§10：不能静默失败，也不能把失败说成成功）。 */
-export interface LlmFailureInfo { code:string; message:string; }
-export interface LlmResult { text:string; reasoning:string; usage?:unknown; toolTrace:unknown[]; complete:boolean; /** true 表示因超时停止（§10/§11.9），上层要给出明确中文提示。 */ timeout?:boolean; /** 非空表示模型调用本身失败，上层必须当错误处理，绝不能说成成功。 */ failure?:LlmFailureInfo; }
+interface LlmFailureInfo { code:string; message:string; }
+interface LlmResult { text:string; reasoning:string; usage?:unknown; toolTrace:unknown[]; complete:boolean; /** true 表示因超时停止（§10/§11.9），上层要给出明确中文提示。 */ timeout?:boolean; /** 非空表示模型调用本身失败，上层必须当错误处理，绝不能说成成功。 */ failure?:LlmFailureInfo; }
 const DEFAULTS={maxRounds:8,maxTools:32,maxToolBytes:512*1024,totalTimeoutMs:300_000,idleTimeoutMs:120_000};
 /**
  * §10 / §11.9「出现慢、失败或费用不可控信号时…不无限调用追求效果」。
@@ -23,7 +23,7 @@ const DEFAULTS={maxRounds:8,maxTools:32,maxToolBytes:512*1024,totalTimeoutMs:300
 const TIMEOUT_MARKER = 'TIMEOUT';
 
 /** 一次流式响应的解析结果。字段名与 dsh-llm 的 StreamChunk 协议对齐。 */
-export type ParsedChunk = {
+type ParsedChunk = {
   text?: string;
   reasoning?: string;
   /** 已组装完成的工具调用（真实协议里由 block-end 或 tool-call-delta 累积得到）。 */
@@ -51,7 +51,7 @@ export type ParsedChunk = {
  *    界面显示成功。本轮实测就是这样：同一会话追问第二次，108 个文本分片变成 0 个，
  *    却报 complete:true。这类静默失败必须显式暴露。
  */
-export function parseChunk(chunk:any):ParsedChunk{
+function parseChunk(chunk:any):ParsedChunk{
   if(!chunk||typeof chunk!=='object')return {};
   const type=chunk.type;
   if(type==='finish'){
@@ -74,7 +74,7 @@ export function parseChunk(chunk:any):ParsedChunk{
 }
 
 /** 把模型给出的工具参数归一成对象。真实协议里 arguments 是**原始 JSON 字符串**。 */
-export function toolArguments(value:unknown):Record<string,unknown>{
+function toolArguments(value:unknown):Record<string,unknown>{
   if(typeof value==='string'){try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{return {}}}
   return value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:{};
 }

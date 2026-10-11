@@ -7,7 +7,7 @@ import { buildRecordContent } from './record.js';
 // 而是让两边 import 同一个模块（该模块是纯数据+纯函数，无 node 依赖，浏览器端可安全打包）。
 import { RECORD_REASON_TEXT, RECORD_REASON_FIELD, deriveRecordReason, deriveCompactReason, deriveErrorReason } from '../shared/record-reason.js';
 
-export interface RouteService {
+interface RouteService {
   loadState?: (id: string, signal?: AbortSignal) => Promise<unknown>;
   loadHistory?: (id: string, cursor?: string, signal?: AbortSignal) => Promise<unknown>;
   /** §5.1/§8：展开单条记录的完整内容（分页）。未实现时路由会给中文错误，不再静默返回空对象。 */
@@ -49,7 +49,7 @@ export interface RouteService {
   isSessionAllowed?: (id: string, signal?: AbortSignal) => Promise<boolean>;
   isArchived?: (id: string, signal?: AbortSignal) => Promise<boolean>;
 }
-export interface RouteOptions { service: RouteService; active?: Map<string, { requestId: string; controller: AbortController }>; }
+interface RouteOptions { service: RouteService; active?: Map<string, { requestId: string; controller: AbortController }>; }
 type Handler = (request: Request) => Promise<Response>;
 
 function json(value: unknown, status = 200, headers?: HeadersInit): Response { return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json; charset=utf-8', ...headers } }); }

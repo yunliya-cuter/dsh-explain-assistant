@@ -1,12 +1,12 @@
-export type ToolName = 'explain_read_session' | 'explain_search_session' | 'explain_read_workspace_file' | 'explain_list_workspace' | 'explain_search_workspace' | 'explain_read_workspace_image' | 'explain_get_model_context';
-export interface ToolError {
+type ToolName = 'explain_read_session' | 'explain_search_session' | 'explain_read_workspace_file' | 'explain_list_workspace' | 'explain_search_workspace' | 'explain_read_workspace_image' | 'explain_get_model_context';
+interface ToolError {
     ok: false;
     code: string;
     message: string;
     retryable: boolean;
     details?: Record<string, unknown>;
 }
-export interface ToolSuccess<T = unknown> {
+interface ToolSuccess<T = unknown> {
     ok: true;
     value: T;
     truncated?: boolean;
@@ -24,12 +24,12 @@ export interface ToolContext {
     modelContext?: unknown;
     limits?: Partial<ToolLimits>;
 }
-export interface ToolCall {
+interface ToolCall {
     name: string;
     arguments?: unknown;
     callId?: string;
 }
-export interface ToolLimits {
+interface ToolLimits {
     maxRounds: number;
     maxCalls: number;
     maxTotalResultBytes: number;
@@ -37,7 +37,6 @@ export interface ToolLimits {
     toolTimeoutMs: number;
     totalTimeoutMs: number;
 }
-export declare const DEFAULT_TOOL_LIMITS: ToolLimits;
 export declare const TOOL_NAMES: readonly ToolName[];
 export declare const TOOL_SCHEMAS: {
     name: ToolName;
@@ -50,7 +49,7 @@ export declare const TOOL_SCHEMAS: {
     };
 }[];
 export declare function executeTool(ctx: ToolContext, call: ToolCall): Promise<ToolResult>;
-export interface ToolLoopResult {
+interface ToolLoopResult {
     calls: number;
     rounds: number;
     totalBytes: number;
@@ -61,3 +60,4 @@ export interface ToolLoopResult {
     stopped?: ToolError;
 }
 export declare function executeToolLoop(ctx: ToolContext, calls: readonly ToolCall[], options?: Partial<ToolLimits>): Promise<ToolLoopResult>;
+export {};

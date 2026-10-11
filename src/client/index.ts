@@ -2,7 +2,7 @@ import { assistantRegistry, type AssistantClientState, type HistoryDetailState }
 import type { AssistantApi, AskEvent } from './api.js';
 import { createAssistantApi } from './api.js';
 
-export type ClientPluginOptions = {
+type ClientPluginOptions = {
   api?: AssistantApi;
   session?: { id: string; cwd?: string } | (() => { id: string; cwd?: string } | undefined);
   /**
