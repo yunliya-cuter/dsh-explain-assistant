@@ -1,4 +1,4 @@
-import { assistantRegistry, type EvidenceItem, type AssistantClientState, type HistoryDetailState } from './store.js';
+import { assistantRegistry, type AssistantClientState, type HistoryDetailState } from './store.js';
 import type { AssistantApi, AskEvent } from './api.js';
 import { createAssistantApi } from './api.js';
 
@@ -83,7 +83,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
   /** 每个会话最近一次收到的终止性事件类型（用于区分「已停止」与「出错」）。 */
   const terminalEvent = new Map<string, string>();
 
-  const appendRecord = (request: ActiveRequest, status: 'complete' | 'interrupted', state: AssistantClientState, answer?: string) => {
+  const appendRecord = (request: ActiveRequest, status: 'complete' | 'interrupted', answer?: string) => {
     if (request.recorded || request.kind !== 'ask') return;
     request.recorded = true;
     const now = new Date().toISOString();
@@ -181,7 +181,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
         }
         current.phase = 'complete'; current.requestId = undefined; current.unread = true;
       });
-      appendRecord(request, 'complete', assistantRegistry.get(request.sessionId), answer);
+      appendRecord(request, 'complete', answer);
       // 请求结束后重新拉一次 state：
       // - compact：宿主已把 compactState 落库，界面要显示摘要；
       // - ask：上下文变长了，占用要按小助手自身口径重算（§9.2 最后一条）。
@@ -196,7 +196,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
         // §9.1「失败清楚提示，保留压缩前的可用状态」：只改 status，保留上一份可用摘要正文。
         if (request.kind === 'compact') current.compactState = { ...current.compactState, status: 'interrupted', error: message };
       });
-      appendRecord(request, 'interrupted', assistantRegistry.get(request.sessionId));
+      appendRecord(request, 'interrupted');
       return;
     }
     if (event.type === 'error') {
@@ -206,7 +206,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
         current.phase = 'error'; current.requestId = undefined; current.error = message; current.unread = true;
         if (request.kind === 'compact') current.compactState = { ...current.compactState, status: 'error', error: message };
       });
-      appendRecord(request, 'interrupted', assistantRegistry.get(request.sessionId));
+      appendRecord(request, 'interrupted');
     }
   };
 
@@ -650,7 +650,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
           if (message !== undefined) current.error = message;
           if (request.kind === 'compact') current.compactState = { ...current.compactState, status: aborted ? 'interrupted' : 'error', ...(message !== undefined ? { error: message } : {}) };
         });
-        if (aborted) appendRecord(request, 'interrupted', assistantRegistry.get(sessionId));
+        if (aborted) appendRecord(request, 'interrupted');
       }
     }).finally(() => {
       if (active.get(sessionId)?.token === request.token) active.delete(sessionId);
@@ -849,7 +849,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
     const cancelId = request.requestId;
     if (cancelId) void callApi(() => api.cancel(request.sessionId, cancelId)).catch(() => undefined);
     assistantRegistry.update(request.sessionId, { phase: 'interrupted', requestId: undefined, error: '已按你的要求停止本次解释' });
-    appendRecord(request, 'interrupted', assistantRegistry.get(request.sessionId));
+    appendRecord(request, 'interrupted');
   };
 
   const dispose = () => {

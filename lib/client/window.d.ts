@@ -55,8 +55,6 @@ type ResizeZone = {
     element: HTMLElement;
     direction: ResizeDirection;
 };
-/** 当前调用顺序：`(root, handle, initial, onChange, resizeZones?)`。 */
+/** 调用顺序：`(root, handle, initial, onChange, resizeZones?)`。 */
 export declare function attachWindowInteractions(root: HTMLElement, handle: HTMLElement, initial: Geometry, onChange: GeometryChange, resizeZones?: ResizeZone[]): WindowController;
-/** 旧调用顺序：`(root, handle, resize, initial, onChange)`。保留以兼容既有调用方（如 tests/client.test.mjs）。 */
-export declare function attachWindowInteractions(root: HTMLElement, handle: HTMLElement, resize: HTMLElement, initial: Geometry, onChange: GeometryChange): WindowController;
 export {};

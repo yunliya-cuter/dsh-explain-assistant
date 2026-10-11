@@ -105,7 +105,6 @@ async function json<T>(url: string, init?: RequestInit): Promise<ApiEnvelope<T>>
   return body as ApiEnvelope<T>;
 }
 
-function query(sessionId: string): string { return encodeURIComponent(sessionId); }
 function queryParam(name: string, value: string): string { return encodeURIComponent(name) + '=' + encodeURIComponent(value); }
 
 function validateSseEnvelope(value: unknown, url: string): SseEnvelope {

@@ -47,7 +47,7 @@ test('window: default and small viewports clamp safely',async()=>{
 });
 test('window: pointermove does not persist; pointerup persists and dispose detaches',async()=>{
  const windowModule=await moduleFromSource('src/client/window.ts');
- const dom=fakeDom();try{const root=new FakeElement(),handle=new FakeElement('header'),resize=new FakeElement('button');const changed=[];const control=windowModule.attachWindowInteractions(root,handle,resize,{x:20,y:20,width:420,height:620},g=>changed.push(g));handle.emit('pointerdown',{pointerId:1,button:0,clientX:10,clientY:10});root.emit('pointermove',{pointerId:1,clientX:30,clientY:30});assert.equal(changed.length,0);root.emit('pointerup',{pointerId:1});assert.equal(changed.length,1);assert.equal(changed[0].x,40);control.dispose();assert.equal(handle.listeners.get('pointerdown')?.size,0);}finally{dom.restore();}
+ const dom=fakeDom();try{const root=new FakeElement(),handle=new FakeElement('header');const changed=[];const control=windowModule.attachWindowInteractions(root,handle,{x:20,y:20,width:420,height:620},g=>changed.push(g));handle.emit('pointerdown',{pointerId:1,button:0,clientX:10,clientY:10});root.emit('pointermove',{pointerId:1,clientX:30,clientY:30});assert.equal(changed.length,0);root.emit('pointerup',{pointerId:1});assert.equal(changed.length,1);assert.equal(changed[0].x,40);control.dispose();assert.equal(handle.listeners.get('pointerdown')?.size,0);}finally{dom.restore();}
 });
 test('focus: overlay Escape closes and restores entry focus; Tab stays inside',async()=>{
  const overlay=await moduleFromSource('src/client/overlay.tsx');

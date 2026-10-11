@@ -269,7 +269,6 @@ export function renderInlineNodes(src: string, depth = 0, index?: CloseIndex): N
   const out: Node[] = []
   if (!src) return out
   // 预计算表整段只建一次，递归与循环共用 —— 这是把行内扫描压回线性的关键。
-  const table = index ?? closeIndexOf(src)
   let buffer = ''
   const flush = () => { if (buffer) { out.push(document.createTextNode(buffer)); buffer = '' } }
 

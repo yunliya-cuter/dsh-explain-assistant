@@ -126,25 +126,16 @@ export function resizeByDirection(start: Geometry, direction: ResizeDirection, d
 
 type ResizeZone = { element: HTMLElement; direction: ResizeDirection };
 
-/** 当前调用顺序：`(root, handle, initial, onChange, resizeZones?)`。 */
+/** 调用顺序：`(root, handle, initial, onChange, resizeZones?)`。 */
 export function attachWindowInteractions(root: HTMLElement, handle: HTMLElement, initial: Geometry, onChange: GeometryChange, resizeZones?: ResizeZone[]): WindowController;
-/** 旧调用顺序：`(root, handle, resize, initial, onChange)`。保留以兼容既有调用方（如 tests/client.test.mjs）。 */
-export function attachWindowInteractions(root: HTMLElement, handle: HTMLElement, resize: HTMLElement, initial: Geometry, onChange: GeometryChange): WindowController;
 export function attachWindowInteractions(
   root: HTMLElement,
   handle: HTMLElement,
-  third: Geometry | HTMLElement,
-  fourth: GeometryChange | Geometry,
-  fifth?: ResizeZone[] | GeometryChange,
+  initial: Geometry,
+  onChange: GeometryChange,
+  resizeZones?: ResizeZone[],
 ): WindowController {
-  // 两种顺序都认：第三个参数是**元素**（有 addEventListener）就是旧顺序，否则是新顺序。
-  // 为什么要兼容而不是去改那个测试：签名是**我**改的，打破既有调用方是我的责任；
-  // 改别人的测试会让「测试为什么变」这件事失去独立见证。
-  const isElement = (value: unknown): value is HTMLElement =>
-    Boolean(value) && typeof value === 'object' && typeof (value as { addEventListener?: unknown }).addEventListener === 'function';
-  const initial = (isElement(third) ? fourth : third) as Geometry;
-  const onChange = (isElement(third) ? fifth : fourth) as GeometryChange;
-  const resizeZones: ResizeZone[] = (isElement(third) ? [] : (fifth as ResizeZone[] | undefined)) ?? [];
+  const zones: ResizeZone[] = resizeZones ?? [];
   let geometry = { ...initial };
   let mode: 'drag' | 'resize' | undefined;
   let direction: ResizeDirection | undefined;
@@ -246,7 +237,7 @@ export function attachWindowInteractions(
   handle.addEventListener('pointerdown', onDragStart);
   // 每条边/每个角各自一个监听，方向在闭包里固定 —— 这样「拖哪条边就改哪条边」。
   const zoneHandlers: Array<{ element: HTMLElement; handler: (event: PointerEvent) => void }> = [];
-  for (const zone of resizeZones) {
+  for (const zone of zones) {
     const handler = (event: PointerEvent): void => begin('resize', event, zone.direction);
     zoneHandlers.push({ element: zone.element, handler });
     zone.element.addEventListener('pointerdown', handler);
