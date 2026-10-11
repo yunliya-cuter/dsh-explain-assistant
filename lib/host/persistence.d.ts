@@ -61,5 +61,4 @@ export declare class JsonSessionStore implements StateStore {
     private enqueue;
     private ensureOpen;
 }
-export declare function createPersistenceStore(rootDir: string): JsonSessionStore;
 export {};

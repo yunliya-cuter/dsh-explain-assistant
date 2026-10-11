@@ -17,14 +17,6 @@ export interface ErrorBody {
     retryable: boolean;
     details?: Record<string, unknown>;
 }
-export interface ErrorEnvelope {
-    schemaVersion: number;
-    ok: false;
-    sessionId?: string;
-    requestId?: string;
-    operation?: Operation;
-    error: ErrorBody;
-}
 export type ErrorCode = 'INVALID_REQUEST' | 'UNSUPPORTED_SCHEMA' | 'SESSION_NOT_FOUND' | 'SESSION_ARCHIVED' | 'SESSION_FORBIDDEN' | 'WORKSPACE_UNAVAILABLE' | 'PATH_INVALID' | 'PATH_OUTSIDE_WORKSPACE' | 'MODEL_UNAVAILABLE' | 'MODEL_NOT_FOUND' | 'IMAGE_UNSUPPORTED' | 'REQUEST_IN_FLIGHT' | 'HISTORY_CONFLICT' | 'RECORD_NOT_FOUND' | 'TOOL_NOT_ALLOWED' | 'TOOL_INVALID_ARGUMENTS' | 'TOOL_FAILED' | 'TOOL_TIMEOUT' | 'LIMIT_EXCEEDED' | 'PERSISTENCE_FAILED' | 'PERSISTENCE_CORRUPT' | 'DEPENDENCY_UNAVAILABLE' | 'ABORTED' | 'INTERNAL_ERROR';
 export declare class ExplainAssistantError extends Error {
     readonly code: ErrorCode | string;
@@ -189,11 +181,9 @@ export interface SseEvent<T = unknown> {
     payload?: T;
 }
 export declare function isRecord(value: unknown): value is Record<string, unknown>;
-export declare function isModelSelection(value: unknown): value is ModelSelection;
 export declare function validateSessionId(sessionId: unknown): asserts sessionId is string;
 export declare function safeSessionId(sessionId: string): string;
 export declare function createEmptyState(sessionId: string, now?: string): AssistantState;
 export declare function assertState(value: unknown, expectedSessionId?: string): asserts value is PersistedState;
 export declare function validateEnvelope(value: unknown, expectedOperation?: Operation): asserts value is Envelope<unknown>;
 export declare function toErrorBody(error: unknown, fallbackCode?: ErrorCode): ErrorBody;
-export declare function jsonByteLength(value: unknown): number;

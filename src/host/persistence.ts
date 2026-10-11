@@ -263,5 +263,3 @@ export class JsonSessionStore implements StateStore {
 
 function isMissing(error: unknown): boolean { return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT'; }
 function persistenceError(message: string, cause: unknown): ExplainAssistantError { return new ExplainAssistantError('PERSISTENCE_FAILED', message, { retryable: true, cause }); }
-
-export function createPersistenceStore(rootDir: string): JsonSessionStore { return new JsonSessionStore({ rootDir }); }

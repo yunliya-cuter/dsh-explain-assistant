@@ -34,8 +34,6 @@ export declare function describeTerm(term: string): string | undefined;
 export declare function termGlossary(): string;
 /** 0.2：主 agent 上下文的标题行（分区用，界面与提示词同源）。 */
 export declare const MAINLINE_TITLE = "\u3010\u4E3B agent \u7684\u4E0A\u4E0B\u6587\u3011\uFF08\u5C0F\u52A9\u624B\u81EA\u5DF1\u8BFB\u5230\u7684\uFF0C\u4E0D\u662F\u7528\u6237\u63D0\u4F9B\u7684\uFF09";
-/** 0.2：小助手自有上下文的标题行。 */
-export declare const OWN_TITLE = "\u3010\u5C0F\u52A9\u624B\u81EA\u5DF1\u7684\u4E0A\u4E0B\u6587\u3011";
 /**
  * 0.2：把主 agent 的上下文渲染成一个消息块。
  *

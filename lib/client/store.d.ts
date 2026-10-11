@@ -201,6 +201,4 @@ export declare class AssistantRegistry {
     private emit;
 }
 export declare const assistantRegistry: AssistantRegistry;
-export declare function useAssistantRegistry<T>(selector: (state: AssistantClientState | undefined) => T, sessionId?: SessionId): T;
-export type RegistryDispatch = (value: AssistantClientState | ((state: AssistantClientState) => AssistantClientState)) => void;
 export {};

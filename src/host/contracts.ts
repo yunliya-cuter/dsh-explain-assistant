@@ -22,15 +22,6 @@ export interface ErrorBody {
   details?: Record<string, unknown>;
 }
 
-export interface ErrorEnvelope {
-  schemaVersion: number;
-  ok: false;
-  sessionId?: string;
-  requestId?: string;
-  operation?: Operation;
-  error: ErrorBody;
-}
-
 export type ErrorCode =
   | 'INVALID_REQUEST' | 'UNSUPPORTED_SCHEMA' | 'SESSION_NOT_FOUND' | 'SESSION_ARCHIVED'
   | 'SESSION_FORBIDDEN' | 'WORKSPACE_UNAVAILABLE' | 'PATH_INVALID' | 'PATH_OUTSIDE_WORKSPACE'
@@ -223,10 +214,6 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-export function isModelSelection(value: unknown): value is ModelSelection {
-  return isRecord(value) && typeof value.provider === 'string' && value.provider.length > 0 && typeof value.model === 'string' && value.model.length > 0 && (value.reasoningEffort === undefined || typeof value.reasoningEffort === 'string');
-}
-
 export function validateSessionId(sessionId: unknown): asserts sessionId is string {
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId)) throw new ExplainAssistantError('INVALID_REQUEST', '会话标识无效。');
 }
@@ -258,8 +245,4 @@ export function validateEnvelope(value: unknown, expectedOperation?: Operation):
 export function toErrorBody(error: unknown, fallbackCode: ErrorCode = 'INTERNAL_ERROR'): ErrorBody {
   if (error instanceof ExplainAssistantError) return { code: error.code, message: error.message, retryable: error.retryable, ...(error.details ? { details: error.details } : {}) };
   return { code: fallbackCode, message: '解释小助手没能完成这次操作，请稍后重试。', retryable: false };
-}
-
-export function jsonByteLength(value: unknown): number {
-  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }

@@ -150,5 +150,3 @@ export class AssistantRegistry {
 }
 
 export const assistantRegistry = new AssistantRegistry();
-export function useAssistantRegistry<T>(selector: (state: AssistantClientState | undefined) => T, sessionId?: SessionId): T { return selector(sessionId ? assistantRegistry.get(sessionId) : assistantRegistry.current); }
-export type RegistryDispatch = (value: AssistantClientState | ((state: AssistantClientState) => AssistantClientState)) => void;
