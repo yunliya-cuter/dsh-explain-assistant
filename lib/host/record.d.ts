@@ -1,4 +1,4 @@
-import type { EvidenceEnvelope, ImageSnapshotRef, ToolTrace } from './contracts.js';
+import { type EvidenceEnvelope, type ImageSnapshotRef, type ToolTrace } from './contracts.js';
 /**
  * §11.6「依据可展开核查」/ §6.3「依据分级」/ §8：把一次问答的**可核查材料**组装成可落库的
  * evidence / tools / images，并施加大小上限。

@@ -1,4 +1,4 @@
-import type { EvidenceEnvelope, ImageSnapshotRef, ToolTrace } from './contracts.js';
+import { isRecord, type EvidenceEnvelope, type ImageSnapshotRef, type ToolTrace } from './contracts.js';
 import { stableJson, truncateValue } from './evidence.js';
 
 /**
@@ -49,15 +49,15 @@ export function evidenceStateForToolStatus(status: unknown): EvidenceEnvelope['e
 }
 
 function isEnvelope(value: unknown): value is EvidenceEnvelope {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-    && typeof (value as EvidenceEnvelope).kind === 'string'
-    && typeof (value as EvidenceEnvelope).evidenceState === 'string';
+  return isRecord(value)
+    && typeof value.kind === 'string'
+    && typeof value.evidenceState === 'string';
 }
 
 function isSnapshotRef(value: unknown): value is ImageSnapshotRef {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-    && typeof (value as ImageSnapshotRef).sha256 === 'string'
-    && typeof (value as ImageSnapshotRef).relativePath === 'string';
+  return isRecord(value)
+    && typeof value.sha256 === 'string'
+    && typeof value.relativePath === 'string';
 }
 
 /**
