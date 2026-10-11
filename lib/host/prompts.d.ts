@@ -11,7 +11,7 @@
  * （形如 [{ type: 'text', text }]）。provider 适配器内部会执行 message.content.flatMap(...)，
  * 传字符串会直接抛错、用户问题根本送不进模型。因此本模块只产出数组形态的 content。
  */
-import type { EvidenceEnvelope } from './contracts.js';
+import { type EvidenceEnvelope } from './contracts.js';
 import type { AssistantMessage } from './llm.js';
 /** §6.1 四要素。顺序即推荐的行文顺序。 */
 export declare const FOUR_ELEMENTS: readonly ['在干什么', '为什么做', '实际产出', '哪里可以调整'];

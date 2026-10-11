@@ -12,7 +12,7 @@
  * 传字符串会直接抛错、用户问题根本送不进模型。因此本模块只产出数组形态的 content。
  */
 
-import type { EvidenceEnvelope } from './contracts.js';
+import { isRecord, type EvidenceEnvelope } from './contracts.js';
 import type { AssistantMessage } from './llm.js';
 // §10/D1：追问上下文里要说明「上次为什么没完成」，文案与界面/事件**同源**（src/shared）。
 import { recordReasonContextLine } from '../shared/record-reason.js';
@@ -178,10 +178,6 @@ export function evidenceTier(item: Pick<EvidenceEnvelope, 'evidenceState'>): str
   return EVIDENCE_TIERS[2];
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function textOf(value: unknown): string {
   if (typeof value === 'string') return value.trim();
   return '';
@@ -193,7 +189,7 @@ function textOf(value: unknown): string {
  * 而不是留给模型自行猜测。
  */
 export function renderEvidence(evidence: readonly unknown[] | undefined, hasMainline = false): string {
-  const items = (evidence ?? []).filter(isPlainObject);
+  const items = (evidence ?? []).filter(isRecord);
   if (!items.length) {
     // 有主 agent 上下文时**不能**再说「该步未提供足够信息」——那时其实有可用材料，
     // 而 SYSTEM_PROMPT 第 138-139 行本身就明令「不得因为没选中片段就说这句话」。
