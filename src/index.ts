@@ -544,28 +544,44 @@ export function apply(ctx: any): void {
   const lifetime = new AbortController();
   const pending = new Set<Promise<unknown>>();
   ctx.effect?.(() => async () => { lifetime.abort(); archiveSweeper?.stop(); await Promise.allSettled([...pending]); await store?.close(); });
-  const entries = [
-    ['/api/explain-assistant/state', ['GET']], ['/api/explain-assistant/history', ['GET']], ['/api/explain-assistant/history-result', ['GET']],
-    ['/api/explain-assistant/models', ['GET']], ['/api/explain-assistant/select-model', ['POST']],
-    ['/api/explain-assistant/ask', ['POST']], ['/api/explain-assistant/compact', ['POST']],
-    ['/api/explain-assistant/in-flight', ['DELETE']],
-    // §4/§8 F6：客户端收到归档信号后调它清理该会话。注意键必须带 /api 前缀
-    // （apply 注册用的是这个键；而 createExplainAssistantRoutes 返回的 Map 键不带，两套都出现在代码里）。
-    ['/api/explain-assistant/forget', ['POST']],
-    ['/api/explain-assistant/mark-read', ['POST']],
+  // ── 路径清单只有一份来源：createExplainAssistantRoutes 返回的 Map 的键 ──────────
+  // 形态约定（对外不可变）：Map 键不带 /api（/explain-assistant/<op>），
+  // 而宿主注册必须带 /api（客户端 api.ts 的 base 就是 /api/explain-assistant）。
+  // 于是注册路径统一由「'/api' + Map 键」派生 —— 不再各写一遍、也不再靠 replace 手术桥接。
+  const HTTP_METHODS: Record<string, string[]> = {
+    state: ['GET'], history: ['GET'], 'history-result': ['GET'], models: ['GET'],
+    'select-model': ['POST'], ask: ['POST'], compact: ['POST'], 'in-flight': ['DELETE'],
+    // §4/§8 F6：客户端收到归档信号后调它清理该会话。
+    forget: ['POST'],
+    'mark-read': ['POST'],
     // 记住浮窗位置。与 mark-read 一样是「收尾动作」，但仍走 guard：已归档会话不该再写状态。
-    ['/api/explain-assistant/geometry', ['POST']],
-  ] as const;
-  for (const [path, methods] of entries) connection.fetch.register({
-    path, methods: [...methods] as any,
-    requestBody: path.endsWith('/ask') || path.endsWith('/compact') ? 'streaming' : 'buffered',
+    geometry: ['POST'],
+  };
+  // ask/compact 是 SSE 流式响应，其余为普通缓冲响应。
+  const STREAMING_OPS = new Set(['ask', 'compact']);
+  const entries = [...routes.keys()].map(mapKey => {
+    // op 名 = Map 键的末段（与 routes.ts 的 operation(path) 同一取法）
+    const op = mapKey.split('/').filter(Boolean).pop() as string;
+    // **缺配必须当场失败，不能静默退回某个默认方法**：Map 若新增了键却忘了在这里
+    // 配上方法，默默按 POST 注册会得到一个「看起来能用、实际方法错了」的路由，
+    // 而这正是本模块历史上最难查的一类缺陷。宁可在启动时明确报错。
+    const methods = HTTP_METHODS[op];
+    if (!Array.isArray(methods) || !methods.length) {
+      throw new Error('HTTP_METHODS 缺少路由「' + mapKey + '」的方法配置（op=' + op + '）——'
+        + '新增路由时必须在 src/index.ts 的 HTTP_METHODS 里登记方法');
+    }
+    return { mapKey, op, methods };
+  });
+  for (const { mapKey, op, methods } of entries) connection.fetch.register({
+    path: '/api' + mapKey, methods: [...methods] as any,
+    requestBody: STREAMING_OPS.has(op) ? 'streaming' : 'buffered',
     fetch: (request: Request) => {
-      const task = routes.get(path.replace('/api', ''))?.(new Request(request, { signal: AbortSignal.any([request.signal, lifetime.signal]) })) ?? Promise.resolve(new Response('Not found', { status: 404 }));
+      const task = routes.get(mapKey)?.(new Request(request, { signal: AbortSignal.any([request.signal, lifetime.signal]) })) ?? Promise.resolve(new Response('Not found', { status: 404 }));
       // 路由处理器永远不能向宿主抛出拒绝：DSH 启动器把未处理的 Promise 拒绝视为致命错误并 exit(1)，
       // 整站会随之白屏。这里既消除 pending 跟踪派生的未处理拒绝，也把异常转成普通错误响应。
       const settled = task.catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
-        console.error('[dsh-explain-assistant] route failed:', path, message);
+        console.error('[dsh-explain-assistant] route failed:', '/api' + mapKey, message);
         return new Response(JSON.stringify({ error: { code: 'INTERNAL', message } }), {
           status: 500, headers: { 'content-type': 'application/json; charset=utf-8' },
         });

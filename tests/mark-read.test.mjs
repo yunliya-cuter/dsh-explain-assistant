@@ -51,6 +51,31 @@ async function startHost(llm) {
   };
 }
 
+/**
+ * 真的把插件 apply 起来，收集 connection.fetch.register 收到的注册项。
+ * 「路由被注册了」只能由运行时注册表证明，不能靠匹配源码字面量。
+ */
+async function registeredRoutes() {
+  const home = mkdtempSync(join(tmpdir(), 'ea-markread-reg-'));
+  const previous = process.env.DSH_HOME;
+  process.env.DSH_HOME = home;
+  const entries = [];
+  try {
+    const index = await moduleFromSource('src/index.ts');
+    index.apply({
+      llm: { listProviders: async () => ['p'], listModels: async () => [{ id: 'm', provider: 'p' }],
+             stream: async () => {}, resolveModelInfo: async () => ({ context: { contextWindow: 128000 } }) },
+      sessionQuery: {},
+      connection: { fetch: { register: entry => { entries.push(entry); } } },
+      effect: () => {}, get: () => undefined,
+    });
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = previous;
+    try { rmSync(home, { recursive: true, force: true }); } catch {}
+  }
+  return entries;
+}
+
 async function seed(rootDir, id, mutate) {
   const persistence = await moduleFromSource('src/host/persistence.ts');
   const store = new persistence.JsonSessionStore({ rootDir });
@@ -249,9 +274,16 @@ test('清除未读 不回归: 新回答到来时必须重新点亮未读（不�
 
 test('清除未读 接线: 宿主注册 mark-read 路由，客户端在 open() 里调用', async () => {
   const { readFileSync } = await import('node:fs');
+  // 行为级断言：真的 apply 插件，看 register 收到的 path/methods —— 而不是读源码文本。
+  // 旧写法只要源码里有那个字面量就绿：路径拼错、方法写错、或压根没注册都发现不了。
+  const registrations = await registeredRoutes();
+  const markRead = registrations.find(entry => entry.path === '/api/explain-assistant/mark-read');
+  assert.ok(markRead, '必须在 entries 注册 /api/explain-assistant/mark-read（实际注册了：'
+    + registrations.map(entry => entry.path).join(', ') + '）');
+  assert.deepEqual(markRead.methods, ['POST'], 'mark-read 必须以 POST 注册（键带 /api 前缀）');
+  assert.equal(typeof markRead.fetch, 'function', '注册项必须带可调用的 fetch');
   const indexSource = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
   const clientSource = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8');
-  assert.match(indexSource, /'\/api\/explain-assistant\/mark-read', \['POST'\]/, '必须在 entries 注册 mark-read（键带 /api 前缀）');
   assert.match(indexSource, /markRead: async \(id: string\)[^\n]*isForgotten/, '宿主 markRead 必须用 isForgotten 把关（防重建已删文件）');
   assert.match(clientSource, /api\.markRead\(sessionId\)/, '客户端 open() 必须真的调用 markRead');
   // 顺序：先 markRead，再 refreshState

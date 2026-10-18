@@ -289,7 +289,9 @@ check 本次没有点选具体步骤 "$LIB/host/prompts.js"
 # 用户拖好位置、关掉再打开又回默认位置。
 check saveGeometry "$LIB/index.js"
 check saveGeometry "$LIB/client.js"
-check "/explain-assistant/geometry" "$LIB/index.js"
+# A5 去重后，路由路径清单只由 host/routes.ts 的 Map 键派生，index.js 里不再有该字面量，
+# 所以这条针指向字面量现在真正所在的产物（改回 $LIB/index.js 会让部署假失败）。
+check "/explain-assistant/geometry" "$LIB/host/routes.js"
 # 拖动提交时真的调用它（否则「加了接口但没人调」也会假绿）
 check "plugin.saveGeometry?.(current.state.sessionId" "$LIB/client.js"
 # **只写不读 = 位置照样丢**：宿主存了那份位置，刷新时必须读回来。

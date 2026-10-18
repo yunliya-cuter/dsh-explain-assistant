@@ -18,6 +18,35 @@ import { moduleFromSource } from './fixtures/runtime.mjs';
 
 const watch = await moduleFromSource('src/client/archive-watch.ts');
 
+/**
+ * 真的把插件 apply 起来，收集 connection.fetch.register 收到的注册项。
+ *
+ * 为什么要有它：验证「某条路由被注册了」这件事，读源码文本是假绿 ——
+ * 源码里写着 '/api/explain-assistant/forget' 不代表运行时真的注册了它
+ * （路径可能拼错、方法可能写错、注册循环可能根本没跑到）。
+ * 只有捕获 register 的实参才验的是行为。
+ */
+async function registeredRoutes() {
+  const home = mkdtempSync(join(tmpdir(), 'ea-regroutes-'));
+  const previous = process.env.DSH_HOME;
+  process.env.DSH_HOME = home;
+  const entries = [];
+  try {
+    const index = await moduleFromSource('src/index.ts');
+    index.apply({
+      llm: { listProviders: async () => ['p'], listModels: async () => [{ id: 'm', provider: 'p' }],
+             stream: async () => {}, resolveModelInfo: async () => ({ context: { contextWindow: 128000 } }) },
+      sessionQuery: {},
+      connection: { fetch: { register: entry => { entries.push(entry); } } },
+      effect: () => {}, get: () => undefined,
+    });
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+  return entries;
+}
+
 /** 可控的假 workspaces 服务：能改快照、能手动触发订阅者。 */
 function fakeSource(initial, options = {}) {
   // 默认 phase='ready'；但**允许显式传 phase:'pending'** 来复现「就绪前」的真实时序。
@@ -336,10 +365,17 @@ test('宿主 forget 路由 反例: 会话不被允许时仍然拒绝（跳过 is
 });
 
 test('宿主 forget 路由: 已在 entries 里注册（键带 /api 前缀）', async () => {
-  const { readFileSync } = await import('node:fs');
-  const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
-  assert.match(source, /'\/api\/explain-assistant\/forget', \['POST'\]/, '必须在 entries 注册 forget 路由');
+  // 行为级断言：**真的把插件 apply 起来**，看 connection.fetch.register 收到了什么。
+  // 改这条的原因：旧写法读 src/index.ts 的源码文本匹配字面量，只要字面量还在就绿 ——
+  // 即使实际注册的路径被拼错、方法写错、或根本没有注册，它都发现不了。
+  const registrations = await registeredRoutes();
+  const forget = registrations.find(entry => entry.path === '/api/explain-assistant/forget');
+  assert.ok(forget, '必须在 entries 注册 /api/explain-assistant/forget（实际注册了：'
+    + registrations.map(entry => entry.path).join(', ') + '）');
+  assert.deepEqual(forget.methods, ['POST'], 'forget 必须以 POST 注册（键带 /api 前缀）');
+  assert.equal(typeof forget.fetch, 'function', '注册项必须带可调用的 fetch');
   // 客户端入口必须注入 workspaces 服务，否则订阅拿不到
+  const { readFileSync } = await import('node:fs');
   const entry = readFileSync(new URL('../src/client/entry.ts', import.meta.url), 'utf8');
   assert.match(entry, /export const inject = \['slots', 'workspaces'\]/, '必须注入 workspaces 服务');
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
