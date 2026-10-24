@@ -33,7 +33,7 @@ const overlay = await moduleFromSource('src/client/overlay.tsx');
  *   这类空态文案都在折叠体里 —— 不展开就断言不到，会得到「文本不存在」的**假失败**
  *   （我第一版就是这么写的，4 条里红了 3 条，全是测试自己的问题）。
  */
-function render(state, expandModels = false) {
+function render(state, expandModels = false, act) {
   const dom = fakeDom();
   dom.document.createElementNS = (_ns, tag) => new FakeElement(tag);
   const live = {
@@ -43,11 +43,24 @@ function render(state, expandModels = false) {
   try {
     const root = overlay.renderOverlay(state, live);
     if (expandModels) {
-      // 走真实用户路径：找到那个「选择模型 / 换一个模型」的开关并点它。
-      const toggle = root.querySelectorAll('button').find(b => /点这里选择模型|换一个模型|收起模型列表/.test(b.textContent || ''));
-      if (toggle) toggle.click();
+      // 走真实用户路径：点标题栏的模型按钮，打开**独立的模型选择页**。
+      // 新版入口是 .ea-model-trigger（旧版是正文里那张「模型」卡片上的折叠开关），
+      // 模型名与空态文案现在都在选择页里 —— 不开页就断言不到，会得到假失败。
+      const trigger = root.querySelectorAll('.ea-model-trigger')[0];
+      if (trigger) trigger.click();
     }
-    return { root, gate: root.getAttribute('data-surface'), text: root.textContent || '' };
+    const snapshot = () => ({
+      root,
+      gate: root.getAttribute('data-surface'),
+      text: root.textContent || '',
+      view: root.getAttribute('data-view'),
+      count: (root.querySelectorAll('.ea-model-panel-count')[0] || {}).textContent ?? '',
+    });
+    // act：给需要在**假 DOM 还活着**时做交互的用例用（例如点提示条里的「查看」）。
+    // 不能在 render() 返回之后再点 —— 那时 dom.restore() 已经把 document 拆掉，
+    // 任何按需创建的节点都会 ReferenceError: document is not defined。
+    if (act) act(snapshot());
+    return snapshot();
   } finally {
     dom.restore();
   }
@@ -223,22 +236,46 @@ test('F2 客户端: 已有正确旧内容 + 目录读取失败 → 档位仍 rea
  * ================================================================== */
 
 test('F2 回归: 目录真的返回且非空 → 模型列表照常渲染', () => {
-  const { text } = render(baseState({
+  const { root, text, view } = render(baseState({
     groups: [{ provider: 'workbuddy', models: [{ provider: 'workbuddy', id: 'cn:deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash (WorkBuddy)' }] }],
     failures: [],
   }, { model: { provider: 'workbuddy', model: 'cn:deepseek-v4.1-flash', source: 'explicit' } }), true);
+  // 打开的是**独立的模型选择页**（旧版是正文里的折叠卡片）：先确认真的切过去了，
+  // 否则下面几条文本断言可能只是在读「还留在 chat 页」的旧内容，得到的绿没有意义。
+  assert.equal(view, 'model', '点标题栏模型按钮后必须切到选择页（data-view=model）');
   assert.match(text, /DeepSeek V4.1 Flash \(WorkBuddy\)/, '正常目录必须照常渲染模型');
   assert.match(text, /本对话已选/, '已选模型仍要显示');
   assert.ok(!text.includes('没有读到模型目录'), '正常目录下不得出现「没读到」的说明');
+  // 加强：不止「名字出现过」，还要**真的按提供方分组、真的建出可点选项**。
+  assert.equal(root.querySelectorAll('.ea-model-group').length, 1, '一个提供方应渲染出一个分组');
+  const options = root.querySelectorAll('.ea-model-option');
+  assert.equal(options.length, 1, '一个模型应渲染出一个可点选项');
+  assert.equal(options[0].getAttribute('aria-pressed'), 'true', '已选中的模型选项必须 aria-pressed=true');
+  assert.equal((root.querySelectorAll('.ea-model-panel-count')[0] || {}).textContent, '共 1 个', '计数必须如实报出 1 个');
 });
 
 test('F2 回归: 目录真的返回且确实为空 → 仍走原来的「暂时没有可用的模型」空态', () => {
   // 关键字面是 failures: [] —— 与「读取失败」的区别只在这里，必须守住。
-  // 注意关键字面是 failures: [] —— 与「读取失败」的区别只在这里，必须守住。
-  const { text } = render(baseState({ groups: [], failures: [] }), true);
+  const { root, text, view, count } = render(baseState({ groups: [], failures: [] }), true);
+  assert.equal(view, 'model', '必须真的打开选择页（空态文案现在在选择页里）');
   assert.ok(text.includes('暂时没有可用的模型'),
     '真的空目录是**真实结论**，必须继续显示原来的空态，实际=' + JSON.stringify(text.slice(0, 200)));
   assert.ok(!text.includes('没有读到模型目录'), '真的空目录不得被说成「没读到」');
+  // ── 计数强度说明（与任务书字面有出入，已如实上报）────────────────────────
+  // 任务书写「断言计数不是「共 0 个」」，但**契约与实现都不支持那句话**：
+  //   契约 §2：计数三种文本 ——「共 N 个」/「筛选出 M / N 个」/「没读到 → 没有读到模型目录（不报数）」。
+  //   「真的读到了、确实为空」属于**第一种**，N=0 → 就是「共 0 个」。
+  //   实测（renderOverlay 后点开 trigger）count.textContent === '共 0 个'。
+  // 所以照字面断言「不是共 0 个」既与契约冲突、也与 src 冲突；而任务又要求「661 全绿、不改 src」，
+  // 三者不可能同时成立。这里取**唯一自洽且不削弱**的写法：
+  //   · 空目录必须**如实**报 0（钉成精确值，比「不检查」更强）；
+  //   · 且**不得**是旧版那个把「没读到」与「真的空」混为一谈的「共 0 个可选」（含「可选」即为旧格式）；
+  //   · 且**不得**是「没读到」的文案（下面已单独钉住）。
+  assert.equal(count, '共 0 个', '真的读到了、确实为空 → 计数必须如实为「共 0 个」，实际=' + JSON.stringify(count));
+  assert.ok(!count.includes('可选'), '不得退回旧版的「共 N 个可选」格式（那正是 F2 把没读到说成没模型的地方）');
+  assert.ok(!count.includes('没有读到'), '真的空目录不得把计数说成「没读到」');
+  // 空态「说是空的」与计数「报 0」必须同时成立 —— 只满足一个都可能是错的分支。
+  assert.equal(root.querySelectorAll('.ea-model-option').length, 0, '空目录下不得渲染任何模型选项');
 });
 
 test('F2 回归/假绿陷阱: MODEL_CATALOG_PARTIAL 是真实失败信息，必须继续显示', () => {
@@ -246,8 +283,34 @@ test('F2 回归/假绿陷阱: MODEL_CATALOG_PARTIAL 是真实失败信息，必�
     groups: [{ provider: 'workbuddy', models: [{ provider: 'workbuddy', id: 'cn:deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash (WorkBuddy)' }] }],
     failures: [{ code: 'MODEL_CATALOG_PARTIAL', message: '模型提供方「deepseek-account」暂时没有可用模型。' }],
   };
-  const { text } = render(baseState(partial, { model: { provider: 'workbuddy', model: 'cn:deepseek-v4.1-flash', source: 'explicit' } }), true);
-  assert.ok(text.includes('模型提供方「deepseek-account」暂时没有可用模型。'),
-    'MODEL_CATALOG_PARTIAL 是宿主下发的真实信息，不得被当错值清掉');
-  assert.ok(text.includes('DeepSeek V4.1 Flash (WorkBuddy)'), '有真实模型的 provider 照常列出来');
+  const state = baseState(partial, { model: { provider: 'workbuddy', model: 'cn:deepseek-v4.1-flash', source: 'explicit' } });
+
+  // ① **不开面板**也必须看得见：宿主说的失败原文现在是正文里的 .ea-catalog-note。
+  //    这条比旧版更严 —— 旧版它混在折叠卡片里，不开就看不到；现在「收起来也看得见」是硬要求。
+  const closed = render(state, false);
+  const note = closed.root.querySelectorAll('.ea-catalog-note')[0];
+  assert.ok(note, 'PARTIAL 失败必须有正文提示条 .ea-catalog-note（不开面板也要可见）');
+  assert.ok(note.textContent.includes('模型提供方「deepseek-account」暂时没有可用模型。'),
+    'MODEL_CATALOG_PARTIAL 是宿主下发的真实信息，不得被当错值清掉；提示条实际=' + JSON.stringify(note.textContent));
+  assert.equal(note.getAttribute('role'), 'status', '提示条必须以 role=status 播报给读屏');
+  const openBtn = note.querySelectorAll('.ea-catalog-note-open')[0];
+  assert.ok(openBtn, '提示条必须带「查看」按钮 .ea-catalog-note-open');
+  assert.equal(openBtn.textContent, '查看', '「查看」按钮文案必须可读');
+  // 失败原文必须真的挂在 .ea-model-failure 里（逐条一条一个），不是拼成一大段。
+  assert.equal(note.querySelectorAll('.ea-model-failure').length, 1, '每条失败一个 .ea-model-failure');
+  // 面板**关着**时不得残留选择页内容（否则就是「藏起来」而不是「摘掉」）。
+  assert.equal(closed.root.querySelectorAll('.ea-model-option').length, 0, '面板关着时不得有模型选项');
+
+  // ② 点「查看」应真的打开选择页，且真实模型的 provider 照常列出来。
+  //    这一步必须在假 DOM 还活着时做（见 render 的 act 说明）。
+  render(state, false, ({ root }) => {
+    const btn = root.querySelectorAll('.ea-catalog-note-open')[0];
+    assert.ok(btn, '提示条必须带「查看」按钮');
+    btn.click();
+    assert.equal(root.getAttribute('data-view'), 'model', '点「查看」必须切到选择页');
+    const text = root.textContent || '';
+    assert.ok(text.includes('DeepSeek V4.1 Flash (WorkBuddy)'), '有真实模型的 provider 照常列出来');
+    assert.equal(root.querySelectorAll('.ea-model-option').length, 1, '面板里应有一个可点选项');
+    assert.equal((root.querySelectorAll('.ea-model-panel-count')[0] || {}).textContent, '共 1 个', '计数如实报 1 个');
+  });
 });

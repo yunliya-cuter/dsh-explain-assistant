@@ -13,7 +13,7 @@
  * ================================================================== */
 
 /* ---------- 外壳 ---------- */
-.dsh-explain-assistant-overlay{
+.dsh-explain-assistant-overlay{container-type:inline-size;
   position:fixed;z-index:30;
   display:flex;flex-direction:column;box-sizing:border-box;
   min-width:360px;min-height:420px;
@@ -36,9 +36,13 @@
   border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1));
   background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06));
 }
-.dsh-explain-assistant-titlebar .ea-title{flex:0 0 auto;font-size:14px;font-weight:600;letter-spacing:.02em}
+.dsh-explain-assistant-titlebar .ea-title{flex:0 0 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:600;letter-spacing:.02em}
 .dsh-explain-assistant-status{flex:1 1 auto;min-width:0;font-size:12px;color:var(--dsw-alias-label-tertiary,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ea-header-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.ea-header-actions{display:flex;align-items:center;gap:6px;flex:0 1 auto;min-width:0}
+/* 按钮组里只有「模型」按钮参与收缩（它最能缩）。其余按钮 flex:0 0 auto，
+   否则窗口一窄，「选择主对话内容」会先被压扁、先被挤出可视区。 */
+.ea-header-actions > .ea-btn:not(.ea-model-trigger),
+.ea-header-actions > .dsh-explain-assistant-close{flex:0 0 auto}
 .dsh-explain-assistant-close{
   font-size:20px;line-height:1;background:none;border:0;padding:4px 8px;cursor:pointer;
   border-radius:8px;color:var(--dsw-alias-label-secondary,#444);
@@ -265,46 +269,162 @@
 }
 .ea-chip:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.16))}
 
-/* ---------- 模型选择 ---------- */
-.ea-model-current{font-size:12px;color:var(--dsw-alias-label-secondary,#555);word-break:break-all;line-height:1.5}
-.ea-model-summary{
-  cursor:pointer;font-size:12px;padding:5px 0;text-align:left;
-  color:var(--dsw-alias-label-tertiary,#666);
-  background:transparent;border-color:transparent;
+/* ---------- 模型：标题栏按钮 ---------- */
+/* 模型选择不再是正文里的一张卡片，而是标题栏里的一个按钮：恒显示「现在用哪个模型」。 */
+.ea-model-trigger{
+  display:inline-flex;align-items:center;gap:6px;
+  /* min-width 是「地板」：窗口缩到最小宽度 360px 时，它至少还剩下
+     「模型」两个字 + 下拉箭头（约 52px），而不是被压成一条 18px 的空白条。
+     再窄的部分由 .ea-title 让位（它可以省略成「解释小助…」）。 */
+  flex:0 1 auto;min-width:52px;max-width:56%;
+  padding:5px 8px;font-size:12px;overflow:hidden;
 }
-.ea-model-details[data-open=true] .ea-model-summary{margin-bottom:6px}
-/* 未选模型时把摘要行做成醒目的行动点：用户必须能一眼看到「这里要先点一下」。 */
-.ea-model-details[data-unselected=true] .ea-model-summary{
-  display:inline-block;padding:7px 14px;border-radius:8px;
-  font-weight:600;font-size:12.5px;
-  color:var(--dsw-alias-label-primary-inverted,#fff);
+/* 未就绪/没读到时不出现（见 overlay.tsx 的三档界面）。作者样式会盖掉 UA 的 [hidden] */
+.ea-model-trigger[hidden]{display:none}
+.ea-model-trigger-prefix{flex:0 0 auto;font-size:11px;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-model-trigger-prefix[hidden]{display:none}
+.ea-model-trigger-label{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ea-model-trigger-caret{flex:0 0 auto;font-size:9px;line-height:1;opacity:.65;transition:transform .18s cubic-bezier(.2,.8,.2,1)}
+.ea-model-trigger[aria-expanded=true] .ea-model-trigger-caret{transform:rotate(180deg)}
+.ea-model-trigger-warn{flex:0 0 auto;font-size:11px;color:var(--dsw-alias-state-warn-primary,#b45309)}
+.ea-model-trigger-warn[hidden]{display:none}
+/* 未选模型：这不是「设置入口」，而是一件必须先做的事 —— 做成实心主色，一眼能看到。 */
+.ea-model-trigger[data-unselected=true]{
   background:var(--dsw-alias-button-primary-fill,#2f6bff);
-  border-color:transparent;
+  border-color:transparent;font-weight:600;
+  color:var(--dsw-alias-label-primary-inverted,#fff);
+  max-width:100%;
 }
-.ea-model-details[data-unselected=true] .ea-model-summary:hover{background:var(--dsw-alias-button-primary-hover,#245bdd)}
-.ea-model-list{
-  display:flex;flex-direction:column;gap:10px;
-  max-height:280px;overflow-y:auto;
-  padding:8px;border-radius:9px;
+.ea-model-trigger[data-unselected=true]:hover{background:var(--dsw-alias-button-primary-hover,#245bdd)}
+/* 有提供方读取失败：不打开选择页也要看得出「这里有东西没读到」。 */
+.ea-model-trigger[data-warn=true]{border-color:var(--dsw-alias-state-warn-primary,#b45309)}
+/* 选择页开着时按钮是「还按着」的状态（写在最后一条，靠后者生效）。 */
+.ea-model-trigger[aria-expanded=true]{background:var(--dsw-alias-bg-layer-3,rgba(127,127,127,.16))}
+
+/*
+ * 窄宽度（浮窗被拖到 420px 甚至最小 360px）时的标题栏。
+ *
+ * 用**容器查询**而不是媒体查询：看的是**浮窗自己的宽度**，不是浏览器窗口 ——
+ * 浮窗可以被拖到任意大小，媒体查询在这种场景下完全答非所问。
+ * 这里做的事：去掉「模型」二字（按钮里还有模型名，语义仍清楚）、收紧间距，
+ * 把省下来的宽度还给「解释小助手」标题与模型名（它们被截断才是真的难看）。
+ */
+@container (max-width: 470px){
+  .dsh-explain-assistant-titlebar{gap:7px;padding:0 8px 0 10px}
+  .ea-header-actions{gap:4px}
+  .ea-model-trigger-prefix{display:none}
+  .ea-model-trigger{max-width:62%;padding:5px 7px}
+}
+
+/* ---------- 目录提示条（有提供方读失败时才有） ---------- */
+/* 这几句是宿主明确告诉我们的事实，必须**不开选择页**也看得见（见 catalogNoticeNodes）。 */
+.ea-catalog-note{
+  display:flex;align-items:flex-start;gap:8px;
+  padding:8px 10px;border-radius:9px;
+  border:1px solid var(--dsw-alias-state-warn-primary,rgba(180,83,9,.35));
+  background:rgba(180,83,9,.07);
+}
+.ea-catalog-note-icon{flex:0 0 auto;font-size:12px;line-height:1.5;color:var(--dsw-alias-state-warn-primary,#b45309)}
+.ea-catalog-note-text{display:flex;flex:1 1 auto;flex-direction:column;gap:2px;min-width:0}
+.ea-catalog-note-open{flex:0 0 auto;align-self:flex-start}
+.ea-catalog-note-slot:empty{display:none}
+
+/* ---------- 模型：选择页 ---------- */
+/*
+ * 为什么是「覆盖正文区的整页」而不是「锚定在按钮下方的小弹层」：
+ * 浮窗可以被拖到屏幕任意位置，高度还可能只剩 420px；锚定弹层一旦比剩余空间高，
+ * 就要么被裁掉、要么自己再滚一层，而它还要跟标题栏拖动、八向拖边热区抢指针事件。
+ * 整页没有这些约束：一页只做一件事，关掉就回到对话。
+ */
+.ea-model-panel-slot{display:none}
+.ea-overlay[data-view=model] .ea-body{padding:0;gap:0;overflow:hidden}
+.ea-overlay[data-view=model] .ea-body > .ea-slot:not(.ea-model-panel-slot),
+.ea-overlay[data-view=model] .ea-body > article,
+.ea-overlay[data-view=model] .ea-body > .dsh-explain-assistant-selection-status{display:none}
+.ea-overlay[data-view=model] .ea-composer{display:none}
+.ea-overlay[data-view=model] .ea-model-panel-slot{display:flex;flex:1 1 auto;min-height:0}
+.ea-model-panel{display:flex;flex:1 1 auto;flex-direction:column;min-height:0;height:100%}
+
+/*
+ * 两页切换的过渡。
+ *
+ * 为什么是「进来的那一页做动画」而不是「让旧页面滑走」：旧页面在切换那一刻就被
+ * display:none 了（见上面 [data-view=model] 的规则），display 不可过渡；要让旧页面
+ * 滑走就得把整页留在 DOM 里再等动画结束才摘 —— 那会引出「动画期间还能点到上一页的按钮」
+ * 和「动画没播完就切回来」的一堆竞态。只给新页面一段 180ms 的淡入+轻抬，
+ * 观感是连续的，代价接近零，也不存在中间态。
+ *
+ * 尊重系统的「减少动态效果」：开了该选项就完全不动画。
+ */
+@media (prefers-reduced-motion: no-preference){
+  .ea-model-panel{animation:ea-view-in .18s cubic-bezier(.2,.8,.2,1) both}
+  .ea-overlay[data-view=chat] .ea-body{animation:ea-chat-in .14s ease-out both}
+}
+@keyframes ea-view-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes ea-chat-in{from{opacity:0}to{opacity:1}}
+.ea-model-panel-head{
+  display:flex;align-items:center;gap:8px;flex:0 0 auto;
+  padding:8px 10px;
+  border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1));
   background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.05));
-  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));
 }
-.ea-model-group{display:flex;flex-direction:column;gap:6px}
+.ea-model-panel-back{flex:0 0 auto}
+.ea-model-panel-title{margin:0;font-size:13px;font-weight:600;flex:0 0 auto}
+.ea-model-panel-count{margin-left:auto;flex:0 0 auto}
+.ea-model-panel-refresh{flex:0 0 auto}
+.ea-model-panel-current{
+  margin:0;padding:9px 12px 0;flex:0 0 auto;
+  font-size:12px;line-height:1.6;word-break:break-all;
+  color:var(--dsw-alias-label-secondary,#555);
+}
+/* 未选模型：这句话是**结论性提示**，不能只是灰字。 */
+.ea-model-panel-current[data-unselected=true]{color:var(--dsw-alias-state-warn-primary,#b45309);font-weight:600}
+.ea-model-panel-filter{padding:9px 12px;flex:0 0 auto}
+.ea-model-search{
+  width:100%;box-sizing:border-box;font:inherit;font-size:12.5px;padding:7px 10px;border-radius:8px;
+  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.16));
+  background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#111);
+}
+.ea-model-list{
+  display:flex;flex:1 1 auto;flex-direction:column;gap:12px;
+  min-height:0;overflow-y:auto;padding:0 12px 12px;
+  scrollbar-width:thin;
+}
+.ea-model-group{display:flex;flex-direction:column;gap:4px}
 .ea-model-group-name{
   display:flex;align-items:center;gap:7px;
+  position:sticky;top:0;padding:6px 2px;
   font-size:11.5px;font-weight:600;letter-spacing:.02em;
   color:var(--dsw-alias-label-tertiary,#666);
-  position:sticky;top:-8px;padding:4px 0;
-  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.05));
+  background:var(--dsw-alias-bg-base,#fff);
 }
-.ea-model-options{display:flex;flex-wrap:wrap;gap:6px}
-.ea-model-option{border-radius:7px;padding:5px 10px;font-size:12px;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.ea-model-options{display:flex;flex-direction:column;gap:2px}
+/* 一行一个模型：名字 + 模型 id（等宽小字，用来核对「到底是哪一个」）+ 选中勾。 */
+.ea-model-option{
+  display:flex;align-items:baseline;gap:8px;width:100%;box-sizing:border-box;
+  text-align:left;padding:7px 9px;border-radius:8px;font-size:12.5px;
+  background:transparent;border-color:transparent;
+}
+.ea-model-option:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12))}
+.ea-model-option-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ea-model-option-id{
+  flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:11px;color:var(--dsw-alias-label-tertiary,#777);
+}
+.ea-model-option-check{flex:0 0 auto;width:1em;font-size:12px;color:transparent}
 .ea-model-option[aria-pressed=true]{
-  border-color:var(--dsw-alias-button-primary-fill,#2f6bff);
-  color:var(--dsw-alias-button-primary-fill,#2f6bff);
   background:var(--dsw-alias-bg-layer-2,rgba(47,107,255,.1));
-  font-weight:600;
+  border-color:transparent;font-weight:600;
+  color:var(--dsw-alias-button-primary-fill,#2f6bff);
 }
+.ea-model-option[aria-pressed=true] .ea-model-option-check{color:var(--dsw-alias-button-primary-fill,#2f6bff)}
+.ea-model-option[aria-pressed=true] .ea-model-option-id{color:inherit;opacity:.8}
+.ea-model-panel-failures{
+  display:flex;flex:0 0 auto;flex-direction:column;gap:3px;
+  padding:8px 12px 12px;
+  border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1));
+}
+.ea-model-panel-failures[hidden]{display:none}
 .ea-model-failure{display:block;font-size:11.5px;color:var(--dsw-alias-state-warn-primary,#a15c00);line-height:1.5}
 
 /* ---------- 依据 ---------- */
@@ -527,6 +647,6 @@
 /* ---------- §6.3 依据分级徽标 ---------- */
 .ea-evidence-tier{font-size:11px;line-height:1.5;padding:1px 6px;border-radius:999px;white-space:nowrap;border:1px solid transparent}
 .ea-tier-observed{color:var(--dsw-alias-state-success-primary,#15803d);background:rgba(21,128,61,.1);border-color:rgba(21,128,61,.3)}
-.ea-tier-reported{color:var(--dsw-alias-state-warning-primary,#b45309);background:rgba(180,83,9,.1);border-color:rgba(180,83,9,.3)}
+.ea-tier-reported{color:var(--dsw-alias-state-warn-primary,#b45309);background:rgba(180,83,9,.1);border-color:rgba(180,83,9,.3)}
 .ea-tier-unavailable,.ea-tier-unknown{color:var(--dsw-alias-label-tertiary,#666);background:rgba(127,127,127,.1);border-color:rgba(127,127,127,.3)}
 .ea-evidence-tier-hint{display:block;margin-top:3px;font-size:11px;line-height:1.55;color:var(--dsw-alias-label-tertiary,#777)}

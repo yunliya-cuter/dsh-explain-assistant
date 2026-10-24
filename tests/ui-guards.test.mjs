@@ -160,9 +160,18 @@ test('首个打开渲染快捷问题按钮；标记已点过后不再渲染', as
 test('空模型目录时给出中文提示，而不是空白', async () => {
   const { node, dom } = await render(baseState({ catalog: { groups: [], failures: [] } }));
   try {
-    // 空目录时列表没有内容，展开后必须给出中文提示而不是空白。
-    node.querySelectorAll('button').find(b => /点这里选择模型|换一个模型/.test(b.textContent || ''))?.click();
-    const text = textOf(node.querySelectorAll('.dsh-explain-assistant-model')[0]);
+    // 空态文案现在在**独立的模型选择页**里（旧版在正文那张折叠卡片里），
+    // 所以要先走真实用户路径：点标题栏模型按钮打开选择页。
+    const trigger = node.querySelectorAll('.ea-model-trigger')[0];
+    assert.ok(trigger, '必须有模型入口');
+    trigger.click();
+    assert.equal(node.getAttribute('data-view'), 'model', '点入口必须打开选择页');
+    const panel = node.querySelectorAll('.ea-model-panel')[0];
+    assert.ok(panel, '必须真的建出选择页 .ea-model-panel');
+    const text = textOf(panel);
     assert.ok(text.includes('暂时没有可用的模型'), '空目录必须有中文提示');
+    // 加强：不能只有一句话，必须建出 .ea-model-empty 空态节点，且真的一个选项都没有。
+    assert.equal(panel.querySelectorAll('.ea-model-empty').length, 1, '空态必须是一个明确的 .ea-model-empty 节点');
+    assert.equal(panel.querySelectorAll('.ea-model-option').length, 0, '空目录下不得渲染任何模型选项');
   } finally { dom.restore(); }
 });

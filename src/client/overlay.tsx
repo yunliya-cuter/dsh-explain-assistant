@@ -385,107 +385,374 @@ function heroNodes(state: AssistantClientState): Child[] {
 }
 
 /**
- * §7 / §11.8 模型选择。
+ * §7 / §11.8 模型选择：标题栏里的一个按钮 + 点开后的选择页。
  *
- * 33 个模型平铺会把整个浮窗吃掉，所以按 provider 分组并默认折叠：
- * 未选模型时展开（必须让用户先选），已选之后折叠成一行摘要，需要换再展开。
+ * ── 这一版为什么搬家 ────────────────────────────────────────────────
+ * 旧版把「模型」做成正文里的一张卡片：标题 + 「刷新模型」+ 一行「本对话已选 · provider / model」
+ * + 一个折叠按钮 + 展开后的一大片模型按钮。模型是一年改不了几次的**设置**，
+ * 却长期占着正文最显眼的位置：每次打开浮窗，第一眼看到的是「共 8 个可选」，
+ * 真正要看的小助手回答被挤到下面去了。
+ * 现在标题栏里只留一个按钮，**始终显示现在用的是哪个模型**，点开才进入模型选择页。
+ *
+ * ── 一条不能破的规矩：三档界面（判据见 surfaceGate）──────────────────
+ *   loading（/state 还没回来）→ 标题栏按钮**不出现**，选择页也进不去；
+ *   failed（没读到且没有旧内容）→ 同样不出现。
+ * 于是「共 0 个可选」「暂时没有可用的模型」「还没有选择模型」这些**结论**
+ * 没有机会出现在错值窗口里 —— 这是已经修过的缺陷，不能因为一次改版退回去。
+ * 目录整份没读到、但页面还能用（有旧内容）时：按钮说「模型目录未读到」，
+ * 选择页**不报数**（见 catalogUnavailable）。
  */
-function modelNodes(state: AssistantClientState, plugin: PluginLike, open: boolean, onToggle?: (open: boolean) => void): Child[] {
-  const groups = state.catalog?.groups || []
-  const failures = state.catalog?.failures || []
-  let total = 0
-  groups.forEach(group => { total += (group.models || []).length })
 
-  /*
-   * 目录**整份没读到**时，这一块不能再说「共 0 个可选」。
-   *
-   * 「共 0 个」是从目录里数出来的**结论**；目录根本没读到的时候，这个数是编的
-   * （用户会读成「你没有模型」）。t6 评审的 F2 正是这一类：宿主把读取失败吞成空目录。
-   * 宿主已改成如实填 failures，这里据此把「没读到」与「真的是空的」分开呈现。
-   *
-   * 注意**不是**把空态也一起改掉：目录真的返回且确实为空（failures 为空、groups 为空）时，
-   * 下面的「暂时没有可用的模型」仍照旧 —— 那是真实结论，不是错值。
-   */
-  const catalogFailure = (state.catalog?.groups?.length ?? 0) === 0
-    ? (state.catalog?.failures || []).find(item => item?.code === CATALOG_UNAVAILABLE_CODE && item.message)
-    : undefined
+/** 目录整份没读到时的失败条目。判据与 readFailure 一致：只要有组就算读到了。 */
+function catalogUnavailable(state: AssistantClientState): { code?: string; message?: string } | undefined {
+  if ((state.catalog?.groups?.length ?? 0) > 0) return undefined
+  return (state.catalog?.failures || []).find(item => item?.code === CATALOG_UNAVAILABLE_CODE && item?.message)
+}
 
-  // §7/§11.8：未选模型时必须明确提示去选，不能让用户以为已经在用某个模型。
-  const current = el('span', { class: 'dsh-explain-assistant-model-current ea-model-current' })
-  current.textContent = state.model ? '本对话已选 · ' + state.model.provider + ' / ' + state.model.model : '还没有选择模型：请先选一个，小助手不会自动替你挑'
+/** 一个可选模型。provider 与 id 缺一个就没法选中，直接不算一条。 */
+type CatalogEntry = { provider: string; id: string; name: string; group: string }
 
-  const list = el('div', { class: 'dsh-explain-assistant-model-list ea-model-list', role: 'group', 'aria-label': '可选模型列表' })
-  let rendered = 0
-  groups.forEach(group => {
-    const options: Child[] = []
-    ;(group.models || []).forEach(entry => {
+function catalogEntries(state: AssistantClientState): CatalogEntry[] {
+  const entries: CatalogEntry[] = []
+  for (const group of state.catalog?.groups || []) {
+    for (const entry of group.models || []) {
       const provider = String(entry.provider || group.provider || '')
-      const model = String(entry.id || '')
-      if (!provider || !model) return
-      rendered++
-      const selected = Boolean(state.model && state.model.provider === provider && state.model.model === model)
-      options.push(button((selected ? '✓ ' : '') + (entry.name || model), '选择模型 ' + provider + '/' + model, () => {
-        if (!plugin.api?.selectModel) return
-        // 先乐观更新界面（按钮看起来立刻有反应），但失败必须**回滚**：
-        // 曾经只回写 error、不回滚 model，于是选择其实被宿主拒绝了，界面却一直显示「本对话已选」。
-        const previous = plugin.registry.get(state.sessionId)?.model
-        plugin.registry.update(state.sessionId, { model: { provider, model, source: 'explicit' }, error: undefined })
-        void plugin.api.selectModel(state.sessionId, { provider, model }).catch(error => plugin.registry.update(state.sessionId, {
-          model: previous,
-          error: '选择模型失败：' + (error instanceof Error ? error.message : String(error)),
-        }))
-      }, { class: 'dsh-explain-assistant-model-option ea-btn ea-model-option', pressed: selected }))
-    })
-    if (!options.length) return
-    list.appendChild(el('div', { class: 'ea-model-group' },
-      el('div', { class: 'ea-model-group-name' },
-        el('span', { text: String(group.displayName || group.provider || '未命名提供方') }),
-        el('span', { class: 'ea-count', text: String(options.length) }),
-      ),
-      el('div', { class: 'ea-model-options' }, ...options),
-    ))
-  })
-  // 空态只在「目录确实读到了、确实是空的」时才出现。读失败时不画它 ——
-  // 那句「暂时没有可用的模型」会被读成结论，而真实情况是「没读到」。
-  if (!rendered && !catalogFailure) list.appendChild(el('p', { class: 'dsh-explain-assistant-empty ea-empty', text: '暂时没有可用的模型，请先检查模型配置' }))
+      const id = String(entry.id || '')
+      if (!provider || !id) continue
+      entries.push({ provider, id, name: String(entry.name || id), group: String(group.displayName || group.provider || '未命名提供方') })
+    }
+  }
+  return entries
+}
 
-  const refresh = button('刷新模型', '刷新可用模型', (event) => {
-    if (!plugin.api?.models) return
-    const target = event.currentTarget as HTMLButtonElement
-    target.disabled = true
-    void plugin.api.models().then(result => {
+function isSelectedModel(state: AssistantClientState, entry: { provider: string; id: string }): boolean {
+  return Boolean(state.model && state.model.provider === entry.provider && state.model.model === entry.id)
+}
+
+/**
+ * 标题栏按钮上显示什么。
+ * 不做手工截断（截断交给 CSS，见 .ea-model-trigger-label）：手工截断会把模型名截成
+ * 「deepseek-v4.1-…」这种既不能读也不能搜的半截字，而 CSS 的省略号至少看起来是「被截断」。
+ */
+function modelTriggerLabel(state: AssistantClientState): string {
+  if (catalogUnavailable(state)) return '模型目录未读到'
+  if (!state.model) return '选择模型'
+  // 优先显示目录里的**显示名**（「DeepSeek V4.1 Flash」），拿不到才退回 id
+  //（「cn:deepseek-v4.1-flash」）：标题栏这一格只有 2~3 个字的地方，
+  // 显示名更容易被认出来，id 仍完整留在 aria-label 与选择页里。
+  const entry = catalogEntries(state).find(item => isSelectedModel(state, item))
+  return entry?.name || state.model.model
+}
+
+const MODEL_PANEL_ID = 'ea-model-panel'
+
+type ModelTrigger = { root: HTMLButtonElement; prefix: HTMLElement; label: HTMLElement; warn: HTMLElement; caret: HTMLElement }
+type ModelPanel = {
+  root: HTMLElement
+  count: HTMLElement
+  current: HTMLElement
+  search: HTMLInputElement
+  list: HTMLElement
+  failures: HTMLElement
+  refresh: HTMLButtonElement
+}
+
+/**
+ * 标题栏按钮。**只建一次**：它挂在标题栏里，重建会打断拖动与焦点。
+ * 每次状态变化只改它的标签与 aria（见 syncModelTrigger）。
+ */
+function buildModelTrigger(getCtx: () => OverlayContext | undefined): ModelTrigger {
+  const prefix = el('span', { class: 'ea-model-trigger-prefix', 'aria-hidden': 'true', text: '模型' })
+  const label = el('span', { class: 'ea-model-trigger-label' })
+  const warn = el('span', { class: 'ea-model-trigger-warn', 'aria-hidden': 'true', text: '⚠' })
+  const caret = el('span', { class: 'ea-model-trigger-caret', 'aria-hidden': 'true', text: '▾' })
+  const root = el('button', {
+    type: 'button',
+    class: 'ea-btn ea-btn-soft ea-model-trigger',
+    'aria-haspopup': 'dialog',
+    'aria-expanded': 'false',
+    'aria-controls': MODEL_PANEL_ID,
+    // 未就绪/没读到之前不出现：见文件里「三档界面」的说明。
+    hidden: true,
+    onClick: () => {
+      const ctx = getCtx()
+      if (!ctx) return
+      if (ctx.modelOpen) closeModelPanel(ctx)
+      else openModelPanel(ctx)
+    },
+  }, prefix, label, warn, caret) as HTMLButtonElement
+  return { root, prefix, label, warn, caret }
+}
+
+/**
+ * 未就绪/没读到：按钮整个退成空壳。
+ *
+ * 不只是隐藏 —— 连标签文本一起清掉。hidden 只作用于**显示**，文本仍留在 DOM 里，
+ * 于是一张「B 会话还没读到状态」的加载页上会冒出一个「模型」二字（那是 A 会话的内容），
+ * 读屏的「读整页」与基于 DOM 文本的界面断言都会读到它。
+ */
+function resetModelTrigger(ctx: OverlayContext): void {
+  const trigger = ctx.modelTrigger
+  trigger.root.hidden = true
+  trigger.label.textContent = ''
+  trigger.warn.textContent = ''
+  trigger.prefix.textContent = ''
+  trigger.caret.textContent = ''
+  trigger.prefix.hidden = true
+  trigger.root.removeAttribute('data-unselected')
+  trigger.root.removeAttribute('data-warn')
+  trigger.root.setAttribute('aria-expanded', 'false')
+  trigger.root.setAttribute('aria-label', '模型选择（数据读取中不可用）')
+  trigger.root.setAttribute('title', '模型选择（数据读取中不可用）')
+}
+
+/** 把标题栏按钮同步成当前状态。三种形态：已选 / 还没选 / 目录没读到。 */
+function syncModelTrigger(ctx: OverlayContext): void {
+  const state = ctx.state
+  const trigger = ctx.modelTrigger
+  const unavailable = catalogUnavailable(state)
+  const failures = (state.catalog?.failures || []).filter(failure => failure?.message)
+  const warn = Boolean(failures.length) || Boolean(unavailable)
+
+  trigger.label.textContent = modelTriggerLabel(state)
+  // 「模型」二字只在**已经选了模型**时出现：没选的时候按钮本身就是一句行动号召
+  //（「选择模型」），再挂一个前缀会读成「模型 选择模型」。
+  trigger.prefix.hidden = !state.model || Boolean(unavailable)
+  trigger.prefix.textContent = '模型'
+  trigger.caret.textContent = '▾'
+  trigger.warn.hidden = !warn
+  trigger.warn.textContent = warn ? '⚠' : ''
+  trigger.root.setAttribute('data-unselected', state.model ? 'false' : 'true')
+  trigger.root.setAttribute('data-warn', warn ? 'true' : 'false')
+  trigger.root.setAttribute('aria-expanded', ctx.modelOpen ? 'true' : 'false')
+
+  // 面板没打开时，失败信息也得**看得见**：靠这个 ⚠ 与 aria-label/title。
+  const detail = unavailable
+    ? '没有读到模型目录，点开查看'
+    : (state.model ? '已选 ' + state.model.provider + ' / ' + state.model.model + '，点开换一个' : '还没有选择模型，点这里选一个')
+  const others = unavailable ? failures.length - 1 : failures.length
+  const extra = others > 0 ? '；另有 ' + others + ' 条提供方读取失败' : ''
+  trigger.root.setAttribute('aria-label', '模型：' + detail + extra)
+  trigger.root.setAttribute('title', '模型：' + detail + extra)
+}
+
+/**
+ * 模型选择页。同样**只建一次**：里面的筛选框是有状态的（用户可能正打着字），
+ * 而流式回答期间 updateOverlay 一次回答要跑几十上百次 —— 每次都重建筛选框，
+ * 用户打的字和光标就会被打断。
+ */
+function buildModelPanel(getCtx: () => OverlayContext | undefined): ModelPanel {
+  const count = el('span', { class: 'ea-count ea-model-panel-count' })
+  const current = el('p', { class: 'ea-model-panel-current' })
+  const search = el('input', {
+    type: 'search',
+    class: 'ea-model-search',
+    placeholder: '按名称筛选，例如 flash',
+    'aria-label': '按名称筛选模型',
+    autocomplete: 'off',
+  }) as HTMLInputElement
+  const list = el('div', { class: 'ea-model-list ea-model-panel-list', role: 'group', 'aria-label': '可选模型列表' })
+  const failures = el('div', { class: 'ea-model-panel-failures' })
+  const refresh = button('刷新', '重新读取可用模型列表（绕开缓存）', () => {
+    const ctx = getCtx()
+    if (!ctx || !ctx.plugin.api?.models) return
+    refresh.disabled = true
+    void ctx.plugin.api.models().then(result => {
       const payload = (result.payload || {}) as Record<string, unknown>
-      plugin.registry.update(state.sessionId, { catalog: payload as never })
-    }).catch(error => plugin.registry.update(state.sessionId, { error: error instanceof Error ? error.message : String(error) })).finally(() => { target.disabled = false })
-  }, { class: 'ea-btn ea-btn-quiet' })
-
-  // 不用原生 <details>/<summary>：真实浏览器里 UIA 把它暴露成 expand 动作，合成点击点不开
-  // （3082 实测连点三次都停在折叠态，用户也就永远看不到模型列表）。
-  // 这里改成自己控制的按钮 + 展开状态：点得动，也能被测试断言。
-  // 没读到目录时**不报数**：把自己数出来的 0 当「共 0 个可选」显示，就是拿没读到的数据当结论。
-  const toggleLabel = catalogFailure
-    ? '没有读到模型目录'
-    : (open ? '收起模型列表' : (state.model ? '换一个模型（共 ' + total + ' 个）' : '点这里选择模型（共 ' + total + ' 个可选）'))
-  const toggle = button(
-    toggleLabel,
-    open ? '收起模型列表' : '展开可选模型列表',
-    () => onToggle?.(!open),
-    { class: 'ea-model-summary', pressed: open },
-  )
-  const details = el('div', { class: 'ea-model-details', 'data-unselected': state.model ? undefined : 'true', 'data-open': open ? 'true' : undefined },
-    toggle,
-    open ? list : null,
-  )
-  const failureNodes = failures.filter(failure => failure?.message).map(failure => el('small', { class: 'dsh-explain-assistant-model-failure ea-model-failure', text: failure.message }))
-  return [el('section', { class: 'dsh-explain-assistant-model ea-card', 'aria-labelledby': 'dsh-explain-assistant-model-title' },
-    el('div', { class: 'ea-card-head' },
-      el('h3', { class: 'ea-card-title', id: 'dsh-explain-assistant-model-title', text: '模型' }),
+      ctx.plugin.registry.update(ctx.state.sessionId, { catalog: payload as never })
+    }).catch(error => ctx.plugin.registry.update(ctx.state.sessionId, {
+      error: error instanceof Error ? error.message : String(error),
+    })).finally(() => { refresh.disabled = false })
+  }, { class: 'ea-btn ea-btn-soft ea-model-panel-refresh' })
+  const back = button('← 返回', '关闭模型选择，回到对话', () => {
+    const ctx = getCtx()
+    if (ctx) closeModelPanel(ctx)
+  }, { class: 'ea-btn ea-btn-quiet ea-model-panel-back' })
+  const root = el('section', {
+    class: 'ea-model-panel',
+    id: MODEL_PANEL_ID,
+    role: 'dialog',
+    'aria-modal': 'false',
+    'aria-labelledby': 'ea-model-panel-title',
+  },
+    el('div', { class: 'ea-model-panel-head' },
+      back,
+      el('h3', { class: 'ea-model-panel-title', id: 'ea-model-panel-title', text: '选择模型' }),
+      count,
       refresh,
     ),
     current,
-    details,
-    ...failureNodes,
+    el('div', { class: 'ea-model-panel-filter' }, search),
+    list,
+    failures,
+  )
+  search.addEventListener('input', () => {
+    const ctx = getCtx()
+    if (!ctx) return
+    ctx.modelQuery = search.value
+    renderModelList(ctx)
+  })
+  return { root, count, current, search, list, failures, refresh }
+}
+
+/**
+ * 选择页按需创建。
+ *
+ * 为什么不是「随浮窗一起建、用 CSS 藏起来」：藏起来只是**显示**层面，它里面的标题
+ *（「选择模型」）、按钮文字仍在 DOM 里，于是「未就绪的加载页」或「别的会话」上
+ * 会读到一份不属于当前页面的模型文案。关掉就摘掉，DOM 里就没有它。
+ */
+function ensureModelPanel(ctx: OverlayContext): ModelPanel {
+  if (!ctx.modelPanel) {
+    ctx.modelPanel = buildModelPanel(() => ctx)
+    ctx.modelPanelSlot.appendChild(ctx.modelPanel.root)
+  }
+  return ctx.modelPanel
+}
+
+function openModelPanel(ctx: OverlayContext): void {
+  const panel = ensureModelPanel(ctx)
+  ctx.modelQuery = ''
+  if (panel.search.value) panel.search.value = ''
+  ctx.modelOpen = true
+  ctx.root.setAttribute('data-view', 'model')
+  ctx.modelTrigger.root.setAttribute('aria-expanded', 'true')
+  renderModelPanel(ctx)
+  // 打开就把焦点放到筛选框：键盘用户不必再 Tab 一圈才到得了列表。
+  queueMicrotask(() => { try { panel.search.focus({ preventScroll: true }) } catch { /* 老浏览器没有参数 */ } })
+}
+
+/**
+ * 关掉选择页回到对话。
+ *
+ * @param options.focus 是否把焦点还给标题栏按钮。宿主把界面切到加载/失败档时用 false ——
+ *   那一刻按钮本身是隐藏的，把焦点塞进一个看不见的按钮只会让键盘用户丢失位置。
+ */
+function closeModelPanel(ctx: OverlayContext, options: { focus?: boolean } = {}): void {
+  const wasOpen = ctx.modelOpen
+  ctx.modelOpen = false
+  ctx.root.setAttribute('data-view', 'chat')
+  ctx.modelTrigger.root.setAttribute('aria-expanded', 'false')
+  // 整个选择页摘掉（见 ensureModelPanel 的说明：关着的页面不该在 DOM 里留下文案与按钮）。
+  fill(ctx.modelPanelSlot, [])
+  ctx.modelPanel = undefined
+  if (wasOpen && options.focus !== false) ctx.modelTrigger.root.focus?.({ preventScroll: true })
+}
+
+/**
+ * 选中一个模型。
+ *
+ * 先乐观更新界面（按钮看起来立刻有反应），失败必须**回滚**：
+ * 曾经只回写 error、不回滚 model，于是选择其实被宿主拒绝了，界面却一直显示「已选」。
+ * 选完直接回到对话 —— 用户点模型是为了继续问问题，不是为了继续看模型列表。
+ */
+function selectModelFromPanel(ctx: OverlayContext, provider: string, id: string): void {
+  if (!ctx.plugin.api?.selectModel) return
+  const previous = ctx.plugin.registry.get(ctx.state.sessionId)?.model
+  ctx.plugin.registry.update(ctx.state.sessionId, { model: { provider, model: id, source: 'explicit' }, error: undefined })
+  closeModelPanel(ctx)
+  void ctx.plugin.api.selectModel(ctx.state.sessionId, { provider, model: id }).catch(error => ctx.plugin.registry.update(ctx.state.sessionId, {
+    model: previous,
+    error: '选择模型失败：' + (error instanceof Error ? error.message : String(error)),
+  }))
+}
+
+/**
+ * 目录里有提供方读失败时的提示条。
+ *
+ * 为什么这条必须留在正文、不能只放进选择页：那几句是**宿主明确告诉我们**的事实
+ * （「模型提供方「x」暂时没有可用模型」）。只放进一个要用户主动点开才看得见的页面，
+ * 等于把「宿主说的」降级成「藏起来的」——用户会以为模型列表是空的、或自己选错了。
+ * 它只在真的有失败时出现，不占常驻位置。
+ */
+function catalogNoticeNodes(ctx: OverlayContext): Child[] {
+  const failures = (ctx.state.catalog?.failures || []).filter(failure => failure?.message)
+  if (!failures.length) return []
+  return [el('div', { class: 'ea-catalog-note', role: 'status' },
+    el('span', { class: 'ea-catalog-note-icon', 'aria-hidden': 'true', text: '⚠' }),
+    el('div', { class: 'ea-catalog-note-text' },
+      ...failures.map(failure => el('small', { class: 'ea-model-failure', text: String(failure.message) })),
+    ),
+    button('查看', '打开模型选择页，查看各提供方的状态', () => openModelPanel(ctx), { class: 'ea-btn ea-btn-quiet ea-catalog-note-open' }),
   )]
+}
+
+function renderModelPanel(ctx: OverlayContext): void {
+  const state = ctx.state
+  const panel = ensureModelPanel(ctx)
+  const failures = (state.catalog?.failures || []).filter(failure => failure?.message)
+  panel.current.textContent = state.model
+    ? '本对话已选 · ' + state.model.provider + ' / ' + state.model.model
+    : '还没有选择模型：请先选一个，小助手不会自动替你挑'
+  panel.current.setAttribute('data-unselected', state.model ? 'false' : 'true')
+  fill(panel.failures, failures.map(failure => el('small', { class: 'ea-model-failure', text: String(failure.message) })))
+  panel.failures.hidden = failures.length === 0
+  renderModelList(ctx)
+}
+
+/** 重画模型列表（按 provider 分组 + 按筛选词过滤）。只动列表，不动筛选框。 */
+function renderModelList(ctx: OverlayContext): void {
+  const state = ctx.state
+  const panel = ensureModelPanel(ctx)
+  const entries = catalogEntries(state)
+  const keyword = ctx.modelQuery.trim().toLowerCase()
+  const matched = keyword
+    ? entries.filter(entry => entry.name.toLowerCase().includes(keyword)
+      || entry.id.toLowerCase().includes(keyword)
+      || entry.provider.toLowerCase().includes(keyword))
+    : entries
+
+  const groups = new Map<string, CatalogEntry[]>()
+  for (const entry of matched) {
+    const bucket = groups.get(entry.group)
+    if (bucket) bucket.push(entry)
+    else groups.set(entry.group, [entry])
+  }
+
+  const nodes: Child[] = []
+  for (const [name, bucket] of groups) {
+    nodes.push(el('div', { class: 'ea-model-group' },
+      el('div', { class: 'ea-model-group-name' },
+        el('span', { text: name }),
+        el('span', { class: 'ea-count', text: String(bucket.length) }),
+      ),
+      el('div', { class: 'ea-model-options' }, ...bucket.map(entry => {
+        const selected = isSelectedModel(state, entry)
+        return el('button', {
+          type: 'button',
+          class: 'ea-btn ea-model-option',
+          'aria-pressed': String(selected),
+          'aria-label': (selected ? '当前已选：' : '选择模型 ') + entry.provider + '/' + entry.id,
+          title: entry.provider + ' / ' + entry.id,
+          onClick: () => selectModelFromPanel(ctx, entry.provider, entry.id),
+        },
+          el('span', { class: 'ea-model-option-name', text: entry.name }),
+          el('span', { class: 'ea-model-option-id', text: entry.id }),
+          el('span', { class: 'ea-model-option-check', 'aria-hidden': 'true', text: selected ? '✓' : '' }),
+        )
+      })),
+    ))
+  }
+
+  // 空态只在「目录确实读到了、确实是空的」时才出现。目录整份没读到时不画它 ——
+  // 那句「暂时没有可用的模型」会被读成结论，而真实情况是「没读到」。
+  if (!entries.length && !catalogUnavailable(state)) {
+    nodes.push(el('p', { class: 'ea-empty ea-model-empty', text: '暂时没有可用的模型，请先检查模型配置' }))
+  } else if (!matched.length) {
+    nodes.push(el('p', { class: 'ea-empty ea-model-empty', text: '没有匹配「' + ctx.modelQuery.trim() + '」的模型。换个关键词，或清空筛选框。' }))
+  }
+  fill(panel.list, nodes)
+
+  const unavailable = catalogUnavailable(state)
+  const total = entries.length
+  if (unavailable) {
+    // 不自报数量：把自己数出来的 0 说成「共 0 个可选」，就是拿没读到的数据当结论。
+    panel.count.textContent = '没有读到模型目录'
+  } else if (keyword) {
+    panel.count.textContent = '筛选出 ' + matched.length + ' / ' + total + ' 个'
+  } else {
+    panel.count.textContent = '共 ' + total + ' 个'
+  }
 }
 
 /**
@@ -855,7 +1122,15 @@ type OverlayContext = {
   answerView: MarkdownView
   heroSlot: HTMLElement
   quickSlot: HTMLElement
-  modelSlot: HTMLElement
+  /** 目录里有提供方读失败时的提示条（宿主下发的事实，不打开选择页也要看得见）。 */
+  catalogNoteSlot: HTMLElement
+  /** 模型选择页的槽位：它是「另一页」，所以与正文各区块互斥显示（见 data-view）。 */
+  modelPanelSlot: HTMLElement
+  /** 选择页按需创建（打开才建、关掉就摘掉）：关着的时候 DOM 里不该有它的任何文本。 */
+  modelPanel?: ModelPanel
+  modelTrigger: ModelTrigger
+  /** 选择页里的筛选词。关掉选择页时清空，重开不带上次的筛选。 */
+  modelQuery: string
   evidenceSlot: HTMLElement
   compactSlot: HTMLElement
   historySlot: HTMLElement
@@ -952,10 +1227,13 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     const current = contexts.get(root)
     if (current && !isBusy(current.state)) void current.plugin.submit('/compact')
   }, { class: 'ea-btn ea-btn-soft', title: '整理小助手自己的上下文；不影响主对话' })
+  // 模型按钮放在标题栏按钮组的**最前面**（紧挨着「选择主对话内容」）：
+  // 它原来占着正文最显眼的位置，现在只是这一行里的一个按钮，点开才进入选择页。
+  const modelTrigger = buildModelTrigger(() => contexts.get(root))
   titlebar.append(
     el('strong', { id: 'dsh-explain-assistant-title', class: 'ea-title', text: '解释小助手' }),
     phase,
-    el('div', { class: 'ea-header-actions' }, select, compact, close),
+    el('div', { class: 'ea-header-actions' }, modelTrigger.root, select, compact, close),
   )
 
   const selectionStatus = el('span', { class: 'dsh-explain-assistant-selection-status ea-selection-status', role: 'status' })
@@ -968,7 +1246,10 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   const answerView = mountMarkdown(answerSlot)
   const heroSlot = el('div', { class: 'ea-slot' })
   const quickSlot = el('div', { class: 'ea-slot' })
-  const modelSlot = el('div', { class: 'ea-slot' })
+  // 模型选择页：正文以外的「另一页」。它有一个常驻骨架（筛选框是有状态的），
+  // 只在这里建一次，之后按需填列表（见 renderModelPanel）。
+  const catalogNoteSlot = el('div', { class: 'ea-slot ea-catalog-note-slot' })
+  const modelPanelSlot = el('div', { class: 'ea-slot ea-model-panel-slot' })
   const evidenceSlot = el('div', { class: 'ea-slot' })
   const compactSlot = el('div', { class: 'ea-slot' })
   const historySlot = el('div', { class: 'ea-slot' })
@@ -979,7 +1260,7 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   // 未就绪/失败时它们是唯一有内容的东西，用户第一眼看到的就是它（不是空态列表）。
   const loadingSlot = el('div', { class: 'ea-slot ea-loading-slot' })
   const stateErrorSlot = el('div', { class: 'ea-slot ea-state-error-slot' })
-  body.append(stateErrorSlot, loadingSlot, detailSlot, errorSlot, currentSlot, answerSlot, heroSlot, quickSlot, modelSlot, evidenceSlot, compactSlot, historySlot, selectionStatus)
+  body.append(stateErrorSlot, loadingSlot, catalogNoteSlot, detailSlot, errorSlot, currentSlot, answerSlot, heroSlot, quickSlot, evidenceSlot, compactSlot, historySlot, modelPanelSlot, selectionStatus)
 
   const input = el('textarea', { class: 'ea-input', placeholder: '问小助手主 agent 正在做什么…', 'aria-label': '向解释小助手提问', rows: '2' }) as HTMLTextAreaElement
   const send = button(isBusy(state) ? '处理中' : '发送', '发送问题', () => { form.requestSubmit() }, { class: 'ea-btn ea-btn-primary ea-send' })
@@ -1027,14 +1308,16 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     state, plugin: like, body, phase, selectionStatus, controller: undefined as unknown as WindowController, appliedGeometry: undefined,
     // 见 updateOverlay：用来判断「后面来的几何值是不是新值」。
     // 不这样做的话，每次重画都会把用户刚拖好的位置按旧值拽回去。
-    errorSlot, currentSlot, answerSlot, answerView, heroSlot, quickSlot, modelSlot, evidenceSlot, compactSlot, historySlot, detailSlot, ringSlot, targetBar,
+    errorSlot, currentSlot, answerSlot, answerView, heroSlot, quickSlot, evidenceSlot, compactSlot, historySlot, detailSlot, ringSlot, targetBar, catalogNoteSlot, modelPanelSlot, modelTrigger,
     loadingSlot, stateErrorSlot, root,
     // 默认折叠模型列表：一开就摊开 33 个模型会把「使用说明 + 快捷问题」顶出可视区。
     // 未选模型时由摘要行 + 醒目的提示承担「先选一个」的引导（§7/§11.8）。
-    form, input, send, modelOpen: false,
+    form, input, send, modelOpen: false, modelQuery: '',
     rerender: () => updateOverlay(root, ctx.state, ctx.plugin),
   }
   contexts.set(root, ctx)
+  // 默认是对话页；选择页由 openModelPanel 切过去（见 data-view 的样式）。
+  root.setAttribute('data-view', 'chat')
 
   input.value = state.draft
   input.addEventListener('input', () => { const current = contexts.get(root); if (current) current.plugin.registry.update(current.state.sessionId, { draft: input.value }) })
@@ -1056,9 +1339,24 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
 
   updateOverlay(root, state, like)
 
-  const focusable = () => Array.from(root.querySelectorAll<HTMLElement>('button, textarea, input, select, summary, [tabindex]:not([tabindex="-1"])')).filter(element => !element.hasAttribute('disabled') && element.tabIndex >= 0)
+  const focusable = () => {
+    const inPanel = (element: HTMLElement) => Boolean(element.closest('.ea-model-panel-slot'))
+    const panelOpen = Boolean(contexts.get(root)?.modelOpen)
+    return Array.from(root.querySelectorAll<HTMLElement>('button, textarea, input, select, summary, [tabindex]:not([tabindex="-1"])'))
+      .filter(element => !element.hasAttribute('disabled') && element.tabIndex >= 0 && !element.hidden)
+      // 选择页与对话页互斥显示，但 querySelectorAll 仍然取得到被 CSS 藏起来的那一半。
+      // 不按当前页过滤，Tab 就会跳到看不见的按钮上。
+      .filter(element => panelOpen ? inPanel(element) : !inPanel(element))
+  }
   const keydown = (event: KeyboardEvent) => {
-    if (event.key === 'Escape') { event.preventDefault(); close.click(); return }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      // 选择页开着时 Esc 先关选择页（用户想退出的是这一页），再按一次才关窗。
+      const current = contexts.get(root)
+      if (current?.modelOpen) { closeModelPanel(current); return }
+      close.click()
+      return
+    }
     if (event.key !== 'Tab') return
     const items = focusable()
     if (!items.length) { event.preventDefault(); root.focus(); return }
@@ -1136,7 +1434,9 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     ctx.currentSlot.replaceChildren()
     ctx.answerSlot.hidden = true
     ctx.answerView.update('', false)
-    fill(ctx.modelSlot, [])
+    resetModelTrigger(ctx)
+    closeModelPanel(ctx, { focus: false })
+    fill(ctx.catalogNoteSlot, [])
     fill(ctx.evidenceSlot, [])
     fill(ctx.compactSlot, [])
     fill(ctx.historySlot, [])
@@ -1170,7 +1470,9 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     ctx.currentSlot.replaceChildren()
     ctx.answerSlot.hidden = true
     ctx.answerView.update('', false)
-    fill(ctx.modelSlot, [])
+    resetModelTrigger(ctx)
+    closeModelPanel(ctx, { focus: false })
+    fill(ctx.catalogNoteSlot, [])
     fill(ctx.evidenceSlot, [])
     fill(ctx.compactSlot, [])
     fill(ctx.historySlot, [])
@@ -1200,7 +1502,11 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   fill(ctx.heroSlot, heroNodes(state))
   fill(ctx.quickSlot, quickNodes(state, ctx.plugin))
 
-  fill(ctx.modelSlot, modelNodes(state, ctx.plugin, ctx.modelOpen, next => { ctx.modelOpen = next; ctx.rerender() }))
+  // 模型：标题栏按钮恒显示「现在用哪个」，选择页开着就跟着刷新（目录可能刚被「刷新」换掉）。
+  ctx.modelTrigger.root.hidden = false
+  syncModelTrigger(ctx)
+  fill(ctx.catalogNoteSlot, catalogNoticeNodes(ctx))
+  if (ctx.modelOpen) renderModelPanel(ctx)
 
   fill(ctx.evidenceSlot, evidenceNodes(state, ctx.plugin))
   fill(ctx.compactSlot, compactNodes(state))

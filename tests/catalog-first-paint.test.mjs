@@ -70,14 +70,28 @@ test('overlay: populated catalog renders selectable model buttons, not the empty
   const plugin = { registry: { update() {}, close() {} }, submit: async () => {}, loadEarlier: async () => {} };
   try {
     const root = overlay.renderOverlay(state, plugin);
-    // 模型列表默认折叠：先点开，走一遍真实用户路径。
-    const toggle = root.querySelectorAll('button').find(b => /点这里选择模型|换一个模型/.test(b.textContent || ''));
-    assert.ok(toggle, '未选模型时必须有一个可见的「选择模型」入口');
-    toggle.click();
+    // 入口现在是**标题栏**上的模型按钮（旧版是正文里那张可折叠的「模型」卡片）。
+    const trigger = root.querySelectorAll('.ea-model-trigger')[0];
+    assert.ok(trigger, '标题栏必须有一个模型按钮 .ea-model-trigger');
+    // 「可见」的判据：ready 档下**没有 hidden 属性**（契约 §1）。
+    // 这里必须查**内容属性**而不是读 JS 属性 —— 两者在真 DOM 里反射，夹具也已按真 DOM 补齐。
+    assert.equal(trigger.hasAttribute('hidden'), false, '就绪档下模型按钮必须可见（不得带 hidden 属性）');
+    assert.ok((trigger.textContent || '').includes('选择模型'),
+      '未选模型时按钮可见文案必须是「选择模型」，实际=' + JSON.stringify(trigger.textContent));
+    assert.equal(trigger.getAttribute('data-unselected'), 'true', '未选模型时必须是「未选」外观（data-unselected=true）');
+    // 未打开时选择页不该在 DOM 里（关着就整棵摘掉，不是用 CSS 藏）。
+    assert.equal(root.querySelectorAll('.ea-model-option').length, 0, '未打开时不得有模型选项');
+    assert.equal(root.getAttribute('data-view'), 'chat', '默认是对话页');
+
+    trigger.click();
+    assert.equal(root.getAttribute('data-view'), 'model', '点模型按钮必须打开模型选择页');
     const text = collectText(root);
     assert.ok(text.includes('Kimi K3'), 'model option must be rendered');
     assert.ok(text.includes('DeepSeek V4.1 Flash (WorkBuddy)'), 'workbuddy option must be rendered');
     assert.ok(!text.includes('暂时没有可用的模型'), 'empty-state text must not appear when catalog has groups');
+    // 加强：不是「文本里出现过」就算，两个 provider 必须各自成组、各自建出可点选项。
+    assert.equal(root.querySelectorAll('.ea-model-group').length, 2, '两个提供方应渲染出两个分组');
+    assert.equal(root.querySelectorAll('.ea-model-option').length, 2, '两个模型应渲染出两个可点选项');
   } finally {
     // renderOverlay 内部有一次异步聚焦，等它落地再拆掉假 DOM，否则会在测试结束后触发。
     await new Promise(resolve => setTimeout(resolve, 20));

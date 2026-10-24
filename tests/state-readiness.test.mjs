@@ -58,7 +58,7 @@ const healthyApi = (payload = {}) => failingApi({
 const apiWith = (state) => failingApi({ state });
 
 /** 渲染真实 registry 里的那个状态，返回浮窗的可见文本。 */
-async function renderLive(plugin, sessionId) {
+async function renderLive(plugin, sessionId, act) {
   const overlay = await moduleFromSource('src/client/overlay.tsx');
   const dom = fakeDom();
   dom.document.createElementNS = (_ns, tag) => new FakeElement(tag);
@@ -66,6 +66,10 @@ async function renderLive(plugin, sessionId) {
   const live = { registry: plugin.registry, api: plugin.api, cancel: () => {}, submit: async () => {}, loadEarlier: async () => {}, retryState: (id) => plugin.retryState(id) };
   try {
     const root = overlay.renderOverlay(state, live);
+    // act：需要在**假 DOM 还活着**时做交互的用例用（例如点开模型选择页）。
+    // renderLive 一返回就 dom.restore()，之后任何按需创建的节点都会
+    // ReferenceError: document is not defined。
+    if (act) act(root);
     return { text: root.textContent || '', root };
   } finally {
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -138,10 +142,24 @@ test('/state 成功: 状态到位后就绪，且加载页随之消失、真实�
 
     const after = await renderLive(plugin, 'ok-1');
     assert.equal(/正在读取小助手的当前状态/.test(after.text), false, '就绪之后不得再显示加载页');
-    // 真实内容到位：目录里有 1 个模型（模型列表默认折叠，所以断言的是折叠摘要里的真实计数，
-    // 它直接来自 catalog —— 证明展示的是宿主下发的数据，而不是初始空态）。
-    assert.match(after.text, /共 1 个可选/, '就绪之后必须显示真实内容（来自宿主的模型目录）');
     assert.equal(after.root.getAttribute('data-surface'), 'ready', '就绪后档位标记必须切到 ready');
+    // 就绪后模型入口**必须可见**：判据是它没有 hidden 属性（契约 §1）。
+    // 这条比旧版更严 —— 旧版只看「摘要行里有个数字」，新版还钉住「入口真的露出来了」。
+    const trigger = after.root.querySelectorAll('.ea-model-trigger')[0];
+    assert.ok(trigger, '就绪后必须有模型入口 .ea-model-trigger');
+    assert.equal(trigger.hasAttribute('hidden'), false, '就绪后模型入口必须可见（不得带 hidden 属性）');
+    // 真实内容到位：目录里有 1 个模型。打开选择页后断言**计数**与**真实选项**：
+    // 计数直接来自 catalog（证明展示的是宿主下发的数据，不是初始空态）；
+    // 选项数证明它不是只把数字写对、列表却空着。
+    await renderLive(plugin, 'ok-1', root => {
+      assert.equal(root.getAttribute('data-view'), 'chat', '默认在对话页（模型列表不常驻正文）');
+      root.querySelectorAll('.ea-model-trigger')[0].click();
+      assert.equal(root.getAttribute('data-view'), 'model', '点入口必须打开选择页');
+      const panelText = root.textContent || '';
+      assert.match(panelText, /共 1 个/, '就绪之后计数必须报出宿主的真实目录（共 1 个），实际=' + JSON.stringify(panelText.slice(0, 200)));
+      assert.equal(root.querySelectorAll('.ea-model-option').length, 1, '目录里那 1 个模型必须真的渲染成 1 个可点选项');
+      assert.ok(!panelText.includes('暂时没有可用的模型'), '非空目录下不得出现空态文案');
+    });
   } finally { plugin.dispose(); plugin.registry.remove('ok-1'); }
 });
 

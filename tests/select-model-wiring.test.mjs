@@ -85,12 +85,21 @@ test('overlay: 选模型失败时回滚已选状态并给出中文错误', async
   };
   try {
     const root = overlay.renderOverlay(state, plugin);
-    // 模型列表默认折叠，先点开。
-    root.querySelectorAll('button').find(b => /点这里选择模型|换一个模型/.test(b.textContent || ''))?.click();
+    // 走真实用户路径：点标题栏模型按钮 → 打开独立选择页 → 再点选项。
+    // （旧版是先点正文里那张卡片的折叠开关；入口变了，路径没变。）
+    const trigger = root.querySelectorAll('.ea-model-trigger')[0];
+    assert.ok(trigger, '标题栏必须有模型按钮');
+    assert.equal(root.getAttribute('data-view'), 'chat', '默认在对话页');
+    trigger.click();
+    assert.equal(root.getAttribute('data-view'), 'model', '点模型按钮必须打开选择页');
     const option = root.querySelectorAll('.ea-model-option')[0];
     assert.ok(option, '必须有可选模型按钮');
     option.click();
     await new Promise(resolve => setTimeout(resolve, 10));
+    // 选完必须立刻回到对话页（点模型是为了继续问，不是继续看列表）。
+    // 这条是新增的：旧版没有「选择页」这个概念，也就没有「选完要关掉」这回事。
+    assert.equal(root.getAttribute('data-view'), 'chat', '选完模型后必须回到对话页');
+    assert.equal(root.querySelectorAll('.ea-model-option').length, 0, '选完后选择页必须整棵从 DOM 摘掉');
     const rollback = updates.find(u => u.model && u.model.provider === 'old');
     assert.ok(rollback, '失败后必须把 model 回滚到选择前的值');
     const errorPatch = updates.find(u => typeof u.error === 'string');

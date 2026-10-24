@@ -171,6 +171,13 @@ export class FakeElement {
   // 补它是补一个真实且 src 真的用到的浏览器行为，不是为过测而编的规则。
   get disabled() { return this.attributes.has('disabled'); }
   set disabled(value) { if (value) this.attributes.set('disabled', ''); else this.attributes.delete('disabled'); }
+  // 真 DOM 里 hidden 是**反射属性**：element.hidden = false 会**移除** hidden 内容属性。
+  // 夹具原来没有它，于是 overlay 里 `trigger.root.hidden = false`（ready 档）只写了一个
+  // 普通 JS 属性，元素上构造时写下的 hidden="" 内容属性**永远留着** ——
+  // 结果 hasAttribute('hidden') 恒为 true，「按钮在就绪档可见」这条真实行为在夹具里没生效。
+  // 这与 disabled 那条是同一类缺口（真浏览器行为 + src 真在用），补齐它，不是为过测而编规则。
+  get hidden() { return this.attributes.has('hidden'); }
+  set hidden(value) { if (value) this.attributes.set('hidden', ''); else this.attributes.delete('hidden'); }
   // 真 DOM 的**元素**也有 dispatchEvent（不只是 document）。
   // entry.ts 释放浮窗时会 element.dispatchEvent(new Event('dsh-explain-assistant:dispose'))
   // 来通知各监听者（overlay 的 keydown / controller / markdown 增量器都挂在它上面）。

@@ -115,7 +115,7 @@
 | 8 | **只解释，绝不动手** | 工具白名单只有 7 个**只读**工具；没有执行命令、写文件、联网、操作端口的工具 | `src/host/tools.ts` `TOOL_NAMES` |
 | 9 | **不打扰主 agent** | 不写主对话、不把小助手问答注入主 agent 上下文、不取消主任务、不覆盖输入框草稿 | `docs/business-logic.md` §2；宿主侧无任何主对话写入路径 |
 | 10 | **可核查的追问** | 追问会带上本会话既往问答，所以「那它为什么要这么做」能接上上一轮 | `src/host/prompts.ts` `buildMessages`（由 `src/index.ts` 注入） |
-| 11 | **模型单独选，不跟随主 agent** | 从 DSH 已配置模型里自己挑；**没选就不发请求**，绝不偷偷用默认模型 | `src/index.ts` `resolveModel` |
+| 11 | **模型单独选，不跟随主 agent** | 从 DSH 已配置模型里自己挑；**没选就不发请求**，绝不偷偷用默认模型。选择入口在标题栏（显示当前模型名），点开是一整页：按提供方分组、可搜关键词、失败原因写在页内 | `src/index.ts` `resolveModel`；界面 `src/client/overlay.tsx` `buildModelPanel` |
 | 12 | **失败、超时都给中文提示** | 不静默失败；默认总超时 300 秒 / 空闲 120 秒，可用环境变量收紧（非法值自动回退默认，不会变成 0 或永久等待） | 默认值 `src/host/llm.ts` `DEFAULTS`；中文事件 `src/host/routes.ts`；覆盖 `src/host/timeout-config.ts` |
 | 13 | **只读工作区，越界直接拒绝** | 路径逃逸（绝对路径、`..`、符号链接出界）一律拒绝并给中文原因 | `src/host/evidence.ts` `resolveWorkspacePath` |
 
@@ -145,7 +145,7 @@
 
 | 项 | 要求 |
 | --- | --- |
-| DSH | `0.1.7-rc.2`（**实测环境**；本插件依赖 DSH 的 `connection` / `sessionQuery` / `fs` / `attachments` / `llm` / `tokenMeter` 六个服务与两个客户端插槽） |
+| DSH | `>=0.1.7-rc.2 <0.3.0`（实测于 `0.1.7-rc.2` 与 `0.2.1-rc.3`；本插件依赖 DSH 的 `connection` / `sessionQuery` / `fs` / `attachments` / `llm` / `tokenMeter` 六个服务与两个客户端插槽） |
 | profile | `web`（本插件只在 DSH Web GUI 里有意义） |
 | 运行时 | **不需要构建**：`lib/` 已随仓库提供，clone / 装完即可用 |
 | Node | 实测 v24（仅开发时需要：`typescript` + `esbuild` 是 devDependencies） |
@@ -173,7 +173,7 @@ dsh plugin add --profile web 'git+https://github.com/yunliya-cuter/dsh-explain-a
 
 1. 打开任意一个主对话，右上角工具行里应出现一颗 **「?」**。
 2. 点它，浮窗出现，标题是「解释小助手」。
-3. 先点「模型」选一个模型（**不选就不发请求**），然后点一个快捷问题。
+3. 点标题栏里的**模型按钮**（写着当前模型名，没选过则写着「选择模型」）选一个（**不选就不发请求**），然后点一个快捷问题。
 4. 几秒内应看到白话中文回答；右下角圆环显示占用百分比或「占用未知」。
 
 ### 从本地工作区开发（改代码即时生效）
