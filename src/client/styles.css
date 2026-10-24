@@ -13,18 +13,75 @@
  * ================================================================== */
 
 /* ---------- 外壳 ---------- */
+/* 液态玻璃外壳。配方起于 setup 的安装向导面板（半透明底 + 背景模糊 + 内侧高光 + 大投影），
+   再按 DSH 的深色环境改了几处 —— 照抄浅色那套在深色页面上会「灰得发脏」，原因见下面深色覆盖。
+
+   玻璃的观感由三件事构成，缺一件就会退化成「一块半透明塑料」：
+     1) 透过去的背景是**糊的**（backdrop-filter），不是清楚的；
+     2) 边缘有一圈**反光**：顶边最亮、侧边次之、底边压暗，像玻璃的厚度在吃光；
+     3) 面上有一道**斜向的亮泽**（sheen），从左上来、右下收，玻璃才会显得是「一片」而不是「一层色」。
+   所以这里不是只改个 rgba：底色、亮泽、边缘反光三样都写成了变量，深浅两套各自配。 */
 .dsh-explain-assistant-overlay{container-type:inline-size;
   position:fixed;z-index:30;
   display:flex;flex-direction:column;box-sizing:border-box;
   min-width:360px;min-height:420px;
-  background:var(--dsw-alias-bg-base,#fff);
+  /* 浅色：接近 setup 的白玻璃（62% 白 + 强白边）。 */
+  --ea-glass-fill:rgba(248,249,251,.62);
+  --ea-glass-sheen:linear-gradient(155deg,rgba(255,255,255,.5) 0%,rgba(255,255,255,.14) 26%,rgba(255,255,255,0) 52%,rgba(255,255,255,.28) 100%);
+  --ea-glass-shadow:
+    inset 0 0 0 1px rgba(255,255,255,.55),
+    inset 0 1.5px 0 0 rgba(255,255,255,.85),
+    inset 0 -.5px 0 0 rgba(0,0,0,.07),
+    inset 0 0 46px rgba(255,255,255,.22),
+    0 34px 90px rgba(0,0,0,.26),
+    0 2px 10px rgba(0,0,0,.10);
+  --ea-band-fill:rgba(127,127,127,.08);
+  /* 输入框不再用实心底：深色下 --dsw-alias-bg-base 就是纯黑，压在半透明玻璃上会变成一块黑砖。
+     改成「比玻璃略深一点的凹槽」+ 一圈细边，既有输入区的边界，又不把玻璃挖掉一块。 */
+  --ea-field-fill:rgba(255,255,255,.55);
+  --ea-field-border:rgba(0,0,0,.12);
+  /* 模型选择页是叠在对话之上的一层玻璃：比外壳更糊一点，免得下面的对话字透上来抢注意力。 */
+  --ea-glass-pane:rgba(250,250,252,.84);
+  background:var(--ea-glass-sheen),var(--ea-glass-fill);
+  -webkit-backdrop-filter:blur(28px) saturate(170%);
+  backdrop-filter:blur(28px) saturate(170%);
   color:var(--dsw-alias-label-primary,#111);
-  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.14));
-  border-radius:14px;
-  box-shadow:0 18px 48px rgba(0,0,0,.28),0 2px 8px rgba(0,0,0,.16);
+  border:0;
+  border-radius:26px;
+  box-shadow:var(--ea-glass-shadow);
   overflow:hidden;pointer-events:auto;
   font-size:13px;line-height:1.6;
   -webkit-font-smoothing:antialiased;
+}
+/* 深色不是把浅色的数值调暗就算完，试过两版才定成现在这样：
+   · 白边按 0.5 直接搬过来会「掉漆」（深底上白边过曝），所以顶边压到 0.24、侧边 0.10；
+   · 底色用比页面(#141414)亮一档的中性灰(#34373d)而不是纯黑 —— 玻璃要「浮起来」，
+     和页面同色只会变黑；55% 的填充刚好让背后的字化成软影，又不至于读不清正文；
+   · 投影加深到 0.55，否则边缘在深色页面上看不出是独立的一层。 */
+body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
+  --ea-glass-fill:rgba(58,62,68,.46);
+  --ea-glass-sheen:linear-gradient(155deg,rgba(255,255,255,.11) 0%,rgba(255,255,255,.04) 22%,rgba(255,255,255,0) 46%,rgba(255,255,255,0) 76%,rgba(255,255,255,.05) 100%);
+  --ea-glass-shadow:
+    inset 0 1px 0 0 rgba(255,255,255,.24),
+    inset 1px 0 0 0 rgba(255,255,255,.09),
+    inset 0 -1px 0 0 rgba(0,0,0,.42),
+    inset 0 0 0 1px rgba(255,255,255,.08),
+    inset 0 0 46px rgba(255,255,255,.045),
+    0 32px 80px rgba(0,0,0,.55),
+    0 2px 12px rgba(0,0,0,.4);
+  --ea-band-fill:rgba(255,255,255,.06);
+  --ea-field-fill:rgba(0,0,0,.22);
+  --ea-field-border:rgba(255,255,255,.14);
+  --ea-glass-pane:rgba(46,49,54,.72);
+  /* 深色页面本身几乎没有明暗差，只靠 blur 看不出「糊了什么」。给背景抬 12% 亮度，
+     背后的字才会化成可见的软影，而不是被一层灰吃掉。 */
+  -webkit-backdrop-filter:blur(28px) saturate(170%) brightness(1.12);
+  backdrop-filter:blur(28px) saturate(170%) brightness(1.12);
+}
+/* 没有 backdrop-filter 的引擎：退回实心底。宁可少一层玻璃，也不能糊成一片看不清字。 */
+@supports not ((-webkit-backdrop-filter:blur(1px)) or (backdrop-filter:blur(1px))){
+  .dsh-explain-assistant-overlay{background:var(--dsw-alias-bg-base,#fff)}
+  body[data-ds-dark-theme] .dsh-explain-assistant-overlay{background:var(--dsw-alias-bg-base,#141414)}
 }
 .dsh-explain-assistant-overlay *,.dsh-explain-assistant-overlay *::before,.dsh-explain-assistant-overlay *::after{box-sizing:border-box}
 
@@ -34,7 +91,7 @@
   min-height:46px;padding:0 10px 0 14px;
   cursor:move;user-select:none;
   border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1));
-  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06));
+  background:var(--ea-band-fill,rgba(127,127,127,.06));
 }
 .dsh-explain-assistant-titlebar .ea-title{flex:0 0 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:600;letter-spacing:.02em}
 .dsh-explain-assistant-status{flex:1 1 auto;min-width:0;font-size:12px;color:var(--dsw-alias-label-tertiary,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -343,7 +400,7 @@
  * 整页没有这些约束：一页只做一件事，关掉就回到对话。
  */
 /* 页面槽：绝对定位盖住「正文 + 输入区」，自身不参与点击（里面那层才接事件）。 */
-.ea-model-panel-slot{position:absolute;inset:0;z-index:3;pointer-events:none;background:var(--dsw-alias-bg-base,#fff)}
+.ea-model-panel-slot{position:absolute;inset:0;z-index:3;pointer-events:none;background:var(--ea-glass-pane,var(--dsw-alias-bg-base,#fff));-webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%)}
 .ea-overlay[data-view=model] .ea-model-panel-slot{pointer-events:auto}
 /* 输入区只是「看不见」不是「不存在」：保留占位，避免打开瞬间正文高度跳一下。 */
 .ea-overlay[data-view=model] .ea-composer{visibility:hidden}
@@ -424,7 +481,7 @@
   display:flex;align-items:center;gap:8px;flex:0 0 auto;
   padding:8px 10px;
   border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1));
-  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.05));
+  background:var(--ea-band-fill,rgba(127,127,127,.05));
 }
 .ea-model-panel-back{flex:0 0 auto}
 .ea-model-panel-title{margin:0;font-size:13px;font-weight:600;flex:0 0 auto}
@@ -441,7 +498,7 @@
 .ea-model-search{
   width:100%;box-sizing:border-box;font:inherit;font-size:12.5px;padding:7px 10px;border-radius:8px;
   border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.16));
-  background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#111);
+  background:var(--ea-field-fill,rgba(255,255,255,.55));color:var(--dsw-alias-label-primary,#111);
 }
 .ea-model-list{
   display:flex;flex:1 1 auto;flex-direction:column;gap:12px;
@@ -454,7 +511,7 @@
   position:sticky;top:0;padding:6px 2px;
   font-size:11.5px;font-weight:600;letter-spacing:.02em;
   color:var(--dsw-alias-label-tertiary,#666);
-  background:var(--dsw-alias-bg-base,#fff);
+  background:var(--ea-glass-pane,var(--dsw-alias-bg-base,#fff));-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)
 }
 .ea-model-options{display:flex;flex-direction:column;gap:2px}
 /* 一行一个模型：名字 + 模型 id（等宽小字，用来核对「到底是哪一个」）+ 选中勾。 */
@@ -572,7 +629,7 @@
   white-space:pre-wrap;word-break:break-word;
   font-size:12px;line-height:1.65;
   padding:8px 10px;border-radius:8px;
-  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06));
+  background:var(--ea-band-fill,rgba(127,127,127,.06));
   color:var(--dsw-alias-label-secondary,#555);
 }
 .ea-tool{display:flex;flex-direction:column;border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));padding-top:4px}
@@ -594,7 +651,7 @@
   display:flex;flex-direction:column;gap:9px;flex:0 0 auto;
   padding:11px 13px 12px;
   border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.12));
-  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.05));
+  background:var(--ea-band-fill,rgba(127,127,127,.05));
 }
 .ea-input{
   width:100%;min-height:52px;max-height:150px;
@@ -602,8 +659,8 @@
   padding:9px 11px;
   font:inherit;line-height:1.55;
   color:var(--dsw-alias-label-primary,#111);
-  background:var(--dsw-alias-bg-base,#fff);
-  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.18));
+  background:var(--ea-field-fill,rgba(255,255,255,.55));
+  border:1px solid var(--ea-field-border,rgba(0,0,0,.18));
   border-radius:9px;
 }
 .ea-input::placeholder{color:var(--dsw-alias-label-tertiary,#888)}
