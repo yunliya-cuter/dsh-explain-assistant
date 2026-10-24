@@ -128,7 +128,7 @@ test('F2(已修复): history-result 返回该记录的完整内容，且跨会�
   } finally { host.cleanup(); }
 });
 
-test('F2: 浮窗的「查看更早历史」按钮由 hasEarlier 把关（false 不渲染、true 渲染）', async () => {
+test('F2: 历史分页的「更早」入口由「还有没挂出来的条数」与 hasEarlier 共同把关', async () => {
   const base = {
     sessionId: 's', open: true, unread: false, draft: '', phase: 'idle', reasoning: '', text: '',
     tools: [], records: [], loadingEarlier: false, evidence: [],
@@ -136,11 +136,20 @@ test('F2: 浮窗的「查看更早历史」按钮由 hasEarlier 把关（false �
   };
   const plugin = { registry: { update() {}, get: () => base }, api: {}, cancel() {}, submit() {}, loadEarlier() {} };
   const dom = fakeDom();
+  const rec = i => ({ id: 'r' + i, question: '问 ' + i, answerText: '答 ' + i, status: 'complete' });
   try {
-    const hidden = overlay.renderOverlay({ ...base, hasEarlier: false }, plugin);
-    assert.equal(/查看更早历史/.test(hidden.textContent || ''), false, 'hasEarlier=false 时不得出现该按钮');
-    const shown = overlay.renderOverlay({ ...base, hasEarlier: true }, plugin);
-    assert.match(shown.textContent || '', /查看更早历史/, 'hasEarlier=true 时按钮存在（说明门闸就是这一个布尔值）');
+    // 六条 = 正好一窗；宿主也没有更早的 → 不该出现任何「更早」入口（否则点了也没东西）
+    const six = Array.from({ length: 6 }, (_, i) => rec(i));
+    const full = overlay.renderOverlay({ ...base, records: six, hasEarlier: false }, plugin);
+    assert.equal(/更早/.test(full.textContent || ''), false, '全部已挂出来且宿主没有更早的时，不得出现「更早」入口');
+    // 同样六条，但宿主说还有 → 必须给出去宿主取更早记录的入口
+    const more = overlay.renderOverlay({ ...base, records: six, hasEarlier: true }, plugin);
+    assert.match(more.textContent || '', /加载更早的记录/, 'hasEarlier=true 时必须给出去宿主取更早记录的入口');
+    // 七条且宿主说没有了 → 仍然要能往上翻：本地就有一条没挂出来。
+    // 这条是新增判据：分页不再只由 hasEarlier 决定（窗口化之后「没挂出来」也是可翻的理由）。
+    const seven = Array.from({ length: 7 }, (_, i) => rec(i));
+    const local = overlay.renderOverlay({ ...base, records: seven, hasEarlier: false }, plugin);
+    assert.match(local.textContent || '', /更早的 1 条/, '本地还有没挂出来的记录时必须能翻');
   } finally {
     await new Promise(resolve => setTimeout(resolve, 0));
     dom.restore();

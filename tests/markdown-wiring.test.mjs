@@ -70,7 +70,7 @@ test('浮窗历史记录的回答也按 Markdown 渲染', () => withDom(async ()
   const root = overlay.renderOverlay(state({
     records: [{ id: 'r1', question: '问', answer: '答案是 **这个**，见 \`a.ts\`。', status: 'complete', createdAt: new Date().toISOString() }],
   }), plugin);
-  const record = root.querySelector('.ea-record-answer');
+  const record = root.querySelector('.ea-turn-a');
   assert.ok(record, '必须有历史正文');
   assert.equal(record.querySelectorAll('strong').length, 1, '历史正文里的粗体也要变成 <strong>');
   assert.equal(record.querySelectorAll('code').length, 1, '历史正文里的行内代码也要变成 <code>');

@@ -121,12 +121,12 @@ function assertMarkdownized(container, label) {
 function surfaces() {
   return [
     {
-      label: '历史列表 · 回答正文（overlay.tsx:443）',
+      label: '历史列表 · 回答正文（overlay.tsx 的 historyTurnNodes）',
       root: render(state({ records: [{ id: 'r1', question: '问', answerText: MD, reasoningText: MD }] })),
-      locate: r => byClass(r, 'ea-record-answer'),
+      locate: r => byClass(r, 'ea-turn-a'),
     },
     {
-      label: '历史列表 · 推理过程（overlay.tsx:446，本次修的缺陷）',
+      label: '历史列表 · 推理过程（overlay.tsx 的 historyTurnNodes）',
       root: render(state({ records: [{ id: 'r1', question: '问', answerText: MD, reasoningText: MD }] })),
       locate: r => byClass(r, 'ea-disclosure-body'),
     },

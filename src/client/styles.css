@@ -503,43 +503,64 @@
 .ea-evidence-details[open] .ea-evidence-fold-hint{display:none}
 .ea-evidence-details .ea-evidence-row{padding:0 12px 10px}
 
-/* ---------- 历史 ---------- */
-.ea-record{display:flex;flex-direction:column;gap:5px;padding-top:9px;border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1))}
-.ea-record:first-of-type{border-top:0;padding-top:0}
-.ea-record-question{font-size:12.5px;word-break:break-word}
-/* 历史正文同样走 Markdown 渲染：这里也不能留 pre-wrap（理由同 .ea-answer）。 */
-.ea-record-answer{margin:0;font-size:12.5px;line-height:1.65;word-break:break-word;color:var(--dsw-alias-label-secondary,#444)}
-.ea-record-answer .ea-md-p{margin:0 0 6px}
-.ea-record-answer .ea-md-p:last-child{margin-bottom:0}
-.ea-record-answer .ea-md-h{margin:9px 0 5px;font-size:13px;font-weight:650;line-height:1.4}
-.ea-record-answer .ea-md-list{margin:0 0 6px;padding-left:20px}
-.ea-record-answer .ea-md-code{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:.92em;padding:1px 4px;border-radius:4px;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.16))}
-.ea-record-answer .ea-md-pre{margin:0 0 6px;padding:8px 10px;border-radius:7px;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.13));overflow-x:auto}
-.ea-record-answer .ea-md-codeblock{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:11.5px;line-height:1.6;white-space:pre;display:block;min-width:max-content}
-.ea-record-answer .ea-md-link{color:var(--dsw-alias-link,#2f6bff);text-decoration:underline}
-.ea-record-answer .ea-md-quote{margin:0 0 6px;padding-left:9px;border-left:3px solid var(--dsw-alias-border-l3,rgba(0,0,0,.16))}
+/* ---------- 历史：对话式（问句右气泡 / 回答左正文） ---------- */
+/* 尺寸与配色对着 dsh 的对话量出来：气泡圆角 20px、内边距 10×16、正文 14/22、
+   气泡最大宽度是内容宽的 70.2%、气泡底色取 --dsw-specific-bubble。
+   浮窗比主对话窄，字号按 13px 收一档，比例不变。 */
+.ea-conv{display:flex;flex-direction:column;gap:18px}
+/* 有「回到最近」时给底部留出它占的高度：按钮是 sticky 的，不预留就会压住最后一行字。 */
+.ea-conv.has-jump{padding-bottom:44px}
+.ea-conv-head{display:flex;align-items:center;gap:8px;margin-bottom:-6px;font-size:11.5px;line-height:16px;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-conv-head::after{content:'';flex:1 1 auto;height:1px;background:var(--dsw-alias-border-l2,rgba(0,0,0,.08))}
+.ea-conv-title{font-weight:600;color:var(--dsw-alias-label-secondary,#555)}
+.ea-conv-older{display:flex;justify-content:center}
+.ea-conv-older-btn{border:0;border-radius:8px;background:var(--dsw-alias-interactive-bg-hover-solid,rgba(127,127,127,.14));color:var(--dsw-alias-label-secondary,#555);font-size:12px;line-height:18px;padding:4px 12px;cursor:pointer;transition:background-color 120ms ease}
+.ea-conv-older-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.2))}
+.ea-conv-older-btn:disabled{cursor:default;opacity:.7}
+.ea-turn{display:flex;flex-direction:column;gap:10px;min-width:0}
+/* 问句：右对齐、20px 圆角、气泡底色跟着宿主主题走（浅色 #fdf4e7 / 深色 #272727）。 */
+.ea-turn-q{align-self:flex-end;max-width:72%;border-radius:20px;padding:9px 14px;background:var(--dsw-specific-bubble,var(--dsw-alias-bg-layer-2,rgba(127,127,127,.14)));color:var(--dsw-alias-label-primary,#111);font-size:13px;line-height:21px;white-space:pre-wrap;word-break:break-word}
+.ea-turn-meta{align-self:flex-end;margin-top:-6px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#888);white-space:nowrap}
+/* 回答：左对齐、无气泡、正文主色（灰色读起来像「次要说明」，对话里回答是主角）。 */
+.ea-turn-a{font-size:13px;line-height:22px;color:var(--dsw-alias-label-primary,#111);word-break:break-word}
+/* 折叠：默认只展开最新一轮，其余超过 10 行的收起来，末尾渐隐表示还有。 */
+.ea-turn-a[data-folded="true"]{max-height:220px;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,#000 calc(100% - 34px),transparent);mask-image:linear-gradient(180deg,#000 calc(100% - 34px),transparent)}
+.ea-turn-a .ea-md-h1{font-size:16px}
+.ea-turn-a .ea-md-h2{font-size:14.5px}
+.ea-turn-a .ea-md-h3{font-size:13.5px}
+.ea-turn-reason{margin-top:-2px}
+.ea-turn-foot{display:flex;align-items:center;gap:12px;margin-top:-4px;font-size:11.5px;line-height:16px;color:var(--dsw-alias-label-tertiary,#888);flex-wrap:wrap}
+.ea-turn-foot button{border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer}
+.ea-turn-foot button:hover{color:var(--dsw-alias-label-secondary,#555)}
+.ea-turn-foot .ea-warn{font-size:11.5px}
+/* 「回到最近」：往上翻过之后才出现，贴在可视区右下角。
+   sticky 挂在按钮本身，再用负 margin 抵掉它占的高度 —— 这样它既固定在视野里，
+   又不会把下面的内容推开。 */
+.ea-conv-jump-btn{position:sticky;bottom:10px;align-self:flex-end;margin-top:-44px;z-index:2;width:34px;height:34px;border-radius:50%;border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.14));background:var(--dsw-alias-button-floating-fill,var(--dsw-alias-bg-layer-2,#fff));color:var(--dsw-alias-label-primary,#111);box-shadow:var(--dsw-elevation-panel,0 3px 8px rgba(0,0,0,.12));cursor:pointer;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;transform:translateY(-6px)}
+.ea-conv-jump-btn:hover{background:var(--dsw-alias-interactive-bg-hover-solid,rgba(127,127,127,.16))}
+/* 当前这一问：与历史同一套样式，位置贴在输入框上方。 */
+.ea-conv-live{display:flex;flex-direction:column;min-width:0}
+.ea-conv-live[hidden]{display:none}
+.ea-conv-live .ea-answer{padding:0;border:0;background:none;border-radius:0;font-size:13px;line-height:22px;color:var(--dsw-alias-label-primary,#111)}
+.ea-conv-live .ea-slot{gap:8px}
+/* 刚落地的那一条：180ms 淡入 + 上移 6px（与「标签进场」同一族曲线，动作更小、更快）。 */
+@keyframes ea-turn-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.ea-turn[data-enter="true"]{animation:ea-turn-in 180ms cubic-bezier(.2,.85,.25,1)}
+@media (prefers-reduced-motion: reduce){.ea-turn[data-enter="true"]{animation:none}}
+/* 详情面板（「查看完整内容」）的正文排版：与主回答同一套规则，不再各写一份。 */
 .ea-detail-answer .ea-md-p{margin:0 0 8px}
 .ea-detail-answer .ea-md-code{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:.92em;padding:1px 4px;border-radius:4px;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.16))}
 .ea-detail-answer .ea-md-pre{margin:0 0 8px;padding:8px 10px;border-radius:7px;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.13));overflow-x:auto}
 .ea-detail-answer .ea-md-codeblock{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:11.5px;line-height:1.6;white-space:pre;display:block;min-width:max-content}
 .ea-detail-answer .ea-md-h{margin:10px 0 6px;font-weight:650}
-/* 详情面板原先**没有**标题字号规则，只因缺链接/列表/引用规则而比正文素净；
-   补上 ea-md-scope 后会被 :129 的 13px 接管。若放任，`##` 会从浏览器默认的 19.5px
-   **掉到 13px** —— 那是可见降级，且与 .ea-answer 的分级设计（h2=15.5px，见 :152）不一致。
-   这里补回与正文一致的分级。页面实测：改前 19.5px → 13px 会让标题与正文几乎一样粗。
-   （来源：verify-3082 的 WITH/WITHOUT 对照 + 我用 .ea-answer 的设计意图独立核对。） */
+/* 标题分级：补 ea-md-scope 后会被基础规则的 13px 接管；若放任，二级标题会与正文几乎一样粗
+   （页面实测过的可见降级），所以按正文的比例补回来。 */
 .ea-detail-answer .ea-md-h1{font-size:17px}
 .ea-detail-answer .ea-md-h2{font-size:15.5px}
 .ea-detail-answer .ea-md-h3{font-size:14.5px}
 .ea-detail-answer .ea-md-h4,.ea-detail-answer .ea-md-h5,.ea-detail-answer .ea-md-h6{font-size:13.5px}
-/* 历史正文同理：.ea-record-answer 的 .ea-md-h 是 13px（:291），补类后若不管，
-   `##` 也会从默认 19.5px 掉到 13px。同样补回分级。 */
-.ea-record-answer .ea-md-h1{font-size:16px}
-.ea-record-answer .ea-md-h2{font-size:14.5px}
-.ea-record-answer .ea-md-h3{font-size:13.5px}
 .ea-warn{font-size:11.5px;color:var(--dsw-alias-state-warn-primary,#a15c00)}
 .ea-empty{color:var(--dsw-alias-label-tertiary,#777);font-size:12.5px;margin:0}
-
 /* ---------- 折叠块 ---------- */
 .ea-disclosure>summary,.ea-tool>summary{
   cursor:pointer;font-size:12.5px;

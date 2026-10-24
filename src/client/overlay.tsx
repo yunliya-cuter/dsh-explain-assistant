@@ -6,6 +6,8 @@ import { mountMarkdown, cachedMarkdownNodes, type MarkdownView } from './markdow
 import type { createClientPlugin } from './index.js'
 // §10/D1：记录为什么没完成的中文文案与宿主**共用同一份**（src/shared/）。刻意不复制第二份。
 import { recordReasonText, RECORD_REASON_PREFIX, RECORD_INCOMPLETE_TEXT } from '../shared/record-reason.js'
+// 历史区的分页窗口（纯函数，可单测）：默认只挂最近几条，往上补，同时挂载量有上限。
+import { HISTORY_BATCH, resolveHistoryWindow, type HistoryWindow, type HistoryWindowState } from './history-window.js'
 
 type OverlayProps = { state: AssistantClientState; plugin: ReturnType<typeof createClientPlugin>; onClose?: () => void }
 type PluginLike = OverlayProps['plugin'] & {
@@ -1047,77 +1049,168 @@ function contentKey(text: string): string {
   return hash.toString(36)
 }
 
-/** §8 历史问答。关闭再打开能继续查看与追问。 */
-function historyNodes(state: AssistantClientState, plugin: PluginLike): Child[] {
-  const children: Child[] = [el('div', { class: 'ea-card-head' },
-    el('h3', { class: 'ea-card-title', text: '历史' }),
-    state.records.length ? el('span', { class: 'ea-count ea-count-inline', text: String(state.records.length) }) : null,
-    state.hasEarlier ? button(state.loadingEarlier ? '正在加载…' : '查看更早历史', '加载更早历史', () => { if (!state.loadingEarlier) void plugin.loadEarlier() }, { class: 'ea-btn ea-btn-quiet', disabled: state.loadingEarlier }) : null,
-  )]
-  if (!state.records.length) {
-    children.push(el('p', { class: 'dsh-explain-assistant-empty ea-empty', text: '还没有小助手历史' }))
-  } else {
-    // 记录有两个来源、两套字段名，必须都认：
-    // - 宿主落库（routes.ts 写的）：answerText / reasoningText / startedAt / updatedAt；
-    // - 客户端本地刚追加的：answer / createdAt。
-    // 旧代码只读 record.answer，而真实路径下记录来自宿主 —— 于是重开浮窗后
-    // 历史里只剩问题、看不到回答，用户以为那次问答丢了（§8「关闭再打开能查看」）。
-    state.records.forEach(record => {
-      const recordId = typeof record.id === 'string' && record.id ? record.id : ''
-      const answer = (typeof record.answerText === 'string' && record.answerText) ? record.answerText : record.answer
-      const at = record.startedAt ?? record.createdAt
-      const reasoning = typeof record.reasoningText === 'string' && record.reasoningText ? record.reasoningText : record.reasoning
-      children.push(el('article', { class: 'dsh-explain-assistant-record ea-record' },
-        el('div', { class: 'ea-row-head' },
-          el('strong', { class: 'ea-record-question', text: record.question }),
-          el('small', { class: 'ea-meta', text: timeText(at) }),
-        ),
-        // 历史正文同样是 Markdown：用户看到的「记号没解析」在这一处也存在。
-        // 走 cachedMarkdownNodes 而不是直接渲染 —— updateOverlay 在流式期间每个分片都跑一次，
-        // 没有缓存的话，每来一个字就要把**所有历史记录**重新解析一遍，记录越多越卡。
-        // 缓存键必须**稳定**：有 id 用 id；没有 id 时用正文指纹，**不能**用位置索引
-        // （位置索引会随分页变化指向另一条记录，缓存命中后会把别人的正文顶上来）。
-        // 同样带上 ea-md-scope：它是「这里面的文字是模型写的」的**约定标记类**，
-        // **不是**「已解析」的判据 —— 判据是子节点来自渲染器。已部署产物里
-        // class="ea-record-answer" 没有这个类却解析正常，证明它既不必要也不充分。
-        //
-        // ⚠️ 这里**确实带来用户可见的变化**，不是「观感不变」（原先那句注释是错的，已更正）：
-        // 元素一旦带上 ea-md-scope，styles.css:127+ 那组规则就生效，
-        // 于是 **粗体** 与 ~~删除线~~ 从「有节点、无样式」变为可见呈现 ——
-        // .ea-record-answer 只有 code/codeblock/h/link/list/p/pre/quote 的规则，缺 strong/del。
-        // 方向上是修复（渲染器一直产出这些节点，只是从没有规则给它们样式），
-        // 但观感必须由页面复验确认，不能靠推断 —— 见 docs/evidence/ 的页面普查。
-        answer ? el('div', { class: 'ea-record-answer ea-md-scope' }, ...cachedMarkdownNodes(recordId || 'rec#' + contentKey(String(record.question || '') + '\u0000' + String(answer)), String(answer))) : null,
-        // 推理同样是**模型写出的 Markdown**，必须走渲染器。
-        // 这里原本是唯一一处裸文本渲染（el('div', {..., text: reasoning})），
-        // 页面实测：历史列表里 6 个 ea-disclosure-body 全部没有 ea-md-scope，
-        // 成段的 `- 条目` 记号原样露出（同一份 reasoning 在详情面板 512 行却能解析）。
-        // 缓存键必须**稳定**：有 id 用 id；没有 id 用正文指纹 —— 不能用位置索引
-        // （见 441-443 行：位置索引会随分页漂移到别的记录，命中后把别人的正文顶上来）。
-        reasoning ? el('details', { class: 'ea-disclosure' },
-          el('summary', {}, '这次回答的推理过程'),
-          el('div', { class: 'ea-disclosure-body ea-md-scope' },
-            ...cachedMarkdownNodes(recordId || 'rec-reasoning#' + contentKey(String(reasoning)), String(reasoning))),
-        ) : null,
-        // 同样两套字段名：客户端本地写 incomplete，宿主写 status/complete。
-        // 只看 incomplete 的话，来自宿主的未完成记录永远不会显示警告（§6.3「不得把没验证的说成已验证」）。
-        //
-        // §10/D1：记录会**留在磁盘上** —— 整页重载后只有「未完成」不足以让用户明白为什么停的。
-        // 若记录带了原因（routes.ts 落库时写入），就把对应的中文提示一并显示。
-        // 文案从 src/shared 取，与宿主 SSE 事件用的是**同一份常量**（本项目吃过两处不一致的亏）。
-        // 老记录没有 reason 字段 → recordReasonText 返回 undefined → 退回原来的「此记录未完成或未验证」，行为不变。
-        ((record.incomplete === true) || record.status === 'interrupted' || record.status === 'error' || record.complete === false)
-          ? el('small', { class: 'ea-warn', text: (() => {
-            const reasonText = recordReasonText((record as { reason?: unknown }).reason);
-            return reasonText ? RECORD_REASON_PREFIX + reasonText : RECORD_INCOMPLETE_TEXT;
-          })() }) : null,
-        // §5.1/§11.6：历史里只显示摘要，用户要能点开某一条看它的**完整依据**。
-        // 此前没有任何入口，api.historyResult 是死代码，被截断的工具结果与依据在界面上永远看不到。
-        recordId ? button(state.historyDetail?.recordId === recordId ? '正在查看完整内容' : '查看完整内容', '查看这条记录的完整内容', () => { void plugin.openHistoryDetail?.(recordId) }, { class: 'ea-btn ea-btn-quiet ea-record-detail', pressed: state.historyDetail?.recordId === recordId }) : null,
-      ))
-    })
+/**
+ * 历史回答超过这个字数就折叠。
+ *
+ * 为什么是 420：13px 正文在默认 420 宽的浮窗里一行大约 34～36 个汉字，
+ * 10 行就是 340～360 字。取 420 是为了「折叠的一定真的超过一屏」——
+ * 早先按 240 字折叠，实测被折的那条只有 156px 高（7 行），
+ * 「展开全文」点下去什么都没变，等于一个假按钮。
+ */
+const TURN_FOLD_CHARS = 420;
+
+function recordAnswerText(record: unknown): string {
+  const value = record as { answerText?: unknown; answer?: unknown } | null | undefined;
+  const text = typeof value?.answerText === 'string' && value.answerText ? value.answerText : value?.answer;
+  return typeof text === 'string' ? text : '';
+}
+
+function recordReasoningText(record: unknown): string {
+  const value = record as { reasoningText?: unknown; reasoning?: unknown } | null | undefined;
+  const text = typeof value?.reasoningText === 'string' && value.reasoningText ? value.reasoningText : value?.reasoning;
+  return typeof text === 'string' ? text : '';
+}
+
+function recordIdOf(record: unknown): string {
+  const value = (record as { id?: unknown } | null | undefined)?.id;
+  return typeof value === 'string' ? value : '';
+}
+
+/** 一条历史记录画成对话里的一轮：问句在右（气泡），回答在左（正文）。 */
+function historyTurnNodes(input: unknown, ctx: OverlayContext, newestId: string): Child[] {
+  // 记录有两个来源、两套字段名，必须都认：
+  //   · 宿主落库（routes.ts 写的）：answerText / reasoningText / startedAt；
+  //   · 客户端本地刚追加的：answer / createdAt。
+  const record = (input || {}) as {
+    id?: unknown; question?: unknown; answerText?: unknown; answer?: unknown;
+    reasoningText?: unknown; reasoning?: unknown; status?: unknown; incomplete?: unknown;
+    complete?: unknown; reason?: unknown; startedAt?: unknown; createdAt?: unknown;
+  };
+  const id = recordIdOf(record);
+  const question = String(record.question || '');
+  const answer = recordAnswerText(record);
+  const reasoning = recordReasoningText(record);
+  const at = record.startedAt ?? record.createdAt;
+  const status = String(record.status || '');
+  const incomplete = record.incomplete === true || status === 'interrupted' || status === 'error' || record.complete === false;
+  const reasonText = recordReasonText(record.reason);
+  const warnText = incomplete ? (reasonText ? RECORD_REASON_PREFIX + reasonText : RECORD_INCOMPLETE_TEXT) : '';
+
+  const expanded = ctx.expandedIds.has(id);
+  const longEnough = answer.length > TURN_FOLD_CHARS;
+  // 最新一轮永远完整展开：那是用户刚问的那一条，不该还要再点一下才看全。
+  const folded = Boolean(answer) && longEnough && !expanded && id !== newestId;
+
+  const nodes: Child[] = [];
+  if (question) nodes.push(el('div', { class: 'ea-turn-q', text: question }));
+  const time = timeText(at);
+  if (time) nodes.push(el('div', { class: 'ea-turn-meta', text: time }));
+  if (answer) {
+    // 正文渲染走缓存：updateOverlay 会反复重画，没有缓存就等于每次把所有历史重新解析一遍。
+    // 缓存键必须稳定：有 id 用 id，没有 id 用正文指纹（不能用位置索引 —— 分页会漂移）。
+    const key = id || 'turn#' + contentKey(question + '\u0000' + answer);
+    nodes.push(el('div', {
+      class: 'ea-turn-a ea-md-scope',
+      'data-folded': folded ? 'true' : 'false',
+    }, ...cachedMarkdownNodes(key, answer)));
   }
-  return [el('section', { class: 'dsh-explain-assistant-history ea-card' }, ...children)]
+  if (reasoning) {
+    nodes.push(el('details', { class: 'ea-turn-reason ea-disclosure' },
+      el('summary', {}, '推理过程'),
+      el('div', { class: 'ea-disclosure-body ea-md-scope' }, ...cachedMarkdownNodes(id || 'turn-reasoning#' + contentKey(reasoning), reasoning)),
+    ));
+  }
+  const foot: Child[] = [];
+  if (folded) foot.push(button('展开全文', '展开这条回答的全文', () => { ctx.expandedIds.add(id); ctx.rerender(); }, { class: 'ea-turn-more' }));
+  else if (expanded && longEnough) foot.push(button('收起', '收起这条回答', () => { ctx.expandedIds.delete(id); ctx.rerender(); }, { class: 'ea-turn-more' }));
+  if (id) foot.push(button('查看完整内容', '查看这条记录的完整内容', () => { void ctx.plugin.openHistoryDetail?.(id) }, { class: 'ea-turn-detail', pressed: ctx.state.historyDetail?.recordId === id }));
+  if (warnText) foot.push(el('span', { class: 'ea-warn ea-turn-warn', text: warnText }));
+  if (foot.length) nodes.push(el('div', { class: 'ea-turn-foot' }, ...foot));
+  return nodes;
+}
+
+/** 顶部那颗「更早的 N 条」：补齐的方向只有一个 —— 往上。 */
+function historyOlderNode(state: AssistantClientState, plugin: PluginLike, ctx: OverlayContext, win: HistoryWindow): Child {
+  const known = win.start;                 // 已经载入、但没挂在页面上的条数
+  const askHost = known === 0 && state.hasEarlier;
+  if (known === 0 && !askHost) return null;
+  const loading = state.loadingEarlier === true;
+  const label = loading ? '正在加载…' : known > 0 ? '更早的 ' + known + ' 条' : '加载更早的记录';
+  return el('div', { class: 'ea-conv-older' },
+    button(label, '往前翻更早的历史', () => {
+      if (loading) return;
+      // 记住「第一条还看得见的那一轮」：补上去的内容会把阅读位置往下推，补完按它的位移还回来。
+      const remember = () => {
+        const body = ctx.body as HTMLElement & { getBoundingClientRect?: () => DOMRect }
+        if (typeof body.getBoundingClientRect !== 'function') return
+        const bodyTop = body.getBoundingClientRect().top
+        const turns = Array.from(ctx.historySlot.querySelectorAll('.ea-turn') as ArrayLike<HTMLElement>)
+        const first = turns.find(turn => {
+          const rect = turn.getBoundingClientRect()
+          return rect.bottom > bodyTop + 4
+        }) || turns[0]
+        // 记 id 而不是元素：这次重画会把整段历史的节点换掉，旧元素已经不在文档里了
+        //（按元素记的话，量不到位置，等于没锚定 —— 实测锚点从 y=725 掉到 y=4944）。
+        const id = first?.getAttribute('data-record-id') || ''
+        if (id) ctx.anchor = { id, top: first.getBoundingClientRect().top }
+      };
+      if (askHost) {
+        // 本地已经没有更早的了：向宿主再要一页，拿到之后再补挂。
+        void Promise.resolve(plugin.loadEarlier?.()).then(() => {
+          ctx.pendingOlder = HISTORY_BATCH;
+          remember();
+          ctx.rerender();
+        }).catch(() => undefined);   // 取不到就更早的：保持现状，绝不把失败变成未处理拒绝
+      } else {
+        ctx.pendingOlder = HISTORY_BATCH;
+        remember();
+        ctx.rerender();
+      }
+    }, { class: 'ea-conv-older-btn', disabled: loading }),
+  );
+}
+
+/** 往上翻过之后，右下角出现「回到最近」——和 dsh 的回到最新是同一个东西。 */
+function historyJumpNode(ctx: OverlayContext): Child {
+  // 按钮自己就是 sticky 元素（不要包一层 height:0 的壳：壳没有高度，sticky 不生效，
+  // 实测按钮虽然存在却贴在内容末尾、滚出视野，用户根本看不到）。
+  return button('↓', '回到最近的历史', () => {
+    ctx.historyWindow = undefined;
+    ctx.scrollToTail = true;
+    ctx.rerender();
+  }, { class: 'ea-conv-jump-btn', title: '回到最近' });
+}
+
+/**
+ * §8 历史问答：对话式（问句右气泡 / 回答左正文），并且**一次只挂一小段**。
+ *
+ * 旧实现是「一叠卡片、全量挂载」：20 条实测 12,917px 高、552 个节点，
+ * 每来一个流式分片都要整块重挂一次。现在按 dsh 的做法 —— 尾部窗口 + 顶部补页 + 上限。
+ */
+function historyNodes(state: AssistantClientState, plugin: PluginLike, ctx: OverlayContext, win: HistoryWindow): Child[] {
+  if (!state.records.length) {
+    return [el('p', { class: 'dsh-explain-assistant-empty ea-empty', text: '还没有小助手历史' })];
+  }
+  const hasJump = win.end < win.total;
+  const children: Child[] = [
+    el('div', { class: 'ea-conv-head' },
+      el('span', { class: 'ea-conv-title', text: '历史' }),
+      el('span', { class: 'ea-conv-count', text: state.records.length + ' 条' }),
+    ),
+    historyOlderNode(state, plugin, ctx, win),
+  ];
+  const newestId = recordIdOf(state.records[state.records.length - 1]);
+  for (const record of win.items) {
+    const id = recordIdOf(record);
+    children.push(el('article', {
+      class: 'ea-turn',
+      'data-record-id': id || undefined,
+      // 只有「刚落地的那一条」进场时动一下；后续重画不重播（由 ctx.enteredTurnId 控制）。
+      'data-enter': ctx.pendingEnterId && ctx.pendingEnterId === id ? 'true' : undefined,
+    }, ...historyTurnNodes(record, ctx, newestId)));
+  }
+  if (hasJump) children.push(historyJumpNode(ctx));
+  return [el('section', { class: 'dsh-explain-assistant-history ea-conv' + (hasJump ? ' has-jump' : ''), 'aria-label': '历史问答' }, ...children)];
 }
 
 /**
@@ -1321,6 +1414,37 @@ type OverlayContext = {
   evidenceSlot: HTMLElement
   compactSlot: HTMLElement
   historySlot: HTMLElement
+  /** 当前这一问（问句气泡 + 正在写的回答）。和历史同属一条对话流，只是位置在最下面。 */
+  liveTurn: HTMLElement
+  /** 当前这一问的问句气泡。 */
+  liveQuestion: HTMLElement
+  /** 历史窗口：只挂最近一段；记 id 而不是下标（宿主往前插页时下标会整体后移）。 */
+  historyWindow?: HistoryWindowState
+  /** 上次渲染历史用的签名。没变就不重画 —— 流式期间每个分片都重画整段历史是纯浪费。 */
+  historySig?: string
+  /** 这一次要额外往上补几条（点「更早的 N 条」时置上，渲染完清掉）。 */
+  pendingOlder?: number
+  /**
+   * 补挂之前记下的「参照物」：第一条还看得见的那一轮，以及它当时的屏幕位置。
+   *
+   * 为什么按元素记、不按 scrollHeight 差值算：差值是「总量」口径，
+   * 一旦浏览器自己也做了一次滚动锚定，我们再加一遍就会双倍偏移
+   * （实测把锚点从 y=725 顶到 y=-343）。按元素记则是**闭环**的：
+   * 无论浏览器有没有动过，量一下这个元素现在在哪，补差值就行。
+   */
+  anchor?: { id: string; top: number }
+  /** 「回到最近」按过之后滚到底。 */
+  scrollToTail?: boolean
+  /** 首次就绪时是否已经自动停在最新一轮。 */
+  autoScrolled?: boolean
+  /** 用户手动展开过的记录 id（默认只有最新一条展开）。 */
+  expandedIds: Set<string>
+  /** 本次要播「刚落地」动画的那条记录。 */
+  pendingEnterId?: string
+  /** 上一次已经处理过的「最新一条」，用来判断是不是真的多了一条。 */
+  enteredTurnId?: string
+  /** 这份上下文属于哪个会话：切会话时窗口与展开态必须重置。 */
+  sessionId?: string
   /** 加载页槽位：未就绪时只有它里面有东西（见 surfaceGate）。 */
   loadingSlot: HTMLElement
   /** /state 失败且没有旧内容时的中文错误 + 重试（与 loadingSlot 互斥）。 */
@@ -1451,7 +1575,19 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   const modelPanelSlot = el('div', { class: 'ea-slot ea-model-panel-slot' })
   const evidenceSlot = el('div', { class: 'ea-slot' })
   const compactSlot = el('div', { class: 'ea-slot' })
-  const historySlot = el('div', { class: 'ea-slot' })
+  const historySlot = el('div', { class: 'ea-slot ea-conv-slot' })
+  /**
+   * 当前这一问：和历史是同一套对话样式（问句右气泡、回答左正文），位置在最下面、贴着输入框。
+   *
+   * 为什么它必须显示问句：旧界面上「正在回答的这一段」上面没有问句，
+   * 用户滚下去之后分不清这段回答对应哪一个问题。
+   *
+   * 为什么它会被整体隐藏：回答落地后 appendRecord 会写 liveRecordId，
+   * 同一条回答已经出现在历史里；若这块还留着，同一条内容就会在页面上出现两次。
+   */
+  const liveQuestion = el('div', { class: 'ea-turn-q ea-live-q' })
+  const liveTurn = el('section', { class: 'ea-conv-live', 'aria-label': '当前这一问' })
+  liveTurn.append(el('article', { class: 'ea-turn ea-turn-live' }, liveQuestion, currentSlot, answerSlot))
   // 展开面板放在最前面：用户点的是「查看完整内容」，结果必须在打开的那一刻就被看见，
   // 否则在长长的历史列表里点完之后什么都不会变化（内容其实在下面，用户以为按钮坏了）。
   const detailSlot = el('div', { class: 'ea-slot' })
@@ -1459,7 +1595,8 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   // 未就绪/失败时它们是唯一有内容的东西，用户第一眼看到的就是它（不是空态列表）。
   const loadingSlot = el('div', { class: 'ea-slot ea-loading-slot' })
   const stateErrorSlot = el('div', { class: 'ea-slot ea-state-error-slot' })
-  body.append(stateErrorSlot, loadingSlot, catalogNoteSlot, detailSlot, errorSlot, currentSlot, answerSlot, heroSlot, quickSlot, evidenceSlot, compactSlot, historySlot, selectionStatus)
+  // 顺序即阅读顺序：错误 → 压缩摘要 → 首次引导 → 历史（旧） → 当前这一问（最新） → 依据（贴着输入框）。
+  body.append(stateErrorSlot, loadingSlot, catalogNoteSlot, detailSlot, errorSlot, compactSlot, heroSlot, quickSlot, historySlot, liveTurn, evidenceSlot, selectionStatus)
 
   const input = el('textarea', { class: 'ea-input', placeholder: '问小助手主 agent 正在做什么…', 'aria-label': '向解释小助手提问', rows: '2' }) as HTMLTextAreaElement
   const send = button(isBusy(state) ? '处理中' : '发送', '发送问题', () => { form.requestSubmit() }, { class: 'ea-btn ea-btn-primary ea-send' })
@@ -1512,6 +1649,7 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     // 见 updateOverlay：用来判断「后面来的几何值是不是新值」。
     // 不这样做的话，每次重画都会把用户刚拖好的位置按旧值拽回去。
     errorSlot, currentSlot, answerSlot, answerView, heroSlot, quickSlot, evidenceSlot, compactSlot, historySlot, detailSlot, ringSlot, targetBar, catalogNoteSlot, modelPanelSlot, modelTrigger,
+    liveTurn, liveQuestion, expandedIds: new Set<string>(), sessionId: state.sessionId,
     loadingSlot, stateErrorSlot, root,
     // 默认折叠模型列表：一开就摊开 33 个模型会把「使用说明 + 快捷问题」顶出可视区。
     // 未选模型时由摘要行 + 醒目的提示承担「先选一个」的引导（§7/§11.8）。
@@ -1588,6 +1726,103 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   return root
 }
 
+/**
+ * 折叠的兜底：字数判据说该折叠、但实际排版没被裁掉时，把「展开全文」收掉。
+ *
+ * 为什么要兜底：字数与行数不是一回事（浮窗宽度可拖、长英文单词会换行）。
+ * 实测有一条 500 多字、排出来只有 204px 高（不到折叠线），
+ * 按钮点下去什么都不会变 —— 那是个假按钮。
+ *
+ * 为什么放到下一帧：刚填进 DOM 的节点还没排版，量到的 clientHeight/scrollHeight 都是 0，
+ * 当场判断会把所有折叠都误判成「没裁掉」。
+ */
+function scheduleFoldCheck(ctx: OverlayContext): void {
+  const run = () => {
+    const slot = ctx.historySlot as HTMLElement & { querySelectorAll?: (selector: string) => ArrayLike<HTMLElement> }
+    if (typeof slot.querySelectorAll !== 'function') return
+    const nodes = Array.from(slot.querySelectorAll('.ea-turn-a') as ArrayLike<HTMLElement>)
+    for (const node of nodes) {
+      if (node.getAttribute('data-folded') !== 'true') continue
+      const client = (node as HTMLElement & { clientHeight?: number }).clientHeight
+      const scroll = (node as HTMLElement & { scrollHeight?: number }).scrollHeight
+      if (typeof client !== 'number' || typeof scroll !== 'number' || !client) continue
+      if (scroll <= client + 2) {
+        node.setAttribute('data-folded', 'false')
+        const turn = (node as HTMLElement & { closest?: (selector: string) => HTMLElement | null }).closest?.('.ea-turn')
+        const more = turn?.querySelector?.('.ea-turn-more') as HTMLElement | undefined
+        if (more) more.hidden = true
+      }
+    }
+  }
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run)
+  else setTimeout(run, 0)
+}
+
+/**
+ * 历史区的渲染编排：算窗口 → 没变化就跳过 → 重画 → 只有「刚落地的一条」播进场。
+ *
+ * 跳过重画的理由不只是省事：updateOverlay 在流式期间每个分片都跑一次，
+ * 而历史区可能挂着十几轮 Markdown。签名里只放**会改变画面**的东西（窗口、条数、展开态、
+ * 每条的状态与长度），这样流式回答时历史区一次都不会被重挂，
+ * 顺带也避免了「每次重画都重播进场动画」。
+ */
+function renderHistory(ctx: OverlayContext, state: AssistantClientState): void {
+  const expand = ctx.pendingOlder || 0
+  ctx.pendingOlder = 0
+  const win = resolveHistoryWindow(state.records, ctx.historyWindow, expand)
+  if (win.total) {
+    const firstId = recordIdOf(win.items[0])
+    ctx.historyWindow = { ...(firstId ? { firstId } : {}), count: Math.max(1, win.end - win.start), atTail: win.atTail }
+  } else {
+    ctx.historyWindow = undefined
+  }
+
+  const newestId = recordIdOf(state.records[state.records.length - 1])
+  if (newestId && ctx.enteredTurnId !== undefined && newestId !== ctx.enteredTurnId) ctx.pendingEnterId = newestId
+  ctx.enteredTurnId = newestId || undefined
+
+  const sig = [
+    win.start, win.end, win.total,
+    state.hasEarlier ? 1 : 0,
+    state.loadingEarlier ? 1 : 0,
+    state.historyDetail?.recordId || '',
+    [...ctx.expandedIds].sort().join('+'),
+    state.records.map(record => recordIdOf(record) + ':' + String((record as { status?: unknown } | null)?.status || '') + ':' + recordAnswerText(record).length).join(','),
+  ].join('|')
+  if (sig === ctx.historySig) return
+  ctx.historySig = sig
+  fill(ctx.historySlot, historyNodes(state, ctx.plugin, ctx, win))
+  ctx.pendingEnterId = undefined
+  scheduleFoldCheck(ctx)
+}
+
+/** 第一次就绪时停在最新一轮（对话的习惯是打开就看见最后一条，而不是最顶上那条）。 */
+function scrollToNewestOnOpen(ctx: OverlayContext, state: AssistantClientState): void {
+  if (ctx.autoScrolled || !state.records.length) return
+  const body = ctx.body as HTMLElement & { getBoundingClientRect?: () => DOMRect }
+  const hist = ctx.historySlot as HTMLElement & { getBoundingClientRect?: () => DOMRect }
+  if (typeof body.getBoundingClientRect !== 'function' || typeof hist.getBoundingClientRect !== 'function') return
+  const bodyRect = body.getBoundingClientRect()
+  const histRect = hist.getBoundingClientRect()
+  // 还没挂到页面上（首次 renderOverlay 是在插进 DOM 之前调用的）时两者的矩形都是 0：
+  // 这时**不能**把「已自动滚动过」记下来，否则等真正有了布局就再也不会滚了
+  //（实测：首开停在最上面，最新一轮在 2000px 之外）。
+  if (!bodyRect.height || !histRect.height) return
+  ctx.autoScrolled = true
+  // 为什么延后一帧：这次 updateOverlay 里刚把历史填进去，同一帧内设置 scrollTop
+  // 会被浏览器钳回 0（实测：设 2196 后读回来是 0，滚动事件里记到的也是 0）。
+  // 放到下一个宏任务时布局已经稳定，再设就生效。
+  setTimeout(() => {
+    const b = ctx.body as HTMLElement & { getBoundingClientRect?: () => DOMRect }
+    const h = ctx.historySlot as HTMLElement & { getBoundingClientRect?: () => DOMRect }
+    if (typeof b.getBoundingClientRect !== 'function' || typeof h.getBoundingClientRect !== 'function') return
+    const br = b.getBoundingClientRect()
+    const hr = h.getBoundingClientRect()
+    const delta = hr.bottom - br.bottom + 14
+    if (Number.isFinite(delta) && delta > 0) b.scrollTop += delta
+  }, 0)
+}
+
 /** 状态变化时原地重画各区块。骨架、输入框、滚动位置都不动。 */
 export function updateOverlay(root: HTMLElement, state: AssistantClientState, plugin: OverlayProps['plugin']): void {
   const ctx = contexts.get(root)
@@ -1623,6 +1858,20 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     }
   }
 
+  // 切会话：窗口、展开态、进场标记全部换一份 —— 否则上一个会话「往上翻过」的窗口会带过来。
+  if (ctx.sessionId !== state.sessionId) {
+    ctx.sessionId = state.sessionId
+    ctx.historyWindow = undefined
+    ctx.historySig = undefined
+    ctx.expandedIds = new Set<string>()
+    ctx.enteredTurnId = undefined
+    ctx.pendingEnterId = undefined
+    ctx.pendingOlder = 0
+    ctx.anchor = undefined
+    ctx.scrollToTail = false
+    ctx.autoScrolled = false
+  }
+
   ctx.phase.textContent = phaseLabel(state)
 
   // ── 三档界面在这里分叉（判据与理由见 surfaceGate 的说明）────────────────────
@@ -1643,6 +1892,10 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     fill(ctx.evidenceSlot, [])
     fill(ctx.compactSlot, [])
     fill(ctx.historySlot, [])
+    ctx.historySig = undefined
+    ctx.pendingOlder = 0
+    ctx.liveTurn.hidden = true
+    ctx.liveQuestion.textContent = ''
     fill(ctx.detailSlot, [])
     ctx.ringSlot.replaceChildren()
     // A4（F1 的前置条件）：使用说明与快捷问题也必须清掉。
@@ -1681,6 +1934,10 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     fill(ctx.evidenceSlot, [])
     fill(ctx.compactSlot, [])
     fill(ctx.historySlot, [])
+    ctx.historySig = undefined
+    ctx.pendingOlder = 0
+    ctx.liveTurn.hidden = true
+    ctx.liveQuestion.textContent = ''
     fill(ctx.detailSlot, [])
     ctx.ringSlot.replaceChildren()
     // A4 同理：失败页也不许残留上一会话的使用说明与快捷问题。
@@ -1695,6 +1952,12 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   }
   fill(ctx.stateErrorSlot, [])
 
+  // 「落地」：这一问的回答已经作为记录进了历史 → 当前这一块收起来，避免同一条回答出现两次。
+  // 失败/中断没有落地（没有记录或记录未完成）时照常显示，用户得看到自己问过什么、为什么失败。
+  const landed = Boolean(state.liveRecordId) && state.records.some(record => recordIdOf(record) === state.liveRecordId)
+  const showLive = !landed && Boolean(state.question || state.text || isBusy(state))
+  ctx.liveTurn.hidden = !showLive
+  ctx.liveQuestion.textContent = showLive ? (state.question || '') : ''
   fill(ctx.currentSlot, [...currentStatusNodes(state, ctx.plugin), ...currentDetailNodes(state), ...offlineFallbackNodes(state)])
   // 正文：走增量渲染。
   //
@@ -1716,7 +1979,7 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
 
   fill(ctx.evidenceSlot, evidenceNodes(state, ctx.plugin))
   fill(ctx.compactSlot, compactNodes(state))
-  fill(ctx.historySlot, historyNodes(state, ctx.plugin))
+  renderHistory(ctx, state)
   fill(ctx.detailSlot, historyDetailNodes(state, ctx.plugin))
   // 换了一条记录来展开时把面板滚到可见处；同一记录的续读/重画不动滚动位置。
   const detailId = state.historyDetail?.recordId
@@ -1732,5 +1995,24 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   // 这样「加载/失败时禁用、回到 ready 后恢复」只有一处真相，不会两边漂移。
   ctx.send.textContent = sendLabel(state, 'ready')
   ctx.send.disabled = !canSubmit(state)
+  // 往上补历史之后把阅读位置还回去：量一下参照的那一轮现在跑到哪，把差值补进 scrollTop。
+  // 这是闭环的 —— 浏览器如果已经自己锚定过，这里量到的差值就是 0，不会双倍偏移。
+  if (ctx.anchor) {
+    const anchor = ctx.anchor
+    ctx.anchor = undefined
+    const turns = Array.from(ctx.historySlot.querySelectorAll('.ea-turn') as ArrayLike<HTMLElement>)
+    const node = turns.find(turn => turn.getAttribute('data-record-id') === anchor.id)
+    if (node) {
+      const now = node.getBoundingClientRect().top
+      const delta = now - anchor.top
+      if (Number.isFinite(delta) && Math.abs(delta) > 1) ctx.body.scrollTop += delta
+    }
+  }
+  if (ctx.scrollToTail) {
+    ctx.scrollToTail = false
+    const height = (ctx.body as HTMLElement & { scrollHeight?: number }).scrollHeight
+    if (typeof height === 'number' && Number.isFinite(height)) ctx.body.scrollTop = height
+  }
+  scrollToNewestOnOpen(ctx, state)
   // 注意：这里**不再回写 scrollTop**。见函数开头说明。
 }

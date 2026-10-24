@@ -54,6 +54,22 @@ export type AssistantClientState = {
   model?: ModelOption;
   phase: AssistantPhase;
   requestId?: string;
+  /**
+   * 这一问的原话。
+   *
+   * 之前 state 里**没有**存问题，只有回答：所以浮窗只能把「问句」画在历史卡片里，
+   * 正在流式回答的那一段上面看不到自己问的是什么。对话式界面必须有这个气泡
+   * （见 overlay 的 liveTurn），因此提交时写进来，切换会话/清理时清掉。
+   */
+  question?: string;
+  /**
+   * 刚刚落地的那条记录的 id（回答完成/中断时由 appendRecord 写入）。
+   *
+   * 用途只有一个：避免「同一条回答在页面上出现两次」——
+   * 一次在正在回答的那块，一次在历史里。落地后历史接管显示，
+   * 那块「当前回答」就收起来（见 overlay 的 liveLanded）。
+   */
+  liveRecordId?: string;
   reasoning: string;
   text: string;
   tools: ToolProgress[];

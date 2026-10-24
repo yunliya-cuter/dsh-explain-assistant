@@ -343,7 +343,7 @@ test('浮窗入口: 每条历史记录旁都有「查看完整内容」，点了
   try {
     const root = overlay.renderOverlay(base, plugin);
     assert.match(root.textContent, /查看完整内容/, '记录旁必须有可点入口（旧实现没有任何入口）');
-    const entry = root.querySelector('.ea-record-detail');
+    const entry = root.querySelector('.ea-turn-detail');
     assert.ok(entry, '入口必须挂在这条记录上');
     entry.click();
     assert.deepEqual(opened, ['rec-1'], '点击必须真的去取这条记录的完整内容');
