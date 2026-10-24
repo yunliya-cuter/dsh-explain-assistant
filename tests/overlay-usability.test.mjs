@@ -72,7 +72,20 @@ test('模型列表按提供方分组，并且整块是可折叠的', () => withD
   assert.ok(back, '选择页必须有「← 返回」');
   back.click();
   assert.equal(root.getAttribute('data-view'), 'chat', '返回后必须回到对话页');
-  assert.equal(root.querySelectorAll('.ea-model-option').length, 0, '关掉后选择页必须整棵从 DOM 摘掉');
+  // 退出是**动画**：这一刻节点还在、挂着 data-closing 播退场动画，播完才摘。
+  // （旧版是立即摘掉，用户看到的是「凭空消失」——这正是要改掉的手感。）
+  const closing = root.querySelectorAll('.ea-model-panel')[0];
+  assert.ok(closing, '关掉的一瞬间模型页还在（正在播退场动画）');
+  assert.equal(closing.getAttribute('data-closing'), 'true', '退场必须挂 data-closing（CSS 据此播 160ms 动画）');
+  assert.equal(closing.getAttribute('aria-hidden'), 'true', '退场中的页面不得再被读屏读到');
+  await new Promise(resolve => setTimeout(resolve, 240));
+  assert.equal(root.querySelectorAll('.ea-model-option').length, 0, '动画播完后选择页必须整棵从 DOM 摘掉');
+  assert.equal(root.querySelectorAll('.ea-model-panel').length, 0, '动画播完后选择页容器也不得残留');
+  // data-returning 不靠定时器清（动画被节流时定时器会把动画从中间掐断）：
+  // 它留到下一次打开时清掉，所以要验的是「再打开时它真的没了」。
+  root.querySelectorAll('.ea-model-trigger')[0].click();
+  assert.equal(root.getAttribute('data-view'), 'model', '再次点开必须回到选择页');
+  assert.equal(root.getAttribute('data-returning'), null, '再次打开时必须清掉上一次的「回对话」动画标记');
 }));
 
 // 上一版：占用圆环绝对定位在右下角，和「发送」按钮重叠。

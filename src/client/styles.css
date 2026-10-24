@@ -74,6 +74,9 @@
 .ea-btn-primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover,#245bdd);border-color:var(--dsw-alias-button-primary-hover,#245bdd)}
 
 /* ---------- 正文滚动区 ---------- */
+/* 浮窗的中间层：正文 + 输入区。模型选择页绝对定位盖在它上面（见下），
+   这样「输入区隐藏」造成的重排发生在遮挡物后面，看不见。 */
+.ea-main{position:relative;display:flex;flex:1 1 auto;flex-direction:column;min-height:0}
 .dsh-explain-assistant-content{
   display:flex;flex:1 1 auto;flex-direction:column;gap:12px;
   min-height:0;overflow-y:auto;overflow-x:hidden;
@@ -284,7 +287,7 @@
 .ea-model-trigger-prefix{flex:0 0 auto;font-size:11px;color:var(--dsw-alias-label-tertiary,#777)}
 .ea-model-trigger-prefix[hidden]{display:none}
 .ea-model-trigger-label{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ea-model-trigger-caret{flex:0 0 auto;font-size:9px;line-height:1;opacity:.65;transition:transform .18s cubic-bezier(.2,.8,.2,1)}
+.ea-model-trigger-caret{flex:0 0 auto;font-size:9px;line-height:1;opacity:.65;transition:transform var(--ea-page-in-dur,220ms) var(--ea-page-ease,cubic-bezier(.2,.85,.25,1))}
 .ea-model-trigger[aria-expanded=true] .ea-model-trigger-caret{transform:rotate(180deg)}
 .ea-model-trigger-warn{flex:0 0 auto;font-size:11px;color:var(--dsw-alias-state-warn-primary,#b45309)}
 .ea-model-trigger-warn[hidden]{display:none}
@@ -300,6 +303,9 @@
 .ea-model-trigger[data-warn=true]{border-color:var(--dsw-alias-state-warn-primary,#b45309)}
 /* 选择页开着时按钮是「还按着」的状态（写在最后一条，靠后者生效）。 */
 .ea-model-trigger[aria-expanded=true]{background:var(--dsw-alias-bg-layer-3,rgba(127,127,127,.16))}
+/* 关掉选择页会把焦点还给它（键盘用户需要）。但**鼠标**用户不该看到一个焦点框：
+   只在 :focus-visible（键盘/读屏）时画。 */
+.ea-model-trigger:focus:not(:focus-visible){outline:none}
 
 /*
  * 窄宽度（浮窗被拖到 420px 甚至最小 360px）时的标题栏。
@@ -336,13 +342,13 @@
  * 就要么被裁掉、要么自己再滚一层，而它还要跟标题栏拖动、八向拖边热区抢指针事件。
  * 整页没有这些约束：一页只做一件事，关掉就回到对话。
  */
-.ea-model-panel-slot{display:none}
-.ea-overlay[data-view=model] .ea-body{padding:0;gap:0;overflow:hidden}
-.ea-overlay[data-view=model] .ea-body > .ea-slot:not(.ea-model-panel-slot),
-.ea-overlay[data-view=model] .ea-body > article,
-.ea-overlay[data-view=model] .ea-body > .dsh-explain-assistant-selection-status{display:none}
-.ea-overlay[data-view=model] .ea-composer{display:none}
-.ea-overlay[data-view=model] .ea-model-panel-slot{display:flex;flex:1 1 auto;min-height:0}
+/* 页面槽：绝对定位盖住「正文 + 输入区」，自身不参与点击（里面那层才接事件）。 */
+.ea-model-panel-slot{position:absolute;inset:0;z-index:3;pointer-events:none;background:var(--dsw-alias-bg-base,#fff)}
+.ea-overlay[data-view=model] .ea-model-panel-slot{pointer-events:auto}
+/* 输入区只是「看不见」不是「不存在」：保留占位，避免打开瞬间正文高度跳一下。 */
+.ea-overlay[data-view=model] .ea-composer{visibility:hidden}
+.ea-overlay[data-view=model] .ea-body{pointer-events:none}
+.ea-model-panel[data-closing=true]{pointer-events:none}
 .ea-model-panel{display:flex;flex:1 1 auto;flex-direction:column;min-height:0;height:100%}
 
 /*
@@ -356,12 +362,60 @@
  *
  * 尊重系统的「减少动态效果」：开了该选项就完全不动画。
  */
-@media (prefers-reduced-motion: no-preference){
-  .ea-model-panel{animation:ea-view-in .18s cubic-bezier(.2,.8,.2,1) both}
-  .ea-overlay[data-view=chat] .ea-body{animation:ea-chat-in .14s ease-out both}
+/*
+ * ── 两页切换的动效（这一版是照着动作本身设计的，不是随手加个淡入）────────────
+ *
+ * 动作是什么：标题栏上按了一下 → 内容从「对话」换成「模型选择」。这是**前进一层**，
+ * 关掉是**退回一层**。所以：
+ *   进：新页面从右往左 20px 就位（ease-out，先快后慢，像被推上来）
+ *       旧页面同时往左退 12px 并淡出（更快、加速曲线，像被推走）
+ *   回：反过来。新页面（对话）从左边 12px 就位，旧页面（模型页）往右退 20px 淡出。
+ * 两页**同时**动，方向相反 —— 这才是「换页」，不是「弹出一个框」。
+ *
+ * 为什么不是上下滑：标题栏在上面，页面本来就从标题栏下面展开，纵向位移表达不出
+ * 「又开了一层」（那更像提示条）。横向位移是导航的通用语汇。
+ *
+ * 时长/曲线分成两组，进入比退出慢一点（退出快一点才不挡路）：
+ *   进 220ms cubic-bezier(.2,.85,.25,1)   —— 减速，收尾稳
+ *   出 160ms cubic-bezier(.4,0,.9,.5)     —— 加速，干脆
+ * 只动 transform / opacity，不动 width/height/left，避免每帧重排。
+ *
+ * 退出动画需要「先播完再摘节点」，所以关页面时 JS 会挂 data-closing，
+ * 播完（160ms 后）才把节点摘掉 —— 摘早了你只会看到它凭空消失。
+ */
+.ea-overlay{
+  --ea-page-in-dur:220ms;--ea-page-out-dur:160ms;
+  --ea-page-ease:cubic-bezier(.2,.85,.25,1);
+  --ea-page-ease-out:cubic-bezier(.4,0,.9,.5);
 }
-@keyframes ea-view-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-@keyframes ea-chat-in{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion: no-preference){
+  /* 进：模型页就位 */
+  .ea-overlay[data-view=model] .ea-model-panel{animation:ea-page-in var(--ea-page-in-dur) var(--ea-page-ease) both}
+  /* 进：对话页被推走 */
+  .ea-overlay[data-view=model] .ea-body{animation:ea-chat-recede var(--ea-page-out-dur) var(--ea-page-ease-out) both}
+  /* 回：对话页回到原位（由 JS 在关闭时挂 data-returning，只在这一刻播） */
+  .ea-overlay[data-returning=true] .ea-body{animation:ea-chat-return var(--ea-page-in-dur) var(--ea-page-ease) both}
+  /* 回：模型页退场（JS 挂 data-closing） */
+  .ea-model-panel[data-closing=true]{animation:ea-page-out var(--ea-page-out-dur) var(--ea-page-ease-out) both}
+}
+.ea-model-panel{position:relative}
+/* 层叠感：新页面「压在」旧页面上面。左缘一道很淡的渐变阴影，随页面就位淡掉 ——
+   没有它，两页只是交叉淡入淡出，看的人分不出哪一层在上面（那就是「随便做的」的观感来源）。
+   用伪元素 + opacity 而不是动 box-shadow：仍然只动合成层，不重绘。 */
+.ea-model-panel::before{
+  content:'';position:absolute;left:-16px;top:0;bottom:0;width:16px;pointer-events:none;
+  background:linear-gradient(to right,rgba(0,0,0,.12),rgba(0,0,0,0));
+}
+.ea-overlay[data-view=model] .ea-model-panel::before{animation:ea-edge-fade var(--ea-page-in-dur) var(--ea-page-ease) both}
+@keyframes ea-edge-fade{from{opacity:1}to{opacity:0}}
+/* 内容比容器晚一点点落位（70ms）：页面先到、内容再坐稳。
+   只给列表做主次，不逐个给每一行加延迟 —— 那在小窗口里会显得碎。 */
+.ea-overlay[data-view=model] .ea-model-panel-list{animation:ea-settle 200ms var(--ea-page-ease) 70ms both}
+@keyframes ea-settle{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+@keyframes ea-page-in{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
+@keyframes ea-page-out{from{opacity:1;transform:none}to{opacity:0;transform:translateX(24px)}}
+@keyframes ea-chat-recede{from{opacity:1;transform:none}to{opacity:0;transform:translateX(-14px)}}
+@keyframes ea-chat-return{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:none}}
 .ea-model-panel-head{
   display:flex;align-items:center;gap:8px;flex:0 0 auto;
   padding:8px 10px;

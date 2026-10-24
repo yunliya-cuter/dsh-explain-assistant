@@ -99,7 +99,11 @@ test('overlay: 选模型失败时回滚已选状态并给出中文错误', async
     // 选完必须立刻回到对话页（点模型是为了继续问，不是继续看列表）。
     // 这条是新增的：旧版没有「选择页」这个概念，也就没有「选完要关掉」这回事。
     assert.equal(root.getAttribute('data-view'), 'chat', '选完模型后必须回到对话页');
-    assert.equal(root.querySelectorAll('.ea-model-option').length, 0, '选完后选择页必须整棵从 DOM 摘掉');
+    // 选完同样是「退一层」：这一帧模型页还在播退场动画，播完才摘。
+    assert.equal(root.querySelectorAll('.ea-model-panel')[0]?.getAttribute('data-closing'), 'true',
+      '选完后模型页必须进入退场状态（data-closing）');
+    await new Promise(resolve => setTimeout(resolve, 240));
+    assert.equal(root.querySelectorAll('.ea-model-option').length, 0, '动画播完后选择页必须整棵从 DOM 摘掉');
     const rollback = updates.find(u => u.model && u.model.provider === 'old');
     assert.ok(rollback, '失败后必须把 model 回滚到选择前的值');
     const errorPatch = updates.find(u => typeof u.error === 'string');

@@ -610,11 +610,32 @@ function ensureModelPanel(ctx: OverlayContext): ModelPanel {
   return ctx.modelPanel
 }
 
+/**
+ * 出场动画时长。刻意**大于** styles.css 的 --ea-page-out-dur（160ms）：
+ * 退场是两页同时动（模型页往右退 160ms、对话页从左侧 220ms 回来），
+ * 若在 160ms 就把节点摘掉，遇到低帧率会出现「两页都不在」的一帧 —— 闪一下白。
+ * 留到 220ms 摘，等于等两页都就位再收摊。
+ */
+const MODEL_EXIT_MS = 220
+
+function prefersReducedMotion(): boolean {
+  // 假 DOM 里没有 matchMedia：当作「可以播动画」，这样测试跑的是带过渡的真实路径。
+  return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
 function openModelPanel(ctx: OverlayContext): void {
+  // 上一次关闭的「延迟摘除」还没执行就又打开了：取消它，复用同一个节点。
+  ctx.modelCloseToken++
   const panel = ensureModelPanel(ctx)
+  if (panel.root.hasAttribute('data-closing')) {
+    panel.root.removeAttribute('data-closing')
+    panel.root.removeAttribute('aria-hidden')
+  }
   ctx.modelQuery = ''
   if (panel.search.value) panel.search.value = ''
   ctx.modelOpen = true
+  // 回到对话页时挂的 data-returning 必须摘掉，否则它会一直把对话页按在「刚回来」的那一帧。
+  ctx.root.removeAttribute('data-returning')
   ctx.root.setAttribute('data-view', 'model')
   ctx.modelTrigger.root.setAttribute('aria-expanded', 'true')
   renderModelPanel(ctx)
@@ -628,14 +649,40 @@ function openModelPanel(ctx: OverlayContext): void {
  * @param options.focus 是否把焦点还给标题栏按钮。宿主把界面切到加载/失败档时用 false ——
  *   那一刻按钮本身是隐藏的，把焦点塞进一个看不见的按钮只会让键盘用户丢失位置。
  */
-function closeModelPanel(ctx: OverlayContext, options: { focus?: boolean } = {}): void {
+function closeModelPanel(ctx: OverlayContext, options: { focus?: boolean; animate?: boolean } = {}): void {
   const wasOpen = ctx.modelOpen
+  const panel = ctx.modelPanel
   ctx.modelOpen = false
-  ctx.root.setAttribute('data-view', 'chat')
   ctx.modelTrigger.root.setAttribute('aria-expanded', 'false')
-  // 整个选择页摘掉（见 ensureModelPanel 的说明：关着的页面不该在 DOM 里留下文案与按钮）。
-  fill(ctx.modelPanelSlot, [])
-  ctx.modelPanel = undefined
+  // data-view 立刻切回 chat：这一帧开始「对话页回来」的动画，而模型页还在上面播退场。
+  ctx.root.setAttribute('data-view', 'chat')
+
+  const animate = options.animate !== false && Boolean(panel) && wasOpen && !prefersReducedMotion()
+  if (animate && panel) {
+    // 退场：先挂 data-closing 让 CSS 播 160ms，**播完再摘**。摘早了你只会看到它凭空消失。
+    panel.root.setAttribute('data-closing', 'true')
+    panel.root.setAttribute('aria-hidden', 'true')
+    const token = ++ctx.modelCloseToken
+    setTimeout(() => {
+      // 期间又点开了：这个 token 已经过期，别把新面板删掉。
+      if (ctx.modelCloseToken !== token || ctx.modelPanel !== panel) return
+      fill(ctx.modelPanelSlot, [])
+      ctx.modelPanel = undefined
+    }, MODEL_EXIT_MS)
+  } else {
+    fill(ctx.modelPanelSlot, [])
+    ctx.modelPanel = undefined
+  }
+
+  if (wasOpen) {
+    // 对话页「回来」的入场动画：只在真的从模型页退回来时播，不在每次打开浮窗时播。
+    //
+    // 标记刻意**不用定时器清除**：动画用了 fill:both，播完停在「自然状态」，
+    // 留着它什么也不会多做；而定时器清除会有个真问题 —— 动画被浏览器节流时
+    // （后台标签页）JS 计时器照走，会在动画播到一半时把标记摘掉，画面直接跳一下。
+    // 它由下一次 openModelPanel 负责清掉（那时正好也是该重播的时机）。
+    ctx.root.setAttribute('data-returning', 'true')
+  }
   if (wasOpen && options.focus !== false) ctx.modelTrigger.root.focus?.({ preventScroll: true })
 }
 
@@ -1131,6 +1178,8 @@ type OverlayContext = {
   modelTrigger: ModelTrigger
   /** 选择页里的筛选词。关掉选择页时清空，重开不带上次的筛选。 */
   modelQuery: string
+  /** 关闭动画的代号：每次开/关都自增，用来丢弃过期的「延迟摘除」。 */
+  modelCloseToken: number
   evidenceSlot: HTMLElement
   compactSlot: HTMLElement
   historySlot: HTMLElement
@@ -1260,7 +1309,7 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   // 未就绪/失败时它们是唯一有内容的东西，用户第一眼看到的就是它（不是空态列表）。
   const loadingSlot = el('div', { class: 'ea-slot ea-loading-slot' })
   const stateErrorSlot = el('div', { class: 'ea-slot ea-state-error-slot' })
-  body.append(stateErrorSlot, loadingSlot, catalogNoteSlot, detailSlot, errorSlot, currentSlot, answerSlot, heroSlot, quickSlot, evidenceSlot, compactSlot, historySlot, modelPanelSlot, selectionStatus)
+  body.append(stateErrorSlot, loadingSlot, catalogNoteSlot, detailSlot, errorSlot, currentSlot, answerSlot, heroSlot, quickSlot, evidenceSlot, compactSlot, historySlot, selectionStatus)
 
   const input = el('textarea', { class: 'ea-input', placeholder: '问小助手主 agent 正在做什么…', 'aria-label': '向解释小助手提问', rows: '2' }) as HTMLTextAreaElement
   const send = button(isBusy(state) ? '处理中' : '发送', '发送问题', () => { form.requestSubmit() }, { class: 'ea-btn ea-btn-primary ea-send' })
@@ -1302,7 +1351,11 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   const geometry = clampGeometry(state.geometry ?? initialGeometry, window.innerWidth, window.innerHeight)
   root.style.left = geometry.x + 'px'; root.style.top = geometry.y + 'px'
   root.style.width = geometry.width + 'px'; root.style.height = geometry.height + 'px'
-  root.append(titlebar, body, form, ...resizeZones.map(zone => zone.element), resize)
+  // 中间层：正文 + 输入区 + 模型页槽。模型页绝对定位盖满它，
+  // 于是「打开时输入区隐藏」造成的重排发生在遮挡物后面（看不见）。
+  const main = el('div', { class: 'ea-main' })
+  main.append(body, form, modelPanelSlot)
+  root.append(titlebar, main, ...resizeZones.map(zone => zone.element), resize)
 
   const ctx: OverlayContext = {
     state, plugin: like, body, phase, selectionStatus, controller: undefined as unknown as WindowController, appliedGeometry: undefined,
@@ -1312,7 +1365,7 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     loadingSlot, stateErrorSlot, root,
     // 默认折叠模型列表：一开就摊开 33 个模型会把「使用说明 + 快捷问题」顶出可视区。
     // 未选模型时由摘要行 + 醒目的提示承担「先选一个」的引导（§7/§11.8）。
-    form, input, send, modelOpen: false, modelQuery: '',
+    form, input, send, modelOpen: false, modelQuery: '', modelCloseToken: 0,
     rerender: () => updateOverlay(root, ctx.state, ctx.plugin),
   }
   contexts.set(root, ctx)
@@ -1435,7 +1488,7 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     ctx.answerSlot.hidden = true
     ctx.answerView.update('', false)
     resetModelTrigger(ctx)
-    closeModelPanel(ctx, { focus: false })
+    closeModelPanel(ctx, { focus: false, animate: false })
     fill(ctx.catalogNoteSlot, [])
     fill(ctx.evidenceSlot, [])
     fill(ctx.compactSlot, [])
@@ -1471,7 +1524,7 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     ctx.answerSlot.hidden = true
     ctx.answerView.update('', false)
     resetModelTrigger(ctx)
-    closeModelPanel(ctx, { focus: false })
+    closeModelPanel(ctx, { focus: false, animate: false })
     fill(ctx.catalogNoteSlot, [])
     fill(ctx.evidenceSlot, [])
     fill(ctx.compactSlot, [])
