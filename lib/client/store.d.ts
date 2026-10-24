@@ -14,6 +14,11 @@ export type EvidenceItem = {
     truncated?: boolean;
     incomplete?: boolean;
     sessionId?: string;
+    /**
+     * 选中时写在那张卡片上的锚点（DOM 的 data-ea-pick）。
+     * 只用于客户端把高亮/编号找回来，**不进宿主契约**（record.ts 的 fromSelectedEvidence 只挑白名单字段）。
+     */
+    pickId?: string;
     [key: string]: unknown;
 };
 type ToolProgress = {

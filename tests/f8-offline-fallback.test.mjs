@@ -158,6 +158,13 @@ test('F8 行为级: 先成功再遇到模型不可用时，旧记录与降级说
     const frozenSnapshot = JSON.stringify(successRecord);
     assert.match(JSON.stringify(successRecord), /第一次的成功回答/, '成功记录里必须含回答正文');
 
+    // 本轮新行为：**回答落地后选择自动重置**（用户要求「每次问完一个问题就重置」）。
+    // 这里先钉住它，再重新选一次 —— F8 要验的是「失败时既有依据仍在」，
+    // 不是「成功那一问之后还留着」；不重选的话，这条测试会拿「已被正常重置」
+    // 当成「依据被清掉了」，把两件相反的事混在一条断言里。
+    assert.equal(afterFirst.evidence.length, 0, '回答落地后应自动清空选择');
+    plugin.registry.update('s', { evidence: SELECTED });
+
     // —— 第二步：模型服务消失，再问一次 ——
     // 改的是宿主真正持有的那个服务对象（startIndexHost 已把它暴露出来）
     host.llm.stream = undefined;

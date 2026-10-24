@@ -385,6 +385,10 @@
  */
 .ea-overlay{
   --ea-page-in-dur:220ms;--ea-page-out-dur:160ms;
+  /* 选择相关的动效时长：进 180ms / 退 140ms。
+     与页面切换（220/160）同一族但更快 —— 选一条内容是个小动作，
+     用整页的时长会显得拖；用同样的曲线族才不会像另一套东西。 */
+  --ea-pick-in-dur:180ms;--ea-pick-out-dur:140ms;
   --ea-page-ease:cubic-bezier(.2,.85,.25,1);
   --ea-page-ease-out:cubic-bezier(.4,0,.9,.5);
 }
@@ -488,6 +492,16 @@
 .ea-evidence-title{font-size:12.5px;word-break:break-all}
 .ea-meta{font-size:11px;color:var(--dsw-alias-label-tertiary,#777);white-space:nowrap;flex:0 0 auto}
 .ea-evidence-summary{margin:2px 0 0;font-size:12.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary,#444)}
+/* 明细默认收起：输入框上方那排标签已经回答了「选了哪几条」，
+   想看原文/分级再展开 —— 上一版这张卡是常驻的，4000 字原文把答案顶出可视区。 */
+.ea-evidence-details{padding:0}
+.ea-evidence-fold{display:flex;align-items:center;gap:8px;padding:10px 12px;cursor:pointer;list-style:none}
+.ea-evidence-fold::-webkit-details-marker{display:none}
+.ea-evidence-fold::before{content:'▸';font-size:10px;color:var(--dsw-alias-label-tertiary,#777);transition:transform 160ms cubic-bezier(.2,.85,.25,1)}
+.ea-evidence-details[open] .ea-evidence-fold::before{transform:rotate(90deg)}
+.ea-evidence-fold-hint{margin-left:auto;font-size:11px;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-evidence-details[open] .ea-evidence-fold-hint{display:none}
+.ea-evidence-details .ea-evidence-row{padding:0 12px 10px}
 
 /* ---------- 历史 ---------- */
 .ea-record{display:flex;flex-direction:column;gap:5px;padding-top:9px;border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1))}
@@ -677,7 +691,11 @@
   outline:2px solid var(--dsw-alias-button-primary-fill,#2f6bff);
   outline-offset:1px;
 }
-/* ---------- §5.2 正在围绕哪条内容提问（输入框上方常驻） ---------- */
+/* ---------- §5.2 「这一问围绕哪几条」（输入框上方常驻） ----------
+   上一版这里只有一句话：「正在围绕这条内容提问：assistant-step  取消」。
+   三个问题：英文标识看不懂、只能一次清空全部、看不出对应主对话里的哪一块。
+   现在每条一个标签：编号 + 中文类型 + 摘要 + ×；整行随条数增减做高度过渡，
+   第一枚出现时不会把上面的正文顶得一跳。 */
 .ea-target-bar{
   display:flex;align-items:center;gap:6px;flex-wrap:wrap;
   margin:0 0 6px;padding:6px 9px;
@@ -686,12 +704,116 @@
   background:var(--dsw-alias-bg-layer-1,rgba(47,107,255,.08));
   border-left:3px solid var(--dsw-alias-button-primary-fill,#2f6bff);
   border-radius:0 7px 7px 0;
+  /* 只过渡 max-height（有界值）：过渡 height:auto 浏览器做不到，而逐帧量高度会让整列重排 */
+  max-height:120px;overflow:hidden;
+  transition:max-height var(--ea-pick-in-dur,180ms) var(--ea-page-ease,cubic-bezier(.2,.85,.25,1)),
+             opacity var(--ea-pick-in-dur,180ms) var(--ea-page-ease,cubic-bezier(.2,.85,.25,1)),
+             padding var(--ea-pick-in-dur,180ms) var(--ea-page-ease,cubic-bezier(.2,.85,.25,1)),
+             margin-bottom var(--ea-pick-in-dur,180ms) var(--ea-page-ease,cubic-bezier(.2,.85,.25,1));
 }
-.ea-target-bar:empty,.ea-target-bar:not([data-has-target]){display:none}
-.ea-target-label{color:var(--dsw-alias-label-secondary,#555)}
-.ea-target-title{font-weight:600;word-break:break-word}
-.ea-target-more{color:var(--dsw-alias-label-tertiary,#777)}
-.ea-target-clear{margin-left:auto}
+.ea-target-bar:empty{display:none}
+/* 收起态由 JS 写 data-has-target=false：留一个「还有标签在退场」的空档，
+   等最后一条淡出播完再真正收起来。 */
+.ea-target-bar[data-has-target=false]{
+  max-height:0;opacity:0;padding-top:0;padding-bottom:0;margin-bottom:0;border-left-width:0;
+}
+.ea-pick-lead{flex:0 0 auto;color:var(--dsw-alias-label-secondary,#555);white-space:nowrap}
+.ea-pick-chip{
+  display:inline-flex;align-items:center;gap:6px;max-width:100%;
+  padding:2px 3px 2px 6px;
+  background:var(--dsw-alias-bg-base,#fff);
+  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.14));
+  border-radius:999px;
+  box-shadow:0 1px 2px rgba(0,0,0,.05);
+}
+/* 分级（§6.3）：这个小圆点说明「这条是实际结果还是主 agent 的说法」，颜色与正文折叠区一致 */
+.ea-pick-chip::before{
+  content:'';flex:0 0 auto;width:7px;height:7px;border-radius:50%;
+  background:var(--dsw-alias-label-tertiary,#8a8f98);
+}
+.ea-pick-chip[data-tier=observed]::before{background:var(--dsw-alias-state-success-primary,#15803d)}
+.ea-pick-chip[data-tier=reported]::before{background:var(--dsw-alias-state-warn-primary,#b45309)}
+.ea-pick-index{
+  flex:0 0 auto;min-width:16px;height:16px;padding:0 3px;border-radius:999px;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:10.5px;font-weight:600;
+  color:var(--dsw-alias-label-primary-inverted,#fff);
+  background:var(--dsw-alias-button-primary-fill,#2f6bff);
+}
+.ea-pick-label{flex:0 0 auto;font-weight:600;white-space:nowrap}
+.ea-pick-snippet{flex:1 1 auto;min-width:0;color:var(--dsw-alias-label-secondary,#555);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ea-pick-remove{
+  flex:0 0 auto;width:18px;height:18px;padding:0;border:0;border-radius:50%;
+  background:transparent;color:var(--dsw-alias-label-tertiary,#666);
+  font-size:13px;line-height:1;cursor:pointer;
+}
+.ea-pick-remove:hover{background:rgba(127,127,127,.16);color:var(--dsw-alias-label-primary,#111)}
+/* 入场：从上方 4px 处落下来 + 淡入 —— 观感是「这一块从主对话被提到输入框上方」。
+   退场：往上 2px 淡出，140ms（比入场快）：离开不需要被看清，但也不能凭空消失。 */
+@keyframes ea-pick-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+@keyframes ea-pick-out{from{opacity:1;transform:none}to{opacity:0;transform:translateY(-2px)}}
+@media (prefers-reduced-motion: no-preference){
+  .ea-pick-chip{animation:ea-pick-in var(--ea-pick-in-dur,180ms) var(--ea-page-ease,cubic-bezier(.2,.85,.25,1)) both}
+  .ea-pick-chip[data-leaving=true]{animation:ea-pick-out var(--ea-pick-out-dur,140ms) var(--ea-page-ease-out,cubic-bezier(.4,0,.9,.5)) both}
+}
+
+/* ---------- 主对话里的「已选」标记 ----------
+   只加属性、不插节点：主对话是宿主的 React 渲染结果，往里面插可交互节点会干扰它
+   （§2 不打扰主 agent）。描边 + 淡色底是为了让「哪一块被选中了」在**点它的地方**
+   就能看见 —— 上一版这里一个像素都不会变。 */
+[data-ea-picked]{
+  /* 强调色**不能**用 --dsw-alias-button-primary-fill：在真实页面里量过，
+     这个令牌在主对话的作用域里解析成 rgb(223,225,230)（一种浅灰），
+     画上去等于没画 —— 这正是「选中了却看不出来」的直接原因。
+     浮窗里的同名令牌是另一套值（蓝），所以这里改成自带一个明确的蓝。 */
+  --ea-pick-accent:#2f6bff;
+  position:relative;border-radius:10px;cursor:pointer;
+  background-color:rgba(47,107,255,.10);
+  background-color:color-mix(in srgb, var(--ea-pick-accent) 10%, transparent);
+  box-shadow:0 0 0 2px var(--ea-pick-accent);
+  transition:background-color 180ms cubic-bezier(.2,.85,.25,1), box-shadow 180ms cubic-bezier(.2,.85,.25,1);
+}
+@media (prefers-color-scheme: dark){
+  /* 深色底上 2f6bff 偏暗，提亮一档，保证描边与淡色底都还看得见 */
+  [data-ea-picked]{--ea-pick-accent:#7aa2ff;background-color:rgba(122,162,255,.12)}
+}
+/* 编号徽标：与输入框上方标签上的编号同源（data-ea-pick-index），两处一眼对得上。 */
+[data-ea-picked]::after{
+  content:attr(data-ea-pick-index);
+  /* 徽标贴在卡片右上角；卡片比视口还高时它会滚出去 —— 所以描边与淡色底必须
+     自己就足够说明「这一块被选中了」，徽标只是补充编号。 */
+  position:absolute;top:-9px;right:10px;z-index:4;
+  min-width:18px;height:18px;padding:0 5px;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:600;line-height:1;
+  color:var(--dsw-alias-label-primary-inverted,#fff);
+  background:var(--ea-pick-accent,#2f6bff);
+  border-radius:999px;
+  box-shadow:0 1px 3px rgba(0,0,0,.2);
+  pointer-events:none;
+}
+@keyframes ea-pick-badge-in{from{opacity:0;transform:scale(.72)}to{opacity:1;transform:none}}
+@keyframes ea-pick-badge-out{from{opacity:1;transform:none}to{opacity:0;transform:scale(.85)}}
+/* 退场：JS 先挂 leaving（保留过渡），160ms 后才摘属性 —— 直接摘属性就是「啪」一下消失。 */
+[data-ea-picked=leaving]{
+  background-color:transparent;
+  box-shadow:0 0 0 0 transparent;
+  cursor:progress;
+  transition:background-color 160ms cubic-bezier(.4,0,.9,.5), box-shadow 160ms cubic-bezier(.4,0,.9,.5);
+}
+[data-ea-picked=leaving]::after{animation:ea-pick-badge-out 140ms ease-out both}
+@media (prefers-reduced-motion: no-preference){
+  [data-ea-picked]::after{animation:ea-pick-badge-in 180ms cubic-bezier(.2,.85,.25,1) both}
+}
+/* 选择模式：鼠标扫过哪些块可以点，得先看得出来。虚线 + 十字光标是这个动作的通用语言。 */
+html[data-ea-selecting] [data-chat-node-key]:hover,
+html[data-ea-selecting] [data-tool]:hover{
+  outline:1px dashed var(--ea-pick-accent,#2f6bff);
+  outline-offset:2px;cursor:crosshair;
+}
+@media (prefers-reduced-motion: reduce){
+  [data-ea-picked],[data-ea-picked=leaving],.ea-pick-chip,.ea-target-bar{transition:none;animation:none}
+}
 /* ---------- §7/§10 模型不可用时的降级层 ---------- */
 .ea-offline{margin:8px 0;padding:9px 10px;background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06));border-radius:8px}
 .ea-offline-list{margin:6px 0 0;padding-left:18px}

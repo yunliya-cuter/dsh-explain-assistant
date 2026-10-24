@@ -119,15 +119,18 @@ test('B6: 输入框上方有常驻标识，且写明正在围绕哪一条', asyn
   };
   const r = render(state);
   try {
-    assert.match(r.text, /正在围绕这条内容提问/, '必须有固定标识');
+    // 上一版这里是一句话（「正在围绕这条内容提问：read_file 步骤」），现在换成一行标签：
+    // 引子「这一问围绕」+ 每条一个带编号的中文标签。要求没变 —— 位置固定、写清楚是哪一条。
+    assert.match(r.text, /这一问围绕/, '必须有固定标识');
     assert.match(r.text, /read_file 步骤/, '标识里必须写出是哪一条');
+    assert.match(r.text, /这条是选中的依据正文/, '标签里必须带摘要，否则「哪一条」认不出来');
   } finally { await r.settle(); }
 });
 
 test('B6: 没有选中依据时不留空条', async () => {
   const r = render({ ...baseState, phase: 'idle', evidence: [] });
   try {
-    assert.equal(/正在围绕这条内容提问/.test(r.text), false, '没选依据时不得显示标识');
+    assert.equal(/这一问围绕/.test(r.text), false, '没选依据时不得显示标识（连引子都不能留）');
   } finally { await r.settle(); }
 });
 

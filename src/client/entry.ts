@@ -2,6 +2,7 @@ import { createClientPlugin } from './index.js';
 import { renderOverlay, updateOverlay } from './overlay.js';
 import { readAppliedGeometry } from './window.js';
 import { attachSelection } from './selection.js';
+import { syncPickMarks } from './pick-marks.js';
 import { createArchiveWatcher } from './archive-watch.js';
 import { headerButtonText, headerButtonTitle, watchUnread } from './header-badge.js';
 import { shouldMountOverlay, isOpening, watchOpening, openingLabel, openingTitle } from './open-gate.js';
@@ -193,27 +194,55 @@ export function apply(ctx: any): void {
         const previousGeometry = lastGeometryRef.current;
         host.replaceChildren();
         let controller: { dispose(): void } | undefined;
-        let selection: { dispose(): void } | undefined;
+        let selection: ReturnType<typeof attachSelection> | undefined;
         const current = registry.current;
         if (shouldMount && current?.open) {
           const element = renderOverlay(current, plugin, previousGeometry);
           host.appendChild(element);
-          const onSelectMode = () => {
-            selection?.dispose();
-            const boundSession = current.sessionId;
-            selection = attachSelection(document, boundSession, (item) => {
+          /*
+           * 选择控制器**只挂一次**（整棵浮窗的生命周期），不再「每次进入选择模式重挂一遍」。
+           *
+           * 理由：现在除了「模式内点一条 = 选中」之外，还有一条**模式外**的活路径 ——
+           * 点已经高亮的卡片 = 取消。两条路径都由同一个控制器分发，重挂会让取消路径
+           * 随着模式开关一起消失，等于又回到「要取消得先重新进模式」。
+           */
+          const boundSession = current.sessionId;
+          selection = attachSelection(document, boundSession, {
+            select: (item, element) => {
               // §8 切换主对话不串记录：onSelect 闭包烙的是挂监听那一刻的会话。
               // 若用户开着选择模式立刻切会话，React 的 effect 清理是异步的，旧监听器
               // 可能晚一拍才 dispose；这期间一次点击会把证据写进旧会话。落证据前再确认
               // 它仍是当前会话，否则丢弃。
               if (registry.currentSessionId !== boundSession) return;
+              // **立刻**把高亮挂上去，不等下面那轮重画。
+              // 进一次状态要过一次 React 调度 + 整块 updateOverlay，长会话里实测能到
+              // 一两百毫秒；用户已经把鼠标松开、眼睛盯着那一块，这段空白就是「点了没反应」。
+              // 这一笔是乐观显示：重画后 syncPickMarks 会按真实状态校正（编号/是否保留）。
+              const anchor = String(item.pickId || item.id || '');
+              if (anchor && element && typeof element.setAttribute === 'function') {
+                element.setAttribute('data-ea-pick', anchor);
+                element.setAttribute('data-ea-picked', anchor);
+                const nextIndex = (registry.get(boundSession)?.evidence.length ?? 0) + 1;
+                element.setAttribute('data-ea-pick-index', String(nextIndex));
+              }
               registry.update(boundSession, state => { state.evidence = [...state.evidence.filter(existing => existing.id !== item.id), item]; });
               const detail = { sessionId: boundSession, item };
               if (typeof document.dispatchEvent === 'function') document.dispatchEvent(new CustomEvent('dsh-explain-assistant:evidence-selected', { detail }));
-            });
-          };
+            },
+            // 取消按**锚点**走，不按 id：工具卡片没有会话键，id 会退化成工具名，
+            // 两张 bash 卡片就会一起消失（见 selection.ts 的 ensurePickId）。
+            deselect: (pickId) => {
+              if (registry.currentSessionId !== boundSession) return;
+              registry.update(boundSession, state => {
+                state.evidence = state.evidence.filter(existing => existing.pickId !== pickId && existing.id !== pickId);
+              });
+            },
+          });
+          const onSelectMode = () => selection?.enter();
+          const onSelectExit = () => selection?.exit();
           document.addEventListener('dsh-explain-assistant:select', onSelectMode);
-          controller = { dispose: () => { document.removeEventListener('dsh-explain-assistant:select', onSelectMode); selection?.dispose(); element.dispatchEvent(new Event('dsh-explain-assistant:dispose')); element.remove(); } };
+          document.addEventListener('dsh-explain-assistant:select-exit', onSelectExit);
+          controller = { dispose: () => { document.removeEventListener('dsh-explain-assistant:select', onSelectMode); document.removeEventListener('dsh-explain-assistant:select-exit', onSelectExit); selection?.dispose(); syncPickMarks(document, []); element.dispatchEvent(new Event('dsh-explain-assistant:dispose')); element.remove(); } };
         }
         return () => {
           // 摘除**之前**把这一刻的实际几何记下来 —— 这是下一次重建能「原地不动」的唯一依据。
@@ -221,6 +250,20 @@ export function apply(ctx: any): void {
           controller?.dispose(); selection?.dispose(); host.replaceChildren();
         };
       }, [open, sessionId, shouldMount]);
+
+      /**
+       * 主对话那边的「已选」标记。
+       *
+       * 跟着状态走：取消一条、回答落地后自动清空、切会话、关浮窗 —— 卡片上的高亮
+       * 必须在同一帧跟着消失。否则用户会看到一张还亮着、其实已经不在选择里的卡片，
+       * 而那正是「不知道现在到底选了什么」的来源。
+       *
+       * 没有依赖数组是故意的：registry 每次变化都会重画，标记也要跟着重算。
+       * syncPickMarks 自己做了「值没变就不写属性」的短路，重复调用不会制造 mutation。
+       */
+      React.useEffect(() => {
+        syncPickMarks(document, state?.open && shouldMount ? (state?.evidence ?? []) : []);
+      });
 
       // 其余状态变化：原地重画。这里不再重建 DOM，所以草稿、光标、滚动位置都保得住。
       React.useEffect(() => {

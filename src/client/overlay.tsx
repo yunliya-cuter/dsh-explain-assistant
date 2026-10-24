@@ -377,7 +377,7 @@ function heroNodes(state: AssistantClientState): Child[] {
   return [el('section', { class: 'ea-hero', 'aria-label': '使用说明' },
     el('p', { class: 'ea-hero-title', text: '小助手在旁边看着主 agent，随时把「它正在干什么」讲成白话。' }),
     el('ul', { class: 'ea-hero-list' },
-      el('li', { text: '点右上角「选择主对话内容」，再点主对话里的一条步骤卡片，就能针对那一步提问。' }),
+      el('li', { text: '点右上角「选择主对话内容」，再点主对话里的一条内容，就能针对它提问；再点同一张卡片可以取消。' }),
       el('li', { text: '也可以直接在下面输入问题，或者点上面的快捷问题。' }),
       el('li', { text: '小助手只读：不改主 agent、不执行命令、不碰主对话的输入框。' }),
     ),
@@ -861,18 +861,155 @@ function evidenceTierOf(item: EvidenceItem): { key: string; label: string; hint:
   return { key: 'unknown', label: '未分级', hint: '这条依据没有带分级信息。' }
 }
 
-/** §5.2 已选择的依据。列出用户点过的卡片，可逐条移除。 */
+/**
+ * 中文类型名。
+ *
+ * 宿主给的是英文标识：助手汇报是 `assistant-step`，工具卡片给的是工具名（bash / read / write…）。
+ * 上一版把这些原样印在「正在围绕这条内容提问：」后面 —— 用户看到的是 `assistant-step`，
+ * 既不是内容、也不是人话。这里做一次翻译，翻不出来的才退回原名。
+ */
+function evidenceLabel(item: EvidenceItem): string {
+  const title = (item.title || '').trim()
+  if (!title) return '正文片段'
+  if (title === 'assistant-step') return '助手汇报'
+  if (title === 'turn-tail') return '本轮汇报'
+  if (title === 'turn-process') return '处理过程'
+  if (title === 'tool-call') return '工具调用'
+  if (title === 'user' || title === 'input-message' || title === 'request-prompt') return '你的提问'
+  return '工具 · ' + title
+}
+
+/** 一行摘录：压掉换行与多余空白，截到能塞进标签的长度。 */
+function evidenceSnippet(item: EvidenceItem, max = 28): string {
+  const text = String(item.summary || '').replace(/\s+/g, ' ').trim()
+  if (!text) return '（没有可见摘要）'
+  return text.length > max ? text.slice(0, max) + '…' : text
+}
+
+/** 一条选择在输入框上方那一行里需要的全部信息。 */
+type PickChip = { key: string; item: EvidenceItem; label: string; snippet: string; tier: ReturnType<typeof evidenceTierOf> }
+
+/** 选择的身份按**锚点**算（pickId），没有锚点才退回 id —— 与 selection.ts 的 ensurePickId 同源。 */
+function pickKeyOf(item: EvidenceItem): string { return String(item.pickId || item.id || '') }
+
+function pickChipsOf(state: AssistantClientState): PickChip[] {
+  return state.evidence
+    .filter(item => item && (item.title || item.summary))
+    .map(item => ({ key: pickKeyOf(item), item, label: evidenceLabel(item), snippet: evidenceSnippet(item), tier: evidenceTierOf(item) }))
+}
+
+/**
+ * 从选择里移除一条。按锚点删，不按 id：工具卡片没有会话键，id 会退化成工具名。
+ */
+function removePick(ctx: OverlayContext, item: EvidenceItem): void {
+  const key = pickKeyOf(item)
+  ctx.plugin.registry.update(ctx.state.sessionId, current => {
+    current.evidence = current.evidence.filter(existing => pickKeyOf(existing) !== key)
+  })
+}
+
+/**
+ * 输入框上方那一行：每条选择一个可拆掉的标签。没有选择时整行收起。
+ *
+ * 退场摘节点的时刻必须**晚于** CSS 的 --ea-pick-out-dur（140ms）。取同一个数值时，
+ * 定时器和动画的最后一帧在赛跑：慢放实测过，节点会在淡出只播到一半时被摘掉，
+ * 用户看到的是「闪一下没了」。留 40ms 余量，等它真的淡完再收。
+ */
+const PICK_CHIP_EXIT_MS = 180
+type ChipEntry = { node: HTMLElement; index: HTMLElement; label: HTMLElement; snippet: HTMLElement; timer?: ReturnType<typeof setTimeout> }
+const chipEntries = new WeakMap<HTMLElement, Map<string, ChipEntry>>()
+
+/**
+ * 重画「这一问围绕哪几条」。
+ *
+ * 为什么不是每次重建节点：取消一条、回答落地后自动清空都会让某条消失，
+ * 直接换掉 DOM 就是「啪」一下没了 —— 上一轮页面切换被批评的正是这种瞬间消失。
+ * 所以这里按锚点复用节点：新来的建节点（播入场动画），要走掉的先挂 data-leaving
+ * 播 140ms 再摘，留下来的原地更新文案、不重播动画。
+ */
+function renderPickRow(ctx: OverlayContext): void {
+  const row = ctx.targetBar
+  const chips = pickChipsOf(ctx.state)
+  let live = chipEntries.get(row)
+  if (!live) { live = new Map(); chipEntries.set(row, live) }
+  const map = live as Map<string, ChipEntry>
+  const wanted = new Set(chips.map(chip => chip.key))
+
+  for (const [key, entry] of Array.from(map)) {
+    if (wanted.has(key) || entry.timer) continue
+    if (prefersReducedMotion()) { entry.node.remove(); map.delete(key); continue }
+    entry.node.setAttribute('data-leaving', 'true')
+    entry.timer = setTimeout(() => {
+      entry.node.remove()
+      map.delete(key)
+      // 最后一条也走完了：把这一行（含「这一问围绕」的引子）整体收掉。
+      if (!map.size) { row.replaceChildren(); row.setAttribute('data-has-target', 'false') }
+    }, PICK_CHIP_EXIT_MS)
+  }
+
+  // 引子只建一次，且只在这一行真有内容时存在：空行里留一句「这一问围绕」会在
+  // 收起前的一瞬被读到（也污染「没有选择时不留空条」那条断言）。
+  if (chips.length && !row.querySelector('.ea-pick-lead')) {
+    row.appendChild(el('span', { class: 'ea-pick-lead', text: '这一问围绕' }))
+  }
+
+  chips.forEach((chip, index) => {
+    let entry = map.get(chip.key)
+    if (!entry) {
+      const indexEl = el('span', { class: 'ea-pick-index' })
+      const labelEl = el('span', { class: 'ea-pick-label' })
+      const snippetEl = el('span', { class: 'ea-pick-snippet' })
+      const node = el('span', { class: 'ea-pick-chip' },
+        indexEl, labelEl, snippetEl,
+        button('×', '取消这条选择', () => removePick(ctx, chip.item), { class: 'ea-pick-remove' }),
+      )
+      entry = { node, index: indexEl, label: labelEl, snippet: snippetEl }
+      map.set(chip.key, entry)
+      row.appendChild(node)
+    } else if (entry.timer) {
+      // 一边退场一边又被选回来：取消摘除，直接复用它。
+      clearTimeout(entry.timer)
+      entry.timer = undefined
+      entry.node.removeAttribute('data-leaving')
+    }
+    entry.node.setAttribute('data-tier', chip.tier.key)
+    entry.node.setAttribute('title', chip.label + '：' + chip.snippet + '\n' + chip.tier.label + ' · ' + chip.tier.hint)
+    entry.index.textContent = String(index + 1)
+    entry.label.textContent = chip.label
+    entry.snippet.textContent = chip.snippet
+  })
+
+  // 顺序不做「每次重排」的写法：新标签永远追加在末尾，删除不改动别人的相对次序，
+  // 于是顺序天然就是状态的顺序。反过来，每帧都 appendChild 一遍在真实 DOM 里会
+  // 打断正在播的动画（节点被移动 = 动画重启），在假 DOM 里则会直接复制出一串重复节点。
+
+  const leaving = Array.from(map.values()).some(entry => entry.timer)
+  row.setAttribute('data-has-target', chips.length || leaving ? 'true' : 'false')
+  if (!chips.length && !leaving) { row.replaceChildren(); map.clear() }
+}
+
+/** 切到加载页/失败页时把这一行整体收掉：那是换会话级别的重置，不播逐条退场。 */
+function resetPickRow(ctx: OverlayContext): void {
+  const map = chipEntries.get(ctx.targetBar)
+  if (map) { for (const entry of map.values()) if (entry.timer) clearTimeout(entry.timer); map.clear() }
+  ctx.targetBar.replaceChildren()
+  ctx.targetBar.removeAttribute('data-has-target')
+}
+
+/**
+ * §5.2 已选择的依据（明细）。
+ *
+ * 上一版这是一张**常驻大卡**：4000 字原文、来源、时间全铺在正文里，把答案顶出可视区。
+ * 现在默认收起 —— 输入框上方那排标签已经回答了「选了哪几条」，想核对原文再展开。
+ * 分级（§6.3）仍然逐条显示，只是不再抢正文的位置。
+ */
 function evidenceNodes(state: AssistantClientState, plugin: PluginLike): Child[] {
   if (!state.evidence.length) return []
   const rows = state.evidence.map((item: EvidenceItem) => {
-    // §6.3/§11.7：**必须把三级的差异显示给用户看**。
-    // 此前分级只做进了数据层与提示词，界面上一个字都不显示 ——
-    // 用户根本分不清自己看到的这条是「工具真的跑出来的结果」，
-    // 还是「主 agent 嘴里说的一句话」。这恰好是文档点名要求区分的那件事。
     const tier = evidenceTierOf(item)
     return el('article', { class: 'dsh-explain-assistant-evidence-row ea-evidence-row' },
       el('div', { class: 'ea-row-head' },
-        el('strong', { class: 'ea-evidence-title', text: item.title || item.id }),
+        el('strong', { class: 'ea-evidence-title', text: evidenceLabel(item) }),
         el('span', { class: 'ea-evidence-tier ea-tier-' + tier.key, text: tier.label, title: tier.hint }),
         button('移除', '移除这条依据', () => plugin.registry.update(state.sessionId, current => { current.evidence = current.evidence.filter(existing => existing.id !== item.id) }), { class: 'ea-btn ea-btn-quiet' }),
       ),
@@ -881,10 +1018,11 @@ function evidenceNodes(state: AssistantClientState, plugin: PluginLike): Child[]
       el('small', { class: 'ea-evidence-tier-hint', text: tier.hint }),
     )
   })
-  return [el('section', { class: 'dsh-explain-assistant-evidence ea-card', 'aria-labelledby': 'dsh-explain-assistant-evidence-title' },
-    el('div', { class: 'ea-card-head' },
-      el('h3', { class: 'ea-card-title', id: 'dsh-explain-assistant-evidence-title', text: '已选择依据' }),
+  return [el('details', { class: 'dsh-explain-assistant-evidence ea-card ea-evidence-details' },
+    el('summary', { class: 'ea-evidence-fold' },
+      el('span', { class: 'ea-card-title', text: '已选依据' }),
       el('span', { class: 'ea-count ea-count-inline', text: String(state.evidence.length) }),
+      el('small', { class: 'ea-evidence-fold-hint', text: '展开看原文与分级' }),
     ),
     ...rows,
   )]
@@ -1245,17 +1383,29 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   // 旧实现只在进入时置 data-selection-mode，全库没有任何清除代码 →
   // 用户点过一次「选择主对话内容」之后，主对话里所有点击会被持续吞掉，再也点不动原卡片。
   // 现在：再点一次这个按钮就退出；选中一条依据后自动退出（见下方 evidence-selected 监听）。
+  /**
+   * 进出选择模式。
+   *
+   * 两件事必须同时发生，缺一件就是「看着像进了模式，其实没进」：
+   * 1. 浮窗自己：data-selection-mode（描边）+ 按钮文案 + 提示；
+   * 2. 页面：documentElement 上的 data-ea-selecting —— 主对话里的卡片在悬停时
+   *    才会出现虚线框与十字光标（用户得先知道「这里能点」），控制器也据此决定
+   *    「这一下点击是选，还是只是普通点击」。
+   */
   const leaveSelectionMode = () => {
     root.removeAttribute('data-selection-mode')
     select.setAttribute('aria-pressed', 'false')
     select.textContent = '选择主对话内容'
     selectionStatus.textContent = ''
+    document.documentElement?.removeAttribute('data-ea-selecting')
+    document.dispatchEvent(new CustomEvent('dsh-explain-assistant:select-exit', { detail: { sessionId: state.sessionId } }))
   }
   const enterSelectionMode = () => {
     root.setAttribute('data-selection-mode', 'true')
     select.setAttribute('aria-pressed', 'true')
     select.textContent = '退出选择模式'
-    selectionStatus.textContent = '请点击主对话中的步骤卡片或助手汇报（也可以右键，或聚焦后按 Shift+Enter）。再次点本按钮可退出。'
+    selectionStatus.textContent = '选择模式：点一条内容选中；再点一次取消。按 Esc 或再点本按钮退出。'
+    document.documentElement?.setAttribute('data-ea-selecting', 'true')
     document.dispatchEvent(new CustomEvent('dsh-explain-assistant:select', { detail: { sessionId: state.sessionId } }))
   }
   const select = button('选择主对话内容', '选择主对话中的步骤或工具卡片', () => {
@@ -1508,6 +1658,8 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     ctx.send.textContent = sendLabel(state, 'loading')
     ctx.send.disabled = true
     fill(ctx.loadingSlot, loadingNodes())
+    // 选择痕迹一并收掉：加载页上不该出现上一档的任何「已选」标签。
+    resetPickRow(ctx)
     return
   }
   fill(ctx.loadingSlot, [])
@@ -1538,6 +1690,7 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     ctx.send.textContent = sendLabel(state, 'failed')
     ctx.send.disabled = true
     fill(ctx.stateErrorSlot, stateErrorNodes(state, ctx.plugin, readFailure(state)))
+    resetPickRow(ctx)
     return
   }
   fill(ctx.stateErrorSlot, [])
@@ -1570,24 +1723,8 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   if (detailId && detailId !== ctx.detailRecordId) { ctx.detailRecordId = detailId; ctx.body.scrollTop = 0 }
   else if (!detailId) ctx.detailRecordId = undefined
   ctx.ringSlot.replaceChildren(ringNode(state))
-  // §5.2：常驻显示「正在围绕哪条内容提问」。没有选中依据时不留空条。
-  const targets = state.evidence.filter(item => item?.title || item?.summary)
-  const currentId = state.evidence.length ? state.evidence[state.evidence.length - 1] : undefined
-  if (targets.length && currentId) {
-    const label = currentId.title || (currentId.summary || '').slice(0, 40) || '未命名步骤'
-    fill(ctx.targetBar, [
-      el('span', { class: 'ea-target-label', text: '正在围绕这条内容提问：' }),
-      el('strong', { class: 'ea-target-title', text: label }),
-      targets.length > 1 ? el('small', { class: 'ea-target-more', text: '（另有 ' + (targets.length - 1) + ' 条依据）' }) : null,
-      button('取消', '不再围绕这条内容提问', () => {
-        plugin.registry.update(state.sessionId, current => { current.evidence = [] })
-      }, { class: 'ea-btn ea-btn-quiet ea-target-clear' }),
-    ])
-    ctx.targetBar.setAttribute('data-has-target', 'true')
-  } else {
-    ctx.targetBar.replaceChildren()
-    ctx.targetBar.removeAttribute('data-has-target')
-  }
+  // §5.2：常驻显示「这一问围绕哪几条」。每条一个可拆掉的标签；没有选择时整行收起。
+  renderPickRow(ctx)
 
   // 只在草稿真的被外部改写（例如提交后清空）时回写输入框，避免打字时被顶掉光标。
   if (ctx.input.value !== state.draft) ctx.input.value = state.draft

@@ -16,7 +16,20 @@ import type { EvidenceItem } from './store.js';
 export declare function classifyEvidence(element: Element): EvidenceItem['evidenceState'];
 export declare function evidenceFromElement(element: Element, sessionId: string): EvidenceItem;
 type SelectionController = {
+    enter(): void;
+    exit(): void;
     dispose(): void;
 };
-export declare function attachSelection(root: Document, sessionId: string, onSelect: (item: EvidenceItem) => void): SelectionController;
+/**
+ * 选择结果的两个出口：选中一条、取消一条。取消按 pickId 走（与卡片上的锚点同源）。
+ *
+ * select 额外把**被点的那张卡片**传出去：调用方可以立刻在它身上挂高亮，
+ * 不等 React 那一轮重画。用户点下去到看见反应之间隔的这几百毫秒（长会话里更明显），
+ * 正是「点了没反应」的主要来源。
+ */
+export type SelectionHandlers = {
+    select(item: EvidenceItem, element: Element): void;
+    deselect(pickId: string): void;
+};
+export declare function attachSelection(root: Document, sessionId: string, handlers: SelectionHandlers): SelectionController;
 export {};

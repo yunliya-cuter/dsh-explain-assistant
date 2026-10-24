@@ -41,7 +41,7 @@ test('防线：attachSelection 的 dispose 之后不再触发（异步清理兜�
     const card = new FakeElement('div'); card.setAttribute('data-tool', 'bash');
     chat.appendChild(card); dom.document.appendChild(chat);
     const picked = [];
-    const ctl = selection.attachSelection(dom.document, 'session-a', i => picked.push(i));
+    const ctl = selection.attachSelection(dom.document, 'session-a', { select: i => picked.push(i), deselect: () => {} }); ctl.enter();
     ctl.dispose();
     dom.document.emit('click', { target: card, button: 0, clientX: 1, clientY: 1 });
     assert.equal(picked.length, 0, 'dispose 后旧监听器必须彻底失效');

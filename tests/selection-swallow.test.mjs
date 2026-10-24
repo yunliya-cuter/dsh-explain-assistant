@@ -33,7 +33,7 @@ test('B3: 左键点选必须吞掉事件（stopPropagation），不能只 preven
   try {
     const { root, node } = tree();
     let selected = 0;
-    const controller = selection.attachSelection(root, 'session-a', () => { selected++; });
+    const controller = selection.attachSelection(root, 'session-a', { select: () => { selected++; }, deselect: () => {} }); controller.enter();
     try {
       const event = root.emit('click', { button: 0, clientX: 10, clientY: 10, target: node });
       assert.equal(selected, 1, '必须选中一次');
@@ -50,7 +50,7 @@ test('B3: 原卡片自己的冒泡处理器在选中时不得被执行', () => {
     let originalHandlerRuns = 0;
     // 模拟 React 的冒泡委托：原卡片在冒泡阶段挂了 onClick。
     root.addEventListener('click', () => { originalHandlerRuns++; });
-    const controller = selection.attachSelection(root, 'session-a', () => {});
+    const controller = selection.attachSelection(root, 'session-a', { select: () => {}, deselect: () => {} }); controller.enter();
     try {
       root.emit('click', { button: 0, clientX: 10, clientY: 10, target: node });
       assert.equal(originalHandlerRuns, 0, '原卡片的点击处理器绝不能被执行（§5.2）');
@@ -63,7 +63,7 @@ test('B3: 右键点选同样吞掉事件', () => {
   try {
     const { root, node } = tree();
     let selected = 0;
-    const controller = selection.attachSelection(root, 'session-a', () => { selected++; });
+    const controller = selection.attachSelection(root, 'session-a', { select: () => { selected++; }, deselect: () => {} }); controller.enter();
     try {
       const event = root.emit('contextmenu', { button: 2, target: node });
       assert.equal(selected, 1);
@@ -82,7 +82,7 @@ test('B3: Shift+Enter 选中同样吞掉事件', () => {
     const node = new FakeElement('div'); node.setAttribute('data-chat-node-key', 'node-k');
     chat.appendChild(node); root.appendChild(chat);
     let selected = 0;
-    const controller = selection.attachSelection(root, 'session-a', () => { selected++; });
+    const controller = selection.attachSelection(root, 'session-a', { select: () => { selected++; }, deselect: () => {} }); controller.enter();
     try {
       node.focus();
       const event = root.emit('keydown', { key: 'Enter', shiftKey: true, target: node });
@@ -114,7 +114,7 @@ test('反例: 浮窗内部的点击不得被吞（不能影响小助手自己的
     inside.appendChild(node);
     root.appendChild(inside);
     let selected = 0;
-    const controller = selection.attachSelection(root, 'session-a', () => { selected++; });
+    const controller = selection.attachSelection(root, 'session-a', { select: () => { selected++; }, deselect: () => {} }); controller.enter();
     try {
       const event = root.emit('click', { button: 0, clientX: 1, clientY: 1, target: node });
       assert.equal(selected, 0, '浮窗内部点击不得被当成选中');
@@ -131,7 +131,7 @@ test('反例: 非目标元素点击既不选中也不吞事件', () => {
     const plain = new FakeElement('p');
     root.appendChild(plain);
     let selected = 0;
-    const controller = selection.attachSelection(root, 'session-a', () => { selected++; });
+    const controller = selection.attachSelection(root, 'session-a', { select: () => { selected++; }, deselect: () => {} }); controller.enter();
     try {
       const event = root.emit('click', { button: 0, clientX: 1, clientY: 1, target: plain });
       assert.equal(selected, 0);
@@ -145,7 +145,7 @@ test('反例: 拖动选字不吞事件也不选中', () => {
   try {
     const { root, node } = tree();
     let selected = 0;
-    const controller = selection.attachSelection(root, 'session-a', () => { selected++; });
+    const controller = selection.attachSelection(root, 'session-a', { select: () => { selected++; }, deselect: () => {} }); controller.enter();
     try {
       root.emit('mousedown', { button: 0, clientX: 10, clientY: 10, target: node });
       const event = root.emit('click', { button: 0, clientX: 90, clientY: 90, target: node });

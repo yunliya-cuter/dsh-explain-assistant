@@ -258,7 +258,7 @@ function attachPickable(dom) {
   chat.appendChild(card);
   root.appendChild(chat);
   const picked = [];
-  const controller = selection.attachSelection(root, 'session-a', item => picked.push(item));
+  const controller = selection.attachSelection(root, 'session-a', { select: item => picked.push(item), deselect: () => {} }); controller.enter();
   return { root, card, picked, controller };
 }
 
