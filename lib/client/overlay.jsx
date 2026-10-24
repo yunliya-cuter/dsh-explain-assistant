@@ -1354,8 +1354,9 @@ export function renderOverlay(state, plugin, initialGeometry) {
      * 用户对上一版（只有一个角落字符 ◢）的定性原话是
      * 「不是，意思是这个设计不符合操作直觉，不是说它看不到用不了」——
      * 他嫌的不是字号或颜色，而是「要去角落找一个符号」这件事不合他平时用窗口的经验。
-     * 所以这里在四周各铺一条边、四个角各铺一个热区，方向与鼠标指针一致；
-     * 那个 ◢ 保留（有人习惯找它），但只是**其中一部分**，不再是唯一入口。
+     * 所以这里在四周各铺一条边、四个角各铺一个热区，方向与鼠标指针一致。
+     * 角落那个 ◢ 符号后来按用户要求删掉了（2026-10-24：「这个元素现在已经没用了」）：
+     * 角上已经是 24×24 的热区，指针形状本身就是告示，再画一个符号反而多余。
      */
     const RESIZE_DIRECTIONS = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
     const resizeZones = RESIZE_DIRECTIONS.map(direction => ({
@@ -1367,7 +1368,6 @@ export function renderOverlay(state, plugin, initialGeometry) {
             'aria-hidden': 'true',
         }),
     }));
-    const resize = button('◢', '调整窗口大小；使用方向键调整', undefined, { class: 'dsh-explain-assistant-resize ea-resize' });
     // 首帧几何的优先级：本会话已知几何（/state 已回来）> 重建前的实际几何 > 默认值。
     // 中间那一档是本轮加的：它让「切会话」不再经过默认值。
     const geometry = clampGeometry(state.geometry ?? initialGeometry, window.innerWidth, window.innerHeight);
@@ -1379,7 +1379,7 @@ export function renderOverlay(state, plugin, initialGeometry) {
     // 于是「打开时输入区隐藏」造成的重排发生在遮挡物后面（看不见）。
     const main = el('div', { class: 'ea-main' });
     main.append(body, form, modelPanelSlot);
-    root.append(titlebar, main, ...resizeZones.map(zone => zone.element), resize);
+    root.append(titlebar, main, ...resizeZones.map(zone => zone.element));
     const ctx = {
         state, plugin: like, body, phase, selectionStatus, controller: undefined, appliedGeometry: undefined,
         // 见 updateOverlay：用来判断「后面来的几何值是不是新值」。

@@ -200,8 +200,6 @@ test('UI 可达性 命中面积: 每个可交互控件的命中区不得小于�
   // 只检查**有显式尺寸声明**的那些：没写 width/height 的由内容撑开，
   // 源码级无法可靠判定（不猜），归入下面单独一条用例报「不可判定」。
   const controls = [
-    { name: '缩放手柄', selector: '.dsh-explain-assistant-resize' },
-    { name: '缩放手柄(兼容类名)', selector: '.ea-resize' },
     { name: '四角热区', selector: '.ea-resize-ne' },
     { name: '四边热区', selector: '.ea-resize-n' },
   ];
@@ -237,8 +235,7 @@ test('UI 可达性 命中面积: 关键动作控件（改变窗口几何）必�
   // 也当成命中目标去要求 24×24 —— 那是闸自己的模型缺陷，不是代码问题。
   // 真正响应拖拽的是它上层的 .ea-resize-se 热区（已单独列入本表）。
   const geometryControls = [
-    { name: '右下角缩放手柄(装饰标记)', selector: '.dsh-explain-assistant-resize' },
-    { name: '四角热区', selector: '.ea-resize-se' },
+    { name: '右下角热区', selector: '.ea-resize-se' },
   ];
   const failures = [];
   const checked = [];
@@ -281,10 +278,11 @@ test('UI 可达性 命中面积: 四边热区必须完全贴边（否则拖不�
  * 2) 重叠
  * ================================================================== */
 
-test('UI 可达性 重叠: 缩放手柄与发送按钮的命中区不得相交（既有实例：8×10px 相交）', () => {
+test('UI 可达性 重叠: 右下角拖拽热区与发送按钮的命中区不得相交（既有实例：8×10px 相交）', () => {
   // 这是用户报的那个缺陷的直接量化复现：手柄压在发送按钮下面。
-  const handle = boxOf('.dsh-explain-assistant-resize');
-  if (handle.undecidable) assert.fail('缩放手柄的尺寸必须能从 CSS 解析：' + handle.undecidable);
+  // 角标 ◢ 已按用户要求删除，真正接指针的是 .ea-resize-se 热区 —— 它才可能压住发送按钮。
+  const handle = boxOf('.ea-resize-se');
+  if (handle.undecidable) assert.fail('右下角热区的尺寸必须能从 CSS 解析：' + handle.undecidable);
 
   // 发送按钮：宽度由 padding + 文字宽估算，高度 = padding + 行高。
   // 文字取「发送」（最长态；「处理中」更长，但那是禁用态，不参与点击冲突判定）。
@@ -339,63 +337,22 @@ test('UI 可达性 重叠: 八个 resize 热区两两不得相交（否则抢同
  * 3) 可见告示：关键动作控件不得「隐形」
  * ================================================================== */
 
-test('UI 可达性 可见告示: 改变窗口几何的控件不得同时「背景全透明 + 字号过小 + 用最低对比度色」', () => {
-  // 判据来自用户原话：「正常情况下根本看不出来这个大小可以用来调整大小」。
-  // 三条都满足 ⇒ 用户看不出这里有东西 ⇒ 失败。
-  // 只看有**可见外观**的控件（纯热区是装饰面，aria-hidden，不在本条的检查对象里）。
-  const visibleGeometryControls = [
-    { name: '缩放手柄', selector: '.dsh-explain-assistant-resize' },
-  ];
-
-  const failures = [];
-  for (const { name, selector } of visibleGeometryControls) {
-    const d = declsFor(RULES, selector);
-    const background = String(d.background ?? '');
-    const image = String(d['background-image'] ?? '');
-    const fontSize = px(d['font-size']);
-    const color = colorFallback(d.color);
-
-    // ① 背景是否「完全透明」：既没背景色，也没有背景图/渐变
-    const transparentBg = (background === 'transparent' || background === 'none' || background === '')
-      && (image === '' || image === 'none');
-    // ② 字号是否 < 12px（含 font-size:0 这种「不显示字形」的写法）
-    const tinyFont = fontSize === undefined ? true : fontSize < 12;
-    // ③ 是否用最低对比度色
-    const faint = FAINT_COLORS.has(color.toLowerCase());
-
-    if (transparentBg && tinyFont && faint) {
-      failures.push(name + ' ' + selector + ' 同时满足：背景全透明(' + (background || '(未声明)') + ')'
-        + '、字号 ' + (fontSize === undefined ? '(未声明)' : fontSize + 'px') + '、'
-        + '最低对比度色 ' + color + ' —— 用户看不出这里可以操作');
-    }
-  }
-  assert.deepEqual(failures, [],
-    '关键动作控件必须能「被看出来」。以下控件三项全中：\n' + failures.join('\n'));
-});
-
-test('UI 可达性 可见告示: 缩放手柄必须常显（不得只在 hover/focus 才出现）', () => {
-  // 用户的原话是「正常情况下根本看不出来」——如果外观只在 hover 时出现，那正是这个抱怨。
-  const d = declsFor(RULES, '.dsh-explain-assistant-resize');
-  const hasVisibleMark = String(d['background-image'] ?? '') !== '' && String(d['background-image'] ?? '') !== 'none';
-  assert.ok(hasVisibleMark || d.background !== undefined && d.background !== 'transparent',
-    '缩放手柄必须有**常显**的可见标记（背景图/色），不能只靠 hover 才出现；'
-    + '当前 background-image=' + JSON.stringify(d['background-image']) + ' background=' + JSON.stringify(d.background));
-});
-
-test('UI 可达性 可见告示: 手柄必须有可访问名称与光标提示（读屏/指针都能识别）', () => {
-  const src = controlSource();
-  // 手柄必须有 aria-label（读屏）与 resize 光标（指针）
-  assert.match(src, /button\('◢',\s*'[^']+'/, '缩放手柄必须带 aria-label');
-  const d = declsFor(RULES, '.dsh-explain-assistant-resize');
-  assert.match(String(d.cursor ?? ''), /resize/, '缩放手柄必须有 resize 光标（指针形态是「这里能拖」的最直接告示）');
-  // 八个方向热区都要有方向光标
+/* 说明（2026-10-24）：这一组原本钉的是右下角那个 ◢ 符号 —— 要求它常显、有 aria-label、
+   有 resize 光标。用户看过成品后说「这个元素现在已经没用了，可以删掉」，符号已从代码里删掉，
+   于是**判据跟着换**：现在承担「这里能拖」告示的是八个热区的指针形状本身。
+   这一组不再考核某个符号长什么样（那已经没有对象了），改为钉两件真会坏的事：
+     ① 八个方向的热区光标必须与方向一致；
+     ② 热区不得被 pointer-events:none 关掉 —— 关掉就等于指针用户整窗都改不了大小，
+        而界面上已经没有别的入口了。 */
+test('UI 可达性 可见告示: 八个拖拽热区必须有方向光标，且不得被 pointer-events 关掉', () => {
   const dirs = { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize' };
   const failures = [];
   for (const [dir, cursor] of Object.entries(dirs)) {
     const dd = declsFor(RULES, '.ea-resize-' + dir);
     if (String(dd.cursor ?? '') !== cursor) failures.push('.ea-resize-' + dir + ' 的 cursor = ' + JSON.stringify(dd.cursor) + '（应为 ' + cursor + '）');
+    if (String(dd['pointer-events'] ?? '') === 'none') failures.push('.ea-resize-' + dir + ' 被 pointer-events:none 关掉了，指针用户拖不动');
   }
-  assert.deepEqual(failures, [], '方向热区的光标必须与方向一致：\n' + failures.join('\n'));
+  assert.deepEqual(failures, [], '拖拽热区必须能被指针找到并抓住：\n' + failures.join('\n'));
 });
 
 /* ================================================================== *
