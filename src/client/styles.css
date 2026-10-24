@@ -40,6 +40,11 @@
      改成「比玻璃略深一点的凹槽」+ 一圈细边，既有输入区的边界，又不把玻璃挖掉一块。 */
   --ea-field-fill:rgba(255,255,255,.55);
   --ea-field-border:rgba(0,0,0,.12);
+  --ea-field-focus:rgba(0,0,0,.18);
+  /* 行内代码不再用宿主那块 markdown 代码底色：深色主题下它是不透明的深灰，
+     贴在玻璃上就是一个个「黑框」（用户截图里圈出来的就是这些）。改成很淡的一层亮底。 */
+  --ea-code-fill:rgba(127,127,127,.14);
+  --ea-code-block-fill:rgba(127,127,127,.10);
   /* 模型选择页是叠在对话之上的一层玻璃：比外壳更糊一点，免得下面的对话字透上来抢注意力。 */
   --ea-glass-pane:rgba(250,250,252,.84);
   background:var(--ea-glass-sheen),var(--ea-glass-fill);
@@ -59,7 +64,7 @@
      和页面同色只会变黑；55% 的填充刚好让背后的字化成软影，又不至于读不清正文；
    · 投影加深到 0.55，否则边缘在深色页面上看不出是独立的一层。 */
 body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
-  --ea-glass-fill:rgba(58,62,68,.46);
+  --ea-glass-fill:rgba(72,77,86,.56);
   --ea-glass-sheen:linear-gradient(155deg,rgba(255,255,255,.11) 0%,rgba(255,255,255,.04) 22%,rgba(255,255,255,0) 46%,rgba(255,255,255,0) 76%,rgba(255,255,255,.05) 100%);
   --ea-glass-shadow:
     inset 0 1px 0 0 rgba(255,255,255,.24),
@@ -70,9 +75,12 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
     0 32px 80px rgba(0,0,0,.55),
     0 2px 12px rgba(0,0,0,.4);
   --ea-band-fill:rgba(255,255,255,.06);
-  --ea-field-fill:rgba(0,0,0,.22);
+  --ea-field-fill:rgba(0,0,0,.20);
   --ea-field-border:rgba(255,255,255,.14);
-  --ea-glass-pane:rgba(46,49,54,.72);
+  --ea-field-focus:rgba(255,255,255,.22);
+  --ea-code-fill:rgba(255,255,255,.075);
+  --ea-code-block-fill:rgba(255,255,255,.05);
+  --ea-glass-pane:rgba(60,65,73,.70);
   /* 深色页面本身几乎没有明暗差，只靠 blur 看不出「糊了什么」。给背景抬 12% 亮度，
      背后的字才会化成可见的软影，而不是被一层灰吃掉。 */
   -webkit-backdrop-filter:blur(28px) saturate(170%) brightness(1.12);
@@ -192,8 +200,8 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 .ea-md-scope .ea-md-p:last-child{margin-bottom:0}
 .ea-md-scope .ea-md-h{margin:10px 0 5px;font-size:13px;font-weight:650;line-height:1.4}
 .ea-md-scope .ea-md-list{margin:0 0 7px;padding-left:20px}
-.ea-md-scope .ea-md-code{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:.92em;padding:1px 4px;border-radius:4px;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.16))}
-.ea-md-scope .ea-md-pre{margin:0 0 7px;padding:8px 10px;border-radius:7px;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.13));overflow-x:auto}
+.ea-md-scope .ea-md-code{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:.92em;padding:1px 4px;border-radius:4px;background:var(--ea-code-fill,rgba(127,127,127,.16))}
+.ea-md-scope .ea-md-pre{margin:0 0 7px;padding:8px 10px;border-radius:7px;background:var(--ea-code-block-fill,rgba(127,127,127,.13));overflow-x:auto}
 .ea-md-scope .ea-md-codeblock{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:11.5px;line-height:1.6;white-space:pre;display:block;min-width:max-content}
 .ea-md-scope .ea-md-link{color:var(--dsw-alias-link,#2f6bff);text-decoration:underline}
 .ea-md-scope .ea-md-quote{margin:0 0 7px;padding-left:9px;border-left:3px solid var(--dsw-alias-border-l3,rgba(0,0,0,.16))}
@@ -205,7 +213,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 .ea-md-scope .ea-md-table-wrap{margin:0 0 8px;overflow-x:auto}
 .ea-md-scope .ea-md-table{border-collapse:collapse;font-size:12.5px;line-height:1.5}
 .ea-md-scope .ea-md-th,.ea-md-scope .ea-md-td{padding:4px 8px;border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.14));text-align:left;vertical-align:top}
-.ea-md-scope .ea-md-th{font-weight:650;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.10))}
+.ea-md-scope .ea-md-th{font-weight:650;background:var(--ea-code-block-fill,rgba(127,127,127,.10))}
 .ea-md-scope .ea-md-th[data-align=center],.ea-md-scope .ea-md-td[data-align=center]{text-align:center}
 .ea-md-scope .ea-md-th[data-align=right],.ea-md-scope .ea-md-td[data-align=right]{text-align:right}
 
@@ -232,13 +240,13 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 .ea-answer .ea-md-code{
   font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);
   font-size:.92em;padding:1px 5px;border-radius:4px;
-  background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.16));
+  background:var(--ea-code-fill,rgba(127,127,127,.16));
   word-break:break-word;
 }
 /* 代码块：长行横向滚动，不要撑破浮窗 */
 .ea-answer .ea-md-pre{
   margin:0 0 9px;padding:10px 12px;border-radius:8px;
-  background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.13));
+  background:var(--ea-code-block-fill,rgba(127,127,127,.13));
   border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));
   overflow-x:auto;
 }
@@ -256,7 +264,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 .ea-answer .ea-md-table-wrap{margin:0 0 9px;overflow-x:auto}
 .ea-answer .ea-md-table{border-collapse:collapse;font-size:12.5px;line-height:1.5}
 .ea-answer .ea-md-th,.ea-answer .ea-md-td{padding:4px 8px;border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.14));text-align:left;vertical-align:top}
-.ea-answer .ea-md-th{font-weight:650;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.10))}
+.ea-answer .ea-md-th{font-weight:650;background:var(--ea-code-block-fill,rgba(127,127,127,.10))}
 .ea-answer .ea-md-th[data-align=center],.ea-answer .ea-md-td[data-align=center]{text-align:center}
 .ea-answer .ea-md-th[data-align=right],.ea-answer .ea-md-td[data-align=right]{text-align:right}
 .ea-answer .ea-md-image{max-width:100%;height:auto;border-radius:6px}
@@ -497,8 +505,9 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 .ea-model-panel-filter{padding:9px 12px;flex:0 0 auto}
 .ea-model-search{
   width:100%;box-sizing:border-box;font:inherit;font-size:12.5px;padding:7px 10px;border-radius:8px;
-  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.16));
-  background:var(--ea-field-fill,rgba(255,255,255,.55));color:var(--dsw-alias-label-primary,#111);
+  border:0;
+  background:var(--ea-field-fill,rgba(255,255,255,.55));
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.14);color:var(--dsw-alias-label-primary,#111);
 }
 .ea-model-list{
   display:flex;flex:1 1 auto;flex-direction:column;gap:12px;
@@ -606,8 +615,8 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 @media (prefers-reduced-motion: reduce){.ea-turn[data-enter="true"]{animation:none}}
 /* 详情面板（「查看完整内容」）的正文排版：与主回答同一套规则，不再各写一份。 */
 .ea-detail-answer .ea-md-p{margin:0 0 8px}
-.ea-detail-answer .ea-md-code{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:.92em;padding:1px 4px;border-radius:4px;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.16))}
-.ea-detail-answer .ea-md-pre{margin:0 0 8px;padding:8px 10px;border-radius:7px;background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.13));overflow-x:auto}
+.ea-detail-answer .ea-md-code{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:.92em;padding:1px 4px;border-radius:4px;background:var(--ea-code-fill,rgba(127,127,127,.16))}
+.ea-detail-answer .ea-md-pre{margin:0 0 8px;padding:8px 10px;border-radius:7px;background:var(--ea-code-block-fill,rgba(127,127,127,.13));overflow-x:auto}
 .ea-detail-answer .ea-md-codeblock{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:11.5px;line-height:1.6;white-space:pre;display:block;min-width:max-content}
 .ea-detail-answer .ea-md-h{margin:10px 0 6px;font-weight:650}
 /* 标题分级：补 ea-md-scope 后会被基础规则的 13px 接管；若放任，二级标题会与正文几乎一样粗
@@ -641,7 +650,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
   white-space:pre-wrap;word-break:break-word;
   font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   padding:8px 10px;border-radius:8px;
-  background:var(--dsw-alias-markdown-code-block,rgba(127,127,127,.1));
+  background:var(--ea-code-fill,rgba(127,127,127,.1));
   color:var(--dsw-alias-label-secondary,#444);
 }
 .ea-tools{display:flex;flex-direction:column;gap:4px;border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.12));padding-top:10px}
@@ -660,8 +669,11 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
   font:inherit;line-height:1.55;
   color:var(--dsw-alias-label-primary,#111);
   background:var(--ea-field-fill,rgba(255,255,255,.55));
-  border:1px solid var(--ea-field-border,rgba(0,0,0,.18));
-  border-radius:9px;
+  /* 不再画边框：边框在半透明玻璃上会变成「一个框」，比底色本身更扎眼。
+     改成一点点内阴影，读起来是「凹进去的一块」，而不是「嵌了个黑盒子」。 */
+  border:0;
+  border-radius:12px;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.16);
 }
 .ea-input::placeholder{color:var(--dsw-alias-label-tertiary,#888)}
 /* 右侧留出 18px：让「发送」按钮的命中区与右下角的热区**不相交**（原来重叠约 5×6px，
@@ -746,6 +758,15 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 
 
 /* ---------- 焦点可见 ---------- */
+/* 输入框的焦点提示：全局那条是 2px 外描边（用的是宿主 primary 色，在深色主题里就是白色）——
+   输入框在打开浮窗时会被自动聚焦，于是一进来就是一个「黑底 + 白框」的方盒子，正是用户说丑的那个。
+   输入框改成本身已经凹进去的一块，焦点提示也改成**内侧一圈很淡的亮边**，不再套外框；
+   caret 与占位文字已经足够说明「这里可以打字」，键盘用户仍能看到焦点位置的细微变化。 */
+.dsh-explain-assistant-overlay .ea-input:focus-visible,
+.dsh-explain-assistant-overlay .ea-model-search:focus-visible{
+  outline:none;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.18),inset 0 0 0 1px var(--ea-field-focus,rgba(255,255,255,.22));
+}
 .dsh-explain-assistant-overlay button:focus-visible,
 .dsh-explain-assistant-overlay textarea:focus-visible,
 .dsh-explain-assistant-overlay summary:focus-visible,
