@@ -1962,6 +1962,8 @@ type OverlayContext = {
   scrollToTail?: boolean
   /** 首次就绪时是否已经自动停在最新一轮。 */
   autoScrolled?: boolean
+  /** 首开「滚到最新一轮」的重试次数（首帧还没挂进文档时量不到布局）。 */
+  autoScrollTries?: number
   /** 用户手动展开过的记录 id（默认只有最新一条展开）。 */
   expandedIds: Set<string>
   /** 本次要播「刚落地」动画的那条记录。 */
@@ -2613,6 +2615,8 @@ function renderHistory(ctx: OverlayContext, state: AssistantClientState): void {
 /** 第一次就绪时停在最新一轮（对话的习惯是打开就看见最后一条，而不是最顶上那条）。 */
 function scrollToNewestOnOpen(ctx: OverlayContext, state: AssistantClientState): void {
   if (ctx.autoScrolled || !state.records.length) return
+  // 教程页/模型页开着时正文被整页盖住：这时候滚，用户看不见，回到对话只表现为「跳了一下」。
+  if (ctx.tutorialOpen || ctx.modelOpen) return
   const body = ctx.body as HTMLElement & { getBoundingClientRect?: () => DOMRect }
   const hist = ctx.historySlot as HTMLElement & { getBoundingClientRect?: () => DOMRect }
   if (typeof body.getBoundingClientRect !== 'function' || typeof hist.getBoundingClientRect !== 'function') return
@@ -2621,7 +2625,22 @@ function scrollToNewestOnOpen(ctx: OverlayContext, state: AssistantClientState):
   // 还没挂到页面上（首次 renderOverlay 是在插进 DOM 之前调用的）时两者的矩形都是 0：
   // 这时**不能**把「已自动滚动过」记下来，否则等真正有了布局就再也不会滚了
   //（实测：首开停在最上面，最新一轮在 2000px 之外）。
-  if (!bodyRect.height || !histRect.height) return
+  if (!bodyRect.height || !histRect.height) {
+    /**
+     * 还没挂进文档（renderOverlay 是在插进 DOM **之前**调用的）→ 下一帧再试，最多 3 次。
+     *
+     * 不重试的后果实测过：首开永远停在最上面那一轮，最新一轮在十几屏之外。
+     * 上限 3 次是为了「浮窗被隐藏/量不到」时不至于一直排帧。
+     */
+    const tries = (ctx.autoScrollTries || 0) + 1
+    ctx.autoScrollTries = tries
+    if (tries > 3) return
+    const retry = () => { if (!ctx.autoScrolled) scrollToNewestOnOpen(ctx, ctx.state) }
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(retry)
+    else setTimeout(retry, 16)
+    return
+  }
+  ctx.autoScrollTries = 0
   ctx.autoScrolled = true
   // 为什么延后一帧：这次 updateOverlay 里刚把历史填进去，同一帧内设置 scrollTop
   // 会被浏览器钳回 0（实测：设 2196 后读回来是 0，滚动事件里记到的也是 0）。
@@ -2684,6 +2703,9 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     ctx.anchor = undefined
     ctx.scrollToTail = false
     ctx.autoScrolled = false
+    ctx.autoScrollTries = 0
+    // 换了会话就是「第一次看到」：新会话若已有压缩记录，不该把视野拽到那一行。
+    ctx.compactSig = undefined
   }
 
   ctx.phase.textContent = phaseLabel(state)
@@ -2816,8 +2838,22 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
    * 重画之前它可能还没被挂进文档，量到的矩形是 0，滚了等于没滚。
    */
   const compactSig = [state.compactState?.status, state.compactState?.updatedAt, state.compactState?.error].join('|')
+  /**
+   * 第一次看到这份压缩状态（刚打开浮窗、刚切会话）**不滚**。
+   *
+   * 为什么：这一行现在长在对话流里它真正发生的位置（见 historyNodes），
+   * 而它往往在最新那一轮的**上面几十屏**。首帧就把它「带进视野」，等于
+   * 打开浮窗的第一眼停在压缩那一行上，而不是最新一轮 —— 用户原话：
+   * 「点开？后会自动弹到上下文压缩的地方，不符合直觉」。
+   * 只有**这一次真的发生了状态变化**（按了 /compact、压缩刚跑完/失败）才滚。
+   *
+   * 另外：教程页/模型页开着时正文被整页盖住，这时候滚只会在回到对话时
+   * 表现为「莫名其妙跳了一下」，所以也跳过。
+   */
+  const compactFirstSight = ctx.compactSig === undefined
   if (ctx.compactSig !== compactSig) {
     ctx.compactSig = compactSig
+    const shouldScrollToRow = !compactFirstSight && !ctx.tutorialOpen && !ctx.modelOpen
     const rowAt = () => ctx.compactSlot.querySelector?.('.ea-compact-row') as HTMLElement | null
     // 自己算滚动量，不用 scrollIntoView：
     // 浮窗外层是 overflow:hidden，scrollIntoView 在真实页面上会把祖先链一起卷，
@@ -2836,9 +2872,11 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     // 当场量出来的位置很快就会过时 —— 实测只量一次时 scrollTop 差 400 多像素。
     // 每次都现取那一行（不提前抓元素）：一次重画里历史区可能刚被整块换掉，
     // 抓着旧元素量到的是已经脱离文档的节点，矩形恒为 0。
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => scrollToRow())
-    else scrollToRow()
-    setTimeout(scrollToRow, 150)
+    if (shouldScrollToRow) {
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => scrollToRow())
+      else scrollToRow()
+      setTimeout(scrollToRow, 150)
+    }
   }
   // 面板平时挂在那一轮下面（见 historyNodes）；只有那一轮不在当前挂载窗口里时，
   // 才会掉到正文顶部的这个槽位——否则用户点了按钮什么都看不到。
