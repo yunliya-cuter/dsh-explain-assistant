@@ -101,9 +101,15 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
   border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1));
   background:var(--ea-band-fill,rgba(127,127,127,.06));
 }
-.dsh-explain-assistant-titlebar .ea-title{flex:0 0 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:600;letter-spacing:.02em}
+.dsh-explain-assistant-titlebar .ea-title{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:600;letter-spacing:.02em}
 .dsh-explain-assistant-status{flex:1 1 auto;min-width:0;font-size:12px;color:var(--dsw-alias-label-tertiary,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ea-header-actions{display:flex;align-items:center;gap:6px;flex:0 1 auto;min-width:0}
+.ea-header-actions{
+  display:flex;align-items:center;gap:6px;flex:0 1 auto;min-width:0;
+  /* 必须压在八个 resize 热区（z-index:3）之上 —— 热区是绝对定位、DOM 里排在标题栏后面，
+     不这样会被它们盖住。实测过：420px 宽的面板里，右上角那个 24×24 的 NE 热区
+     正好压住「×」的中心左侧，点关闭变成"开始拖拽改大小"，窗根本关不掉。 */
+  position:relative;z-index:4;
+}
 /* 按钮组里只有「模型」按钮参与收缩（它最能缩）。其余按钮 flex:0 0 auto，
    否则窗口一窄，「选择主对话内容」会先被压扁、先被挤出可视区。 */
 .ea-header-actions > .ea-btn:not(.ea-model-trigger),
@@ -294,6 +300,15 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
   to{opacity:1}
 }
 .dsh-explain-assistant-overlay{animation:ea-overlay-in 140ms ease-out}
+/* 关闭浮窗：真节点已释放，留下的是**克隆体**（见 exit-anim.ts）在播这一段。
+   用户这一轮的要求是「优化关闭小助手后的动画」—— 之前它是一帧之内消失。
+   只动 opacity/transform/filter，不动 left/top/width/height：窗口几何从不参与动画，
+   于是关闭过程不会连带改变任何布局；pointer-events:none 保证退场的 180ms 绝不拦下一次点击。 */
+.ea-overlay[data-leaving=true]{pointer-events:none;animation:ea-overlay-out 180ms cubic-bezier(.32,.72,0,1) both}
+@keyframes ea-overlay-out{
+  from{opacity:1;transform:scale(1) translateY(0);filter:blur(0)}
+  to{opacity:0;transform:scale(.975) translateY(6px);filter:blur(3px)}
+}
 /* 「状态没读到」的错误页：与加载页互斥，是失败结局的出路（含重试）。 */
 .ea-state-error{display:flex;flex-direction:column;gap:9px;align-items:flex-start}
 .ea-state-error-reason{margin:0}
@@ -309,6 +324,14 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 @keyframes ea-spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){
   .ea-spinner{animation:none}
+  /* 关闭：减少动态偏好下不做退场动画（克隆体仍会在 EXIT_MS 之后被摘掉，只是不播）。 */
+  .ea-overlay[data-leaving=true]{animation:none;opacity:0}
+  /* 选择模式：让开这件事本身也不做过渡，直接到位。 */
+  .ea-overlay .ea-header,.ea-overlay .ea-main,/* 深色主题那条规则（body[data-ds-dark-theme] .dsh-explain-assistant-overlay，0,2,1）
+   在后文重新声明了 backdrop-filter，比上面那条（0,2,0）高 —— 不显式盖一次，
+   选择模式下会留下一块**磨砂**的玻璃板（实测：底色已透明，但背后的内容仍然被模糊）。 */
+body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true]{-webkit-backdrop-filter:none;backdrop-filter:none}
+.ea-overlay[data-selection-mode=true] .ea-header,.ea-overlay[data-selection-mode=true] .ea-main{transition:none}
   /* t4：减少动态偏好下**不做**淡入，但落点不变 —— 浮窗仍是直接以最终几何出现。
      关的只是动画，不是「不显示」：不会因此空白，也不会跳位或露错值。 */
   .dsh-explain-assistant-overlay{animation:none}
@@ -385,6 +408,14 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
   .ea-header-actions{gap:4px}
   .ea-model-trigger-prefix{display:none}
   .ea-model-trigger{max-width:62%;padding:5px 7px}
+  /* 多了「?」教程入口之后，这一行在 420px 宽度上已经很紧：
+     实测按钮总宽 317px、标题 71px，而面板只有 420px —— 模型按钮被压到 69px，
+     里面只显示得下「选择…」。这里把每颗按钮的横向内边距各收 2~3px，
+     省出来的十几像素刚好让模型按钮显示出完整文案。 */
+  .ea-header-actions .ea-btn{padding-left:8px;padding-right:8px}
+  .ea-header-actions .ea-btn{font-size:11.5px}
+  .ea-header-actions .ea-tutorial-trigger{padding:0;width:24px;min-width:24px;font-size:12px}
+  .ea-header-actions .dsh-explain-assistant-close{padding-left:5px;padding-right:5px}
 }
 
 /* ---------- 目录提示条（有提供方读失败时才有） ---------- */
@@ -840,7 +871,79 @@ body[data-ds-dark-theme] .ea-send{
 /* ---------- 选中模式提示 ---------- */
 .ea-selection-status{font-size:12px;color:var(--dsw-alias-label-tertiary,#666);line-height:1.5;min-height:0}
 .ea-selection-status:empty{display:none}
-.dsh-explain-assistant-overlay[data-selection-mode=true]{outline:2px solid var(--dsw-alias-button-primary-fill,#2f6bff);outline-offset:-2px}
+/* ---------- 选择模式：浮窗让开，把主对话让出来 ----------
+ * 用户原话：「进入选择模式后，解释小助手暂时不显示，方便用户选择」。
+ * 为什么不是 display:none：display 不可过渡，而且会让键盘焦点一起消失（Esc 就没人接了）；
+ * 而且 opacity:0 的元素**仍然可以聚焦**，用户 Tab 会掉进看不见的按钮里 ——
+ * 所以 visibility 延迟 140ms 再 hidden，既让淡出看得见，又把它从 Tab 序列里摘出去。
+ * 浮窗整体 pointer-events:none：它盖住的那块主对话因此可以直接点。 */
+.ea-overlay{transition:opacity 140ms ease,visibility 0s}
+.ea-overlay[data-selection-mode=true]{
+  pointer-events:none;outline:none;
+  /* 整块浮窗（连玻璃带投影）一起淡出并隐藏。
+     只藏 header/main 是不够的：根节点自己还有玻璃底色 + backdrop-filter，
+     实测屏幕上会剩一块**磨砂灰板**，正好盖住用户要选的内容。
+     用 visibility 而不是删背景：它同时也把里面所有控件从 Tab 序列里摘了出去。 */
+  opacity:0;visibility:hidden;
+  transition:opacity 140ms ease,visibility 0s linear 140ms;
+  /* 关键：整块玻璃的底色/投影/毛玻璃也必须一起撤掉。
+     第一版只藏了 header 与 main，结果屏幕右侧留下一块**空白的灰色玻璃板**——
+     比不藏还糟：它挡住的正是用户要选的内容。 */
+  background:transparent;
+  box-shadow:none;
+  -webkit-backdrop-filter:none;backdrop-filter:none;
+}
+.ea-overlay .ea-header,.ea-overlay .ea-main{transition:opacity 140ms ease,transform 140ms ease,visibility 0s}
+.ea-overlay[data-selection-mode=true] .ea-header,
+.ea-overlay[data-selection-mode=true] .ea-main{
+  opacity:0;transform:scale(.985);pointer-events:none;visibility:hidden;
+  transition:opacity 140ms ease,transform 140ms ease,visibility 0s linear 140ms;
+}
+/* 选择模式的浮动条：只在这个模式下存在（挂到 body 上、退出即摘，见 overlay.tsx）。
+   它是「正在选 / 选了几条 / 怎么退出」的唯一可见载体 —— 浮窗让开之后，
+   没有它就是"点了几张卡片、然后不知道怎么办"。 */
+.ea-select-bar{
+  position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:2147481000;
+  display:flex;align-items:center;gap:10px;
+  padding:6px 8px 6px 14px;border-radius:999px;max-width:min(92vw,560px);
+  font-size:12.5px;line-height:1.4;color:var(--dsw-alias-label-primary,#111);
+  background:var(--ea-select-bar-fill,rgba(255,255,255,.84));
+  -webkit-backdrop-filter:blur(18px) saturate(180%);backdrop-filter:blur(18px) saturate(180%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,.6),
+    inset 0 1px 0 0 rgba(255,255,255,.9),
+    0 10px 30px rgba(0,0,0,.18),
+    0 2px 6px rgba(0,0,0,.10);
+  animation:ea-select-bar-in 160ms cubic-bezier(.2,.85,.25,1) both;
+}
+body[data-ds-dark-theme] .ea-select-bar{
+  --ea-select-bar-fill:rgba(52,56,63,.86);
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,.16),
+    inset 0 1px 0 0 rgba(255,255,255,.30),
+    0 12px 34px rgba(0,0,0,.55),
+    0 2px 8px rgba(0,0,0,.40);
+}
+@keyframes ea-select-bar-in{from{opacity:0;transform:translate(-50%,-8px)}to{opacity:1;transform:translate(-50%,0)}}
+.ea-select-bar-dot{
+  width:7px;height:7px;flex:0 0 auto;border-radius:50%;
+  background:var(--ea-pick-accent,#2f6bff);
+  animation:ea-select-dot 1.6s ease-in-out infinite;
+}
+@keyframes ea-select-dot{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1)}}
+.ea-select-bar-count{font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ea-select-bar-hint{color:var(--dsw-alias-label-tertiary,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ea-select-bar .ea-btn{height:26px;min-width:0;padding:0 12px;border-radius:999px;font-size:12px;line-height:1;white-space:nowrap}
+.ea-select-bar-done{
+  border:0;
+  background:var(--dsw-alias-button-primary-fill,#0f1115);
+  color:var(--dsw-alias-label-primary-inverted,#fff);
+  font-weight:600;
+}
+.ea-select-bar-done:hover{background:var(--dsw-alias-button-primary-hover,#2a2d33)}
+/* 窄窗先牺牲那句提示语，保住计数与两颗按钮（提示语里的操作在教程页也写了）。 */
+@media (max-width:520px){.ea-select-bar-hint{display:none}}
+@media (prefers-reduced-motion:reduce){.ea-select-bar,.ea-select-bar-dot{animation:none}}
 
 /* ---------- 占用圆环（§9.2） ---------- */
 .dsh-explain-assistant-ring{
@@ -855,16 +958,66 @@ body[data-ds-dark-theme] .ea-send{
 .dsh-explain-assistant-ring-label{white-space:nowrap}
 .dsh-explain-assistant-ring-estimated{color:var(--dsw-alias-state-warn-primary,#f59e0b);font-size:10px}
 
-/* ---------- /compact 结果（§9.1） ---------- */
+/* ---------- /compact 结果（§9.1）：压缩报告 ----------
+ * 用户原话：「按 /compact 后的页面设计进行仔细优化」「让摘要内容折叠起来」。
+ *
+ * 这一版按"一张卡片讲完一件事"来排：
+ *   标题 + 状态徽章  →  一行元信息（时间 · 占用变化）  →  一句话说明
+ *   →  摘要（**默认折叠**成三行预览）  →  两个动作（重新压缩 / 复制摘要）
+ *
+ * 折叠为什么不用 max-height 补间：摘要字数不可控（几百到几千字），
+ * 量出来的高度经常是 0（刚挂上去还没排版）→ 动画从 0 跳到真实高度，看着像闪一下。
+ * 这里用 grid-template-rows 0fr → 1fr：浏览器自己算，不需要任何测量。
+ * 折叠态另有一份纯文本预览（三行 clamp），所以"折起来"不等于"看不见"。 */
+.ea-compact{
+  display:flex;flex-direction:column;gap:7px;
+  padding:11px 12px;
+  border-radius:12px;
+  /* 比正文卡片略亮一点：它是"关于小助手自己状态"的一块，不是对话内容。 */
+  background:var(--ea-band-fill,rgba(127,127,127,.08));
+  animation:ea-compact-in 180ms cubic-bezier(.2,.85,.25,1) both;
+}
+@keyframes ea-compact-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+.ea-compact-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ea-compact-badge{
+  flex:0 0 auto;font-size:11px;line-height:1.5;padding:1px 8px;border-radius:999px;
+  border:1px solid transparent;white-space:nowrap;font-weight:600;
+}
+.ea-compact-badge[data-status=running]{color:var(--dsw-alias-label-secondary,#555);background:rgba(127,127,127,.14);border-color:rgba(127,127,127,.28)}
+.ea-compact-badge[data-status=complete]{color:var(--dsw-alias-state-success-primary,#15803d);background:rgba(21,128,61,.12);border-color:rgba(21,128,61,.30)}
+.ea-compact-badge[data-status=error]{color:var(--dsw-alias-state-error-primary,#dc2626);background:rgba(220,38,38,.10);border-color:rgba(220,38,38,.30)}
+.ea-compact-badge[data-status=interrupted]{color:var(--dsw-alias-state-warn-primary,#b45309);background:rgba(180,83,9,.10);border-color:rgba(180,83,9,.30)}
+.ea-compact-meta{margin:0}
 .ea-compact-status{margin:0;font-size:12.5px;line-height:1.6;color:var(--dsw-alias-label-secondary,#444)}
 .ea-compact-error{color:var(--dsw-alias-state-error-primary,#dc2626)}
+.ea-compact-hint{margin:0;font-size:11.5px;line-height:1.6;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-compact-running{display:flex;align-items:center;gap:8px}
+.ea-compact-summary-wrap{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.ea-compact-summary-box{width:100%;border-radius:9px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06))}
+.ea-compact-preview{
+  margin:0;padding:8px 10px;
+  font-size:12.5px;line-height:1.6;color:var(--dsw-alias-label-secondary,#444);
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;
+  /* 第三行末尾渐隐：一眼看出"后面还有"，而不是以为摘要就这么短。 */
+  -webkit-mask-image:linear-gradient(180deg,#000 62%,rgba(0,0,0,.15) 100%);
+  mask-image:linear-gradient(180deg,#000 62%,rgba(0,0,0,.15) 100%);
+}
+.ea-compact-summary-inner{display:grid;grid-template-rows:0fr;transition:grid-template-rows 220ms cubic-bezier(.2,.85,.25,1)}
+.ea-compact-summary-box[data-open=true] .ea-compact-summary-inner{grid-template-rows:1fr}
+.ea-compact-summary-box[data-open=true] .ea-compact-preview{display:none}
 .dsh-explain-assistant-compact-summary{
-  margin:6px 0 0;padding:8px 10px;
-  font-size:12.5px;line-height:1.6;white-space:pre-wrap;
+  min-height:0;overflow:hidden;
+  margin:0;padding:8px 10px;
+  font-size:12.5px;line-height:1.6;
   color:var(--dsw-alias-label-primary,#111);
-  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06));
   border-left:3px solid var(--dsw-alias-button-primary-fill,#2f6bff);
   border-radius:0 7px 7px 0;
+}
+.ea-compact-toggle{align-self:flex-start}
+.ea-compact-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:2px}
+@media (prefers-reduced-motion:reduce){
+  .ea-compact{animation:none}
+  .ea-compact-summary-inner{transition:none}
 }
 
 /* ---------- 改大小：像普通窗口一样拖「边」和「角」 ---------- */
@@ -1065,3 +1218,83 @@ html[data-ea-selecting] [data-tool]:hover{
 .ea-tier-reported{color:var(--dsw-alias-state-warn-primary,#b45309);background:rgba(180,83,9,.1);border-color:rgba(180,83,9,.3)}
 .ea-tier-unavailable,.ea-tier-unknown{color:var(--dsw-alias-label-tertiary,#666);background:rgba(127,127,127,.1);border-color:rgba(127,127,127,.3)}
 .ea-evidence-tier-hint{display:block;margin-top:3px;font-size:11px;line-height:1.55;color:var(--dsw-alias-label-tertiary,#777)}
+
+/* ---------- 使用教程页 ----------
+ * 与模型选择页共用同一套"翻页"语言（data-view 一改，两页互相推拉），
+ * 所以这里不重复定义时长/曲线，只用已有的 --ea-page-* 变量与 keyframes。
+ *
+ * 排版按「可扫读」来：一屏一节，节标题是大字，正文只用一种字号，
+ * 列表不缩进太深（浮窗窄，缩进一多正文就换行成竖条）。
+ * ────────────────────────────────────────────────────────────── */
+.ea-tutorial-trigger{
+  width:24px;height:24px;min-width:24px;padding:0;
+  display:inline-flex;align-items:center;justify-content:center;
+  border-radius:50%;font-weight:700;line-height:1;font-size:12.5px;
+}
+.ea-tutorial-panel-slot{
+  position:absolute;inset:0;z-index:3;pointer-events:none;
+  background:var(--ea-glass-pane,var(--dsw-alias-bg-base,#fff));
+  -webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);
+}
+.ea-overlay[data-view=tutorial] .ea-tutorial-panel-slot{pointer-events:auto}
+.ea-overlay[data-view=tutorial] .ea-composer{visibility:hidden}
+.ea-overlay[data-view=tutorial] .ea-body{pointer-events:none}
+.ea-tutorial-panel[data-closing=true]{pointer-events:none}
+.ea-tutorial-panel{display:flex;flex:1 1 auto;flex-direction:column;min-height:0;height:100%;position:relative}
+@media (prefers-reduced-motion: no-preference){
+  .ea-overlay[data-view=tutorial] .ea-tutorial-panel{animation:ea-page-in var(--ea-page-in-dur) var(--ea-page-ease) both}
+  .ea-overlay[data-view=tutorial] .ea-body{animation:ea-chat-recede var(--ea-page-out-dur) var(--ea-page-ease-out) both}
+  .ea-overlay[data-returning=true] .ea-body{animation:ea-chat-return var(--ea-page-in-dur) var(--ea-page-ease) both}
+  .ea-tutorial-panel[data-closing=true]{animation:ea-page-out var(--ea-page-out-dur) var(--ea-page-ease-out) both}
+  .ea-overlay[data-view=tutorial] .ea-tut-body > *{animation:ea-settle 200ms var(--ea-page-ease) 60ms both}
+}
+.ea-tut-bar{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:9px 12px;border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));flex:0 0 auto;
+}
+.ea-tut-bar-title{font-size:12.5px;font-weight:650;color:var(--dsw-alias-label-primary,#111)}
+.ea-tut-body{
+  flex:1 1 auto;min-height:0;overflow:auto;
+  padding:14px 16px 24px;display:flex;flex-direction:column;gap:18px;
+  scrollbar-width:thin;
+}
+.ea-tut-head{display:flex;flex-direction:column;gap:5px}
+.ea-tut-title{margin:0;font-size:15px;line-height:1.4;font-weight:680;letter-spacing:.2px}
+.ea-tut-lead{margin:0;font-size:12.5px;line-height:1.7;color:var(--dsw-alias-label-secondary,#555)}
+.ea-tut-sec{display:flex;flex-direction:column;gap:7px}
+.ea-tut-h{
+  margin:0;font-size:12px;font-weight:650;letter-spacing:.4px;
+  color:var(--dsw-alias-label-secondary,#555);text-transform:none;
+  padding-bottom:4px;border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.07));
+}
+.ea-tut-list{margin:0;padding-left:16px;display:flex;flex-direction:column;gap:4px;font-size:12.5px;line-height:1.7}
+.ea-tut-steps{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:9px}
+.ea-tut-step strong{font-size:12.5px;display:block;margin-bottom:2px}
+.ea-tut-step p{margin:0;font-size:12.5px;line-height:1.7;color:var(--dsw-alias-label-secondary,#555)}
+.ea-tut-tiers{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:12.5px;line-height:1.7}
+.ea-tut-tiers li{display:flex;gap:7px;align-items:flex-start}
+.ea-tut-tiers .ea-evidence-tier{flex:0 0 auto;margin-top:2px}
+.ea-tut-note{margin:0;font-size:11.5px;line-height:1.65;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-tut-keys{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 10px;font-size:12.5px;line-height:1.7}
+.ea-tut-keys dt{margin:0;white-space:nowrap;font-weight:600;color:var(--dsw-alias-label-primary,#111)}
+.ea-tut-keys dd{margin:0;color:var(--dsw-alias-label-secondary,#555)}
+.ea-tut-keys kbd{
+  display:inline-block;padding:1px 5px;border-radius:5px;font-size:11px;line-height:1.5;
+  font-family:inherit;font-weight:600;
+  background:var(--ea-band-fill,rgba(127,127,127,.12));
+  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.14));
+  box-shadow:inset 0 -1px 0 rgba(0,0,0,.08);
+}
+.ea-tut-two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:460px){.ea-tut-two{grid-template-columns:1fr}}
+.ea-tut-two strong{font-size:12.5px;display:block;margin-bottom:4px}
+.ea-tut-faq{display:flex;flex-direction:column;gap:6px}
+.ea-tut-q{border-radius:9px;background:var(--ea-band-fill,rgba(127,127,127,.08));padding:2px 10px}
+.ea-tut-q summary{cursor:pointer;padding:6px 0;font-size:12.5px;line-height:1.6;font-weight:600;list-style:none}
+.ea-tut-q summary::-webkit-details-marker{display:none}
+.ea-tut-q summary::after{content:'+';float:right;color:var(--dsw-alias-label-tertiary,#777);font-weight:700}
+.ea-tut-q[open] summary::after{content:'–'}
+.ea-tut-a{margin:0 0 6px;font-size:12.5px;line-height:1.7;color:var(--dsw-alias-label-secondary,#555)}
+.ea-tut-ask{margin-bottom:8px}
+.ea-tut-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:4px}
+.ea-hero-tutorial{align-self:flex-start;margin-top:2px}

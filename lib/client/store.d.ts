@@ -83,6 +83,15 @@ export type CompactState = {
     historyRevision?: number;
     status?: 'idle' | 'running' | 'complete' | 'error' | 'interrupted';
     error?: string;
+    /**
+     * 压缩**发起时**小助手的上下文占用（百分比）。
+     *
+     * 只为了在压缩报告里写清「压缩前 62% → 现在 38%」—— 用户按 /compact 的目的就是
+     * 「把上下文变小」，不给前后对比，这个数字就白测了。
+     * 客户端本地字段，不进宿主契约（宿主落库的结构里没有它）。
+     */
+    beforeOccupancy?: number;
+    beforeOccupancyEstimated?: boolean;
 };
 type ModelOption = {
     provider: string;

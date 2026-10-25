@@ -4,6 +4,7 @@ import { readAppliedGeometry } from './window.js';
 import { attachSelection } from './selection.js';
 import { syncPickMarks } from './pick-marks.js';
 import { createArchiveWatcher } from './archive-watch.js';
+import { withExitGhost } from './exit-anim.js';
 import { headerButtonText, headerButtonTitle, watchUnread } from './header-badge.js';
 import { shouldMountOverlay, isOpening, watchOpening, openingLabel, openingTitle } from './open-gate.js';
 import css from './styles.css';
@@ -192,11 +193,20 @@ export function apply(ctx: any): void {
          * 首次挂载时清理函数从未跑过 → ref 为 undefined → 仍落默认值（A2 要的那一种）。
          */
         const previousGeometry = lastGeometryRef.current;
-        host.replaceChildren();
         let controller: { dispose(): void } | undefined;
         let selection: ReturnType<typeof attachSelection> | undefined;
         const current = registry.current;
-        if (shouldMount && current?.open) {
+        const mounting = Boolean(shouldMount && current?.open);
+        /**
+         * 只在**要挂新窗**时清空宿主。
+         *
+         * 旧写法人人都会在这里无条件 replaceChildren() —— 它会把上一轮清理函数
+         * 刚挂上去的「退场克隆体」一起清掉，于是 220ms 的关闭动画永远只能播 0ms
+         * （实测：真页面上根本找不到 [data-leaving] 节点）。清空这件事本来就只在
+         * "要换新窗"时才需要，不挂窗的时候什么都不该动。
+         */
+        if (mounting) host.replaceChildren();
+        if (mounting && current?.open) {
           const element = renderOverlay(current, plugin, previousGeometry);
           host.appendChild(element);
           /*
@@ -208,7 +218,7 @@ export function apply(ctx: any): void {
            */
           const boundSession = current.sessionId;
           selection = attachSelection(document, boundSession, {
-            select: (item, element) => {
+            select: (item, element, options) => {
               // §8 切换主对话不串记录：onSelect 闭包烙的是挂监听那一刻的会话。
               // 若用户开着选择模式立刻切会话，React 的 effect 清理是异步的，旧监听器
               // 可能晚一拍才 dispose；这期间一次点击会把证据写进旧会话。落证据前再确认
@@ -219,14 +229,26 @@ export function apply(ctx: any): void {
               // 一两百毫秒；用户已经把鼠标松开、眼睛盯着那一块，这段空白就是「点了没反应」。
               // 这一笔是乐观显示：重画后 syncPickMarks 会按真实状态校正（编号/是否保留）。
               const anchor = String(item.pickId || item.id || '');
-              if (anchor && element && typeof element.setAttribute === 'function') {
+              // 锚点先落到卡片上：syncPickMarks 靠它把高亮与编号找回来（见 pick-marks.ts）。
+              if (anchor && element && typeof element.setAttribute === 'function' && element.getAttribute('data-ea-pick') !== anchor) {
                 element.setAttribute('data-ea-pick', anchor);
-                element.setAttribute('data-ea-picked', anchor);
-                const nextIndex = (registry.get(boundSession)?.evidence.length ?? 0) + 1;
-                element.setAttribute('data-ea-pick-index', String(nextIndex));
               }
-              registry.update(boundSession, state => { state.evidence = [...state.evidence.filter(existing => existing.id !== item.id), item]; });
-              const detail = { sessionId: boundSession, item };
+              const before = registry.get(boundSession)?.evidence ?? [];
+              /**
+               * 两种语义（用户这一轮要求「Ctrl+左键可选择多个内容」）：
+               * - 普通左键 = **替换**：只留这一条（桌面软件里点一下一直是这个意思）；
+               * - Ctrl/⌘+左键 = **加选**：并进已有的选择。
+               * 按锚点去重而不是按 id：工具卡片没有会话键，id 会退化成工具名，
+               * 两张 bash 卡片会被当成同一条（见 selection.ts 的 ensurePickId）。
+               */
+              const next = (options?.additive === true ? before : [])
+                .filter(existing => String(existing?.pickId ?? existing?.id ?? '') !== anchor);
+              next.push(item);
+              registry.update(boundSession, state => { state.evidence = next; });
+              // 高亮立刻落到卡片上，不等下一轮重画：替换语义下还要**同时**把上一张灭掉，
+              // 否则会看到两张都亮着、却只选了一条 —— 比没有高亮更让人糊涂。
+              syncPickMarks(document, next);
+              const detail = { sessionId: boundSession, item, additive: options?.additive === true };
               if (typeof document.dispatchEvent === 'function') document.dispatchEvent(new CustomEvent('dsh-explain-assistant:evidence-selected', { detail }));
             },
             // 取消按**锚点**走，不按 id：工具卡片没有会话键，id 会退化成工具名，
@@ -247,7 +269,19 @@ export function apply(ctx: any): void {
         return () => {
           // 摘除**之前**把这一刻的实际几何记下来 —— 这是下一次重建能「原地不动」的唯一依据。
           lastGeometryRef.current = readAppliedGeometry(host.firstElementChild as HTMLElement | null);
-          controller?.dispose(); selection?.dispose(); host.replaceChildren();
+          /**
+           * 关闭浮窗时留一份克隆体把退场播完再删（用户要求「优化关闭小助手后的动画」）。
+           *
+           * 判据是**此刻状态里 open 还是不是 true**，而不是「这次 effect 为什么重跑」：
+           * · open 已变 false → 这是关闭 → 播退场；
+           * · open 仍为 true → 这是切会话 / 首帧前的重建 → **不播**，直接换新窗
+           *   （用户没有关它，播一次"关窗"动画是错的）。
+           * 插件卸载与宿主销毁走外层 cleanup，走不到这里，所以不会留下幽灵窗。
+           */
+          const closing = registry.current?.open === false;
+          const release = () => { controller?.dispose(); selection?.dispose(); };
+          if (closing) withExitGhost(host as unknown as { firstElementChild: Element | null; replaceChildren(...nodes: Element[]): void }, release);
+          else { release(); host.replaceChildren(); }
         };
       }, [open, sessionId, shouldMount]);
 

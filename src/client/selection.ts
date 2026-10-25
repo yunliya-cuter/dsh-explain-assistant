@@ -73,7 +73,15 @@ type SelectionController = { enter(): void; exit(): void; dispose(): void }
  * 正是「点了没反应」的主要来源。
  */
 export type SelectionHandlers = {
-  select(item: EvidenceItem, element: Element): void
+  /**
+   * 选中一条。
+   *
+   * @param options.additive true = 加选（Ctrl/⌘+左键）：并进已有的选择；
+   *   false / 省略 = 替换（普通左键）：只留这一条。
+   *   为什么要区分：用户要求「Ctrl+左键可选择多个内容」，而普通点击在桌面软件里
+   *   一直是「换成这一个」的意思 —— 两种语义各占一个手势，别混成一种。
+   */
+  select(item: EvidenceItem, element: Element, options?: { additive?: boolean }): void
   deselect(pickId: string): void
 }
 
@@ -116,8 +124,16 @@ export function attachSelection(root: Document, sessionId: string, handlers: Sel
   }
   let pressed: { x: number; y: number; node: Element } | undefined
   const click = (event: MouseEvent) => {
-    // 带修饰键的点击是用户在表达别的意图（新窗口、多选等），不抢。
-    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+    if (event.button !== 0) return
+    /**
+     * 修饰键分两类，处理方式必须不同：
+     * - Shift / Alt：**任何情况下都不抢**（Shift 是选字、Alt 是宿主自己的手势）；
+     * - Ctrl / ⌘：模式内它是「加选」（用户这一轮明确要的手势）；
+     *   模式外仍然不抢 —— 那时它在宿主里有别的含义（新标签页、多选文字）。
+     */
+    if (event.shiftKey || event.altKey) return
+    const additive = event.ctrlKey || event.metaKey
+    if (!mode && additive) return
     const node = nearest(event.target)
     if (!node) return
     if (pressed && pressed.node === node) {
@@ -128,11 +144,12 @@ export function attachSelection(root: Document, sessionId: string, handlers: Sel
       if (selection && String(selection).trim().length > 0) return
     }
     // 取消这条路径**不受模式限制**：卡片上明明写着「已选」，点它就该能取消。
+    // Ctrl+点已选中的卡片同样是取消 —— 加选手势本来就该是"切换"。
     const picked = pickedIdOf(node)
     if (picked) { swallow(event); handlers.deselect(picked); return }
     if (!mode) return
     swallow(event)
-    handlers.select(evidenceFromElement(node, sessionId), node)
+    handlers.select(evidenceFromElement(node, sessionId), node, { additive })
   }
   const pointerdown = (event: MouseEvent) => {
     if (event.button !== 0) return

@@ -12,7 +12,15 @@ const selection = await moduleFromSource('src/client/selection.ts');
 function recorder() {
   const picked = [];
   const removed = [];
-  return { picked, removed, handlers: { select: item => picked.push(item), deselect: id => removed.push(id) } };
+  // 第三个参数是"这次是替换还是加选"（Ctrl/⌘+左键 = 加选）。
+  const additives = [];
+  return {
+    picked, removed, additives,
+    handlers: {
+      select: (item, element, options) => { picked.push(item); additives.push(options?.additive === true) },
+      deselect: id => removed.push(id),
+    },
+  };
 }
 
 // §5.2：点击主对话中的步骤卡片即可选定解释对象，且不得触发原卡片操作。
@@ -107,7 +115,33 @@ test('反例：浮窗内部的点击不得被当成选中', () => {
   } finally { dom.restore(); }
 });
 
-test('反例：带修饰键的点击不抢，避免破坏用户原有操作', () => {
+test('反例：模式外带修饰键的点击不抢，避免破坏用户原有操作', () => {
+  const dom = fakeDom();
+  try {
+    const root = dom.document;
+    const chat = new FakeElement('div'); chat.setAttribute('data-conversation-scroll', '');
+    const card = new FakeElement('div'); card.setAttribute('data-tool', 'bash');
+    chat.appendChild(card); root.appendChild(chat);
+    const rec = recorder();
+    const controller = selection.attachSelection(root, 'session-a', rec.handlers);
+    // 注意这里**没有** controller.enter()：模式之外这四个修饰键都属于用户在宿主里的原有操作。
+    for (const modifier of ['ctrlKey', 'metaKey', 'shiftKey', 'altKey']) {
+      root.emit('click', { target: card, button: 0, clientX: 1, clientY: 1, [modifier]: true });
+    }
+    assert.equal(rec.picked.length, 0, '模式外带修饰键的点击不得被拦截');
+    controller.dispose();
+  } finally { dom.restore(); }
+});
+
+/**
+ * 用户这一轮的要求：「Ctrl+左键可选择多个内容」。
+ *
+ * 这条测试钉的是**语义**而不是"能点两次"：
+ *   · Ctrl/⌘+左键 = 加选（additive: true，调用方据此不清空已有选择）；
+ *   · 普通左键   = 替换（additive: false）；
+ *   · Shift/Alt+左键在模式内也**不接管**（选字与宿主手势优先）。
+ */
+test('模式内 Ctrl/⌘+左键是「加选」，普通左键是「替换」', () => {
   const dom = fakeDom();
   try {
     const root = dom.document;
@@ -117,10 +151,18 @@ test('反例：带修饰键的点击不抢，避免破坏用户原有操作', ()
     const rec = recorder();
     const controller = selection.attachSelection(root, 'session-a', rec.handlers);
     controller.enter();
-    for (const modifier of ['ctrlKey', 'metaKey', 'shiftKey', 'altKey']) {
-      root.emit('click', { target: card, button: 0, clientX: 1, clientY: 1, [modifier]: true });
+    root.emit('click', { target: card, button: 0, clientX: 1, clientY: 1, ctrlKey: true });
+    root.emit('click', { target: card, button: 0, clientX: 1, clientY: 1, metaKey: true });
+    root.emit('click', { target: card, button: 0, clientX: 1, clientY: 1 });
+    assert.deepEqual(rec.additives, [true, true, false], 'Ctrl/⌘ 必须是加选，普通左键必须是替换');
+    assert.equal(rec.picked.length, 3, '三次点击都要真的落到调用方');
+    // Shift / Alt 在模式内也不接管。
+    const before = rec.picked.length;
+    for (const modifier of ['shiftKey', 'altKey']) {
+      const event = root.emit('click', { target: card, button: 0, clientX: 1, clientY: 1, [modifier]: true });
+      assert.equal(event.defaultPrevented, false, modifier + ' 在模式内也不得被接管');
     }
-    assert.equal(rec.picked.length, 0, '带修饰键的点击不得被拦截');
+    assert.equal(rec.picked.length, before, 'Shift/Alt+左键不得触发选中');
     controller.dispose();
   } finally { dom.restore(); }
 });

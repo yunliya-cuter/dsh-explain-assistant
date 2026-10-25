@@ -234,6 +234,14 @@ export class FakeElement {
 export function fakeDom() {
   const previous = { document: globalThis.document, window: globalThis.window, Element: globalThis.Element, HTMLElement: globalThis.HTMLElement };
   const document = new FakeElement('document'); document.activeElement = null; document.head = new FakeElement('head'); document.createElement = tag => new FakeElement(tag);
+  // 真 DOM 一定有 body：选择模式的浮动条挂在 body 上（浮窗自己有 backdrop-filter +
+  // overflow:hidden，挂在里面会被裁掉、还会跟着浮窗一起让开）。夹具缺它时那条路径
+  // 会静默走到 optional chaining 的 undefined 分支，测试看不见任何差别。
+  document.body = new FakeElement('body');
+  // 真 DOM 的 documentElement 就是 <html>：选择模式的 data-ea-selecting 写在它上面
+  // （styles.css 用 html[data-ea-selecting] 选主对话里的卡片）。缺了它，这条路径
+  // 全靠 optional chaining 静默跳过，测试永远看不见差别。
+  document.documentElement = new FakeElement('html');
   // 真实 document 支持自定义事件（selection 模式用它做「选中一条依据」的通知）。
   // 假 DOM 缺 dispatchEvent 会让 overlay 的 enterSelectionMode 直接 TypeError。
   document.dispatchEvent = event => document.emit(event?.type || String(event), { detail: event?.detail });

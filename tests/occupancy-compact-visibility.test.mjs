@@ -91,7 +91,9 @@ test('F9: 浮窗必须渲染压缩结果（不再是 grep compactState = 0）', 
   assert.match(source, /compactNodes/, '必须存在压缩结果区块');
   assert.match(source, /state\.compactState/, '必须读 state.compactState');
   assert.match(source, /compactSlot/, '必须挂进骨架并参与重画');
-  assert.match(source, /fill\(ctx\.compactSlot, compactNodes\(state\)\)/, 'updateOverlay 必须重画该区块');
+  // 2026-10：compactNodes 多接一个 ctx —— 摘要块的「展开/收起」状态必须跨重画保留，
+  // 只靠 state 传不进去（那是一次性渲染，用户点开又会被收起来）。
+  assert.match(source, /fill\(ctx\.compactSlot, compactNodes\(state, ctx\)\)/, 'updateOverlay 必须重画该区块');
 });
 
 test('F9: 压缩四种状态都有中文反馈，且失败明确保留上一份摘要', async () => {

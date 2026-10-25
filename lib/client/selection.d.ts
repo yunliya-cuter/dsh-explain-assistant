@@ -28,7 +28,17 @@ type SelectionController = {
  * 正是「点了没反应」的主要来源。
  */
 export type SelectionHandlers = {
-    select(item: EvidenceItem, element: Element): void;
+    /**
+     * 选中一条。
+     *
+     * @param options.additive true = 加选（Ctrl/⌘+左键）：并进已有的选择；
+     *   false / 省略 = 替换（普通左键）：只留这一条。
+     *   为什么要区分：用户要求「Ctrl+左键可选择多个内容」，而普通点击在桌面软件里
+     *   一直是「换成这一个」的意思 —— 两种语义各占一个手势，别混成一种。
+     */
+    select(item: EvidenceItem, element: Element, options?: {
+        additive?: boolean;
+    }): void;
     deselect(pickId: string): void;
 };
 export declare function attachSelection(root: Document, sessionId: string, handlers: SelectionHandlers): SelectionController;

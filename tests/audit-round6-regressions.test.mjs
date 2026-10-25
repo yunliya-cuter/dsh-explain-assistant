@@ -75,7 +75,16 @@ test('C5: 再点一次「选择主对话内容」必须退出选择模式', asyn
   } finally { await new Promise(r => setTimeout(r, 0)); dom.restore(); }
 });
 
-test('C5: 选中一条依据后自动退出选择模式', async () => {
+/**
+ * 这一条在 2026-10 改过契约，原因写在下面（不是为了让测试变绿）。
+ *
+ * 旧契约：选中一条就自动退出 —— 理由是"别继续吞点击"，当时是合理的。
+ * 新契约（用户要求「Ctrl+左键可选择多个内容」）：**选中之后必须留在模式里**，
+ * 否则第二条根本点不到。
+ * 风险随之变化：卡在模式里的后果比以前严重（浮窗此刻还让开了），
+ * 所以"出口"从"自动退出"换成三条显式出口，并且这条测试逐个断言它们都通。
+ */
+test('C5: 选中一条之后仍留在选择模式（多选），且三条出口都必须在', async () => {
   const dom = fakeDom();
   try {
     const root = await overlayFixture(baseState);
@@ -84,7 +93,15 @@ test('C5: 选中一条依据后自动退出选择模式', async () => {
     assert.equal(root.hasAttribute('data-selection-mode'), true);
     // 模拟用户点中主对话里的一条依据
     dom.document.emit('dsh-explain-assistant:evidence-selected', { detail: { sessionId: 's', item: { id: 'e1' } } });
-    assert.equal(root.hasAttribute('data-selection-mode'), false, '选中后必须自动退出，否则后续点击被持续吞掉');
+    assert.equal(root.hasAttribute('data-selection-mode'), true, '多选模式下不得"选一条就退出"（否则第二条点不到）');
+    // 出口一：Esc。必须挂在 document 上 —— 浮窗让开之后焦点在主对话里，root 上的监听收不到。
+    dom.document.emit('keydown', { key: 'Escape' });
+    assert.equal(root.hasAttribute('data-selection-mode'), false, 'Esc 必须能退出选择模式');
+    // 出口二：再点标题栏那颗按钮（此刻它能被程序化点击，界面回来之后也看得到）。
+    selectBtn.emit('click');
+    assert.equal(root.hasAttribute('data-selection-mode'), true, '再点一次应重新进入');
+    selectBtn.emit('click');
+    assert.equal(root.hasAttribute('data-selection-mode'), false, '再点一次必须退出（C5 反例）');
   } finally { await new Promise(r => setTimeout(r, 0)); dom.restore(); }
 });
 

@@ -375,7 +375,7 @@ function quickNodes(state: AssistantClientState, plugin: PluginLike): Child[] {
 }
 
 /** 没有任何内容时的引导。用户第一次打开应该一眼知道这里能干什么。 */
-function heroNodes(state: AssistantClientState): Child[] {
+function heroNodes(state: AssistantClientState, ctx: OverlayContext): Child[] {
   if (state.text || state.records.length || state.error || isBusy(state)) return []
   return [el('section', { class: 'ea-hero', 'aria-label': '使用说明' },
     el('p', { class: 'ea-hero-title', text: '小助手在旁边看着主 agent，随时把「它正在干什么」讲成白话。' }),
@@ -384,6 +384,8 @@ function heroNodes(state: AssistantClientState): Child[] {
       el('li', { text: '也可以直接在下面输入问题，或者点上面的快捷问题。' }),
       el('li', { text: '小助手只读：不改主 agent、不执行命令、不碰主对话的输入框。' }),
     ),
+    // 第一次打开的人不知道标题栏那排按钮能点 —— 教程入口必须出现在这里，而不只在标题栏。
+    button('第一次用？看 30 秒教程 →', '打开使用教程', () => openTutorial(ctx), { class: 'ea-btn ea-btn-soft ea-hero-tutorial' }),
   )]
 }
 
@@ -812,37 +814,135 @@ function renderModelList(ctx: OverlayContext): void {
  * 界面没有任何变化，成功失败都看不见，等于功能不存在。现在四种状态都给中文反馈：
  * 压缩中 / 已完成（带摘要正文）/ 已中断 / 失败（并说明保留上一份可用摘要）。
  */
-function compactNodes(state: AssistantClientState): Child[] {
+/**
+ * §9.1 /compact 的结果 —— 小助手自己上下文的压缩报告。
+ *
+ * 这一版按用户的原话重做：「按 /compact 后的页面设计进行仔细优化」「让摘要内容折叠起来」。
+ * 旧版有四个真问题，都不是审美问题：
+ *
+ * 1. **看不见**：卡片挂在正文最上面，而用户按 /compact 时通常正滚在底部 ——
+ *    卡片出现在视口上方，看起来就是"按了没反应"。（现在：出现时把卡片带进视野）
+ * 2. **像回答**：压缩过程中摘要走的是"回答"那条流式通道，屏幕上会出现
+ *    一个空问句气泡 + 自动滚出来的摘要正文。它不是回答，却长着回答的样子。
+ *    （现在：压缩中不进对话流，进度写在本卡片里）
+ * 3. **不可操作**：只有一段状态文字 + 一整段摘要，不能收、不能复制、不能重试。
+ * 4. **摘要太长**：一份摘要常常上千字，把整段历史顶到下面去。
+ *    （现在：默认折成三行预览 + 「展开摘要」）
+ *
+ * 四种状态都给中文反馈：压缩中 / 已压缩（含占用变化）/ 已中断 / 失败（并说明上一份摘要仍可用）。
+ */
+function compactNodes(state: AssistantClientState, ctx: OverlayContext): Child[] {
   const compact = state.compactState
   if (!compact || compact.status === 'idle') return []
   // 防线：宿主落库的 compactState 是**落库结构**，没有 status 字段（§9.1 只有成功才落库）。
-  // 若某条路径把它整份带进来，status 会是 undefined，按下面的分支就会把「成功」显示成「已中断」。
-  // 有摘要就按成功渲染，没摘要才按失败渲染。
+  // 若某条路径把它整份带进来，status 会是 undefined —— 有摘要就按成功渲染，没摘要才按失败渲染。
   const status = compact.status ?? (compact.summary ? 'complete' : 'error')
+  const running = status === 'running'
+  const failed = status === 'error'
+  const badgeText = running ? '压缩中' : status === 'complete' ? '已压缩' : failed ? '压缩失败' : '已中断'
+  const summary = typeof compact.summary === 'string' ? compact.summary : ''
+
   const rows: Child[] = []
-  if (status === 'running') {
-    rows.push(el('p', { class: 'ea-compact-status', role: 'status', text: '正在整理小助手自己的上下文…' }))
+  rows.push(el('div', { class: 'ea-card-head ea-compact-head' },
+    el('h3', { class: 'ea-card-title', text: '小助手上下文' }),
+    // 徽章同时用颜色与文字两种编码：只靠颜色的话，色觉障碍用户分不出"已压缩"和"失败"。
+    el('span', { class: 'ea-compact-badge', 'data-status': running ? 'running' : status === 'complete' ? 'complete' : failed ? 'error' : 'interrupted', text: badgeText }),
+  ))
+
+  // 元信息一行：时间 · 占用变化。拿不到就不写（宁可不显示，也不编一个数字）。
+  const metaBits: string[] = []
+  if (compact.updatedAt) metaBits.push('压缩时间 ' + timeText(compact.updatedAt))
+  const before = typeof compact.beforeOccupancy === 'number' ? compact.beforeOccupancy : undefined
+  if (before !== undefined && state.occupancyKnown && typeof state.occupancy === 'number') {
+    metaBits.push('占用 ' + Math.round(before) + '% → ' + Math.round(state.occupancy) + '%')
+  } else if (before !== undefined) {
+    metaBits.push('压缩前占用 ' + Math.round(before) + '%')
+  }
+  if (metaBits.length) rows.push(el('small', { class: 'ea-meta ea-compact-meta', text: metaBits.join(' · ') }))
+
+  if (running) {
+    // 进度写在这里，不写进对话流：压缩摘要不是"回答"，不该占用回答的位置。
+    // 已收到的字数是真实进度（宿主按 SSE 一段段推），不是假动画。
+    const received = (state.text || '').length
+    rows.push(el('p', { class: 'ea-compact-status ea-compact-running', role: 'status' },
+      el('span', { class: 'ea-spinner' }),
+      el('span', { text: '正在整理小助手自己的上下文…' + (received ? '（已收到 ' + received + ' 字）' : '') }),
+    ))
+    rows.push(el('p', { class: 'ea-compact-hint', text: '只压缩小助手的上下文，不影响主对话；完整问答记录仍然保留在历史里。' }))
   } else if (status === 'complete') {
     rows.push(el('p', { class: 'ea-compact-status', role: 'status', text: '已压缩：后续回答参考下面这份摘要。完整问答记录仍然保留在历史里，没有被删除。' }))
-    // 摘要也是**模型写出来的正文**，同样会带 Markdown 记号 —— 原先直接塞 text，记号会原样露出。
-    // 用户抱怨「没有对 md 的符号进行解析」，指的是所有看到模型文字的地方，不只是回答正文。
-    if (compact.summary) rows.push(el('div', { class: 'dsh-explain-assistant-compact-summary ea-compact-summary ea-md-scope' }, ...cachedMarkdownNodes('compact-' + (compact.updatedAt || contentKey(String(compact.summary))), String(compact.summary))))
-    if (compact.updatedAt) rows.push(el('small', { class: 'ea-meta', text: '压缩时间 ' + timeText(compact.updatedAt) }))
+    if (summary) rows.push(compactSummaryBlock(summary, ctx))
+    rows.push(el('div', { class: 'ea-compact-actions' },
+      compactAction('重新压缩', '再压缩一次小助手上下文', ctx),
+      compactCopyAction(summary),
+    ))
   } else {
-    // §9.1：失败必须清楚提示，并且明确「上一份可用摘要还在」。
-    const failed = status === 'error'
-    rows.push(el('p', { class: failed ? 'ea-compact-status ea-compact-error' : 'ea-compact-status', role: 'alert', text: (failed ? '压缩失败：' : '压缩已中断：') + (compact.error || '没有拿到可用的摘要') }))
-    if (compact.summary) {
-      rows.push(el('div', { class: 'dsh-explain-assistant-compact-summary ea-compact-summary ea-md-scope' }, ...cachedMarkdownNodes('compact-prev-' + compact.updatedAt, String(compact.summary))))
-      rows.push(el('small', { class: 'ea-meta', text: '上面这份是上一次成功压缩的摘要，仍然可用。' }))
+    // 失败 / 中断：说清原因，并且明确"上一份可用摘要还在"。
+    const label = failed ? '压缩失败：' : '压缩已中断：'
+    rows.push(el('p', { class: 'ea-compact-status ea-compact-error', role: 'alert', text: label + (compact.error || '没有拿到可用的摘要') }))
+    if (summary) {
+      rows.push(el('small', { class: 'ea-meta', text: '下面是上一次成功压缩的摘要，仍然可用。' }))
+      rows.push(compactSummaryBlock(summary, ctx))
     }
+    rows.push(el('div', { class: 'ea-compact-actions' }, compactAction(failed ? '重试压缩' : '继续压缩', '再尝试压缩一次小助手上下文', ctx)))
   }
-  return [el('section', { class: 'dsh-explain-assistant-compact ea-card', 'aria-label': '小助手上下文压缩' },
-    el('div', { class: 'ea-card-head' },
-      el('h3', { class: 'ea-card-title', text: '小助手上下文' }),
+
+  return [el('section', {
+    class: 'dsh-explain-assistant-compact ea-card ea-compact',
+    'aria-label': '小助手上下文压缩',
+    'data-status': running ? 'running' : status === 'complete' ? 'complete' : failed ? 'error' : 'interrupted',
+  }, ...rows)]
+}
+
+/** 「重新压缩 / 重试」按钮：与标题栏那颗走同一条路（submit('/compact')），不另开一条。 */
+function compactAction(label: string, aria: string, ctx: OverlayContext): HTMLElement {
+  return button(label, aria, () => {
+    // 按钮禁用只是视觉挡板：requestSubmit / 直接调用都能绕过去，闸门必须在这里再判一次。
+    if (!canSubmit(ctx.state)) return
+    void ctx.plugin.submit('/compact')
+  }, { class: 'ea-btn ea-btn-soft ea-compact-action' })
+}
+
+/** 复制摘要：只有真的有摘要时才出现；没有剪贴板 API 时如实说没复制成，不假装成功。 */
+function compactCopyAction(summary: string): HTMLElement {
+  const node = button('复制摘要', '把这份摘要复制到剪贴板', () => {
+    const clipboard = (typeof navigator === 'object' ? navigator : undefined)?.clipboard
+    const say = (text: string) => { node.textContent = text; setTimeout(() => { node.textContent = '复制摘要' }, 1600) }
+    if (!clipboard?.writeText) { say('无法复制'); return }
+    clipboard.writeText(summary).then(() => say('已复制'), () => say('复制失败'))
+  }, { class: 'ea-btn ea-btn-soft ea-compact-action' })
+  return node
+}
+
+/**
+ * 摘要块：**默认折起来**（用户明确要求）。
+ *
+ * 折叠不靠量高度：折叠态的预览是纯文本截断（CSS 三行 clamp），
+ * 展开的全文用 grid-template-rows 0fr → 1fr 过渡 —— 不需要 clientHeight，
+ * 也就不存在"量到 0 → 动画跳一下"这类老问题（"展开全文"当初踩过这个坑）。
+ */
+function compactSummaryBlock(summary: string, ctx: OverlayContext): HTMLElement {
+  const open = ctx.compactOpen === true
+  const chars = summary.replace(/\s+/g, '').length
+  const label = '展开摘要（约 ' + chars + ' 字）'
+  const preview = summary.replace(/[#>*_`-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120)
+  const box = el('div', { class: 'ea-compact-summary-box', 'data-open': open ? 'true' : 'false' })
+  const toggle = button(open ? '收起摘要' : label, open ? '收起压缩摘要' : '展开压缩摘要', () => {
+    const next = !(ctx.compactOpen === true)
+    ctx.compactOpen = next
+    box.setAttribute('data-open', next ? 'true' : 'false')
+    toggle.setAttribute('aria-expanded', next ? 'true' : 'false')
+    toggle.textContent = next ? '收起摘要' : label
+  }, { class: 'ea-btn ea-btn-soft ea-compact-toggle', expanded: open })
+  box.append(
+    el('p', { class: 'ea-compact-preview', text: preview + (chars > 120 ? '…' : '') }),
+    el('div', { class: 'ea-compact-summary-inner' },
+      el('div', { class: 'dsh-explain-assistant-compact-summary ea-compact-summary ea-md-scope' },
+        ...cachedMarkdownNodes('compact-' + (ctx.state.compactState?.updatedAt || contentKey(summary)), summary),
+      ),
     ),
-    ...rows,
-  )]
+  )
+  return el('div', { class: 'ea-compact-summary-wrap' }, box, toggle)
 }
 
 /**
@@ -851,6 +951,202 @@ function compactNodes(state: AssistantClientState): Child[] {
  * 三级用词与提示词侧（prompts.ts 的 EVIDENCE_TIERS）保持一致，
  * 免得「同一件事在两处叫两个名字」。hint 是给用户的一句话解释，不出现术语。
  */
+/**
+ * 使用教程页。
+ *
+ * 用户这一轮的要求：「增加一个使用教程页面，内容编排精心设计」。
+ * 入口两个（都做了，因为两边都有人走）：标题栏那颗「?」图标（随时可查），
+ * 以及首次打开时正文里的那条引导（第一次用的人根本不知道标题栏那排按钮能点）。
+ *
+ * 编排原则（不是把功能列表抄一遍）：
+ * 1. **先说它不做什么**（只读 / 不独立干活 / 不猜），因为这是用户最担心的三件事；
+ * 2. 再给三步上手：选 → 问 → 看，每步都带上真正要按的那个键或那颗按钮；
+ * 3. 「依据分级」单独一节 —— 它是这个插件最容易被误解的机制，也是最值钱的那一点；
+ * 4. 按钮表与键盘表：可查，不解释；
+ * 5. 常见问答每条都带「问它一句」，把"读文档"直接变成"问它"。
+ */
+function tutorialNodes(ctx: OverlayContext): Child[] {
+  const rows: Child[] = []
+  rows.push(el('header', { class: 'ea-tut-head' },
+    el('h2', { class: 'ea-tut-title', text: '解释小助手 · 使用教程' }),
+    el('p', { class: 'ea-tut-lead', text: '它就站在主对话旁边：读主 agent 的记录，把「它正在干什么、为什么错、下一步建议」讲成人话。' }),
+  ))
+
+  rows.push(el('section', { class: 'ea-tut-sec' },
+    el('h3', { class: 'ea-tut-h', text: '先说三条边界' }),
+    el('ul', { class: 'ea-tut-list' },
+      el('li', { text: '只读：不改主对话、不替你发消息、不执行任何命令。' }),
+      el('li', { text: '不独立干活：它不会自己去查主机或跑测试，讲的是主对话里已经发生的事。' }),
+      el('li', { text: '拿不准就说「信息不足」，不猜、不编。' }),
+    ),
+  ))
+
+  rows.push(el('section', { class: 'ea-tut-sec' },
+    el('h3', { class: 'ea-tut-h', text: '三步上手' }),
+    el('ol', { class: 'ea-tut-steps' },
+      el('li', { class: 'ea-tut-step' },
+        el('strong', { text: '选一段内容（可选）' }),
+        el('p', { text: '点右上角「选择主对话内容」，浮窗会让开；再点主对话里的步骤或工具卡片即可。想选多条就按住 Ctrl（Mac 是 ⌘）再点。Esc 或「完成」结束选择。' }),
+      ),
+      el('li', { class: 'ea-tut-step' },
+        el('strong', { text: '提问' }),
+        el('p', { text: '在下面的输入框里问，或者点快捷问题。Enter 发送，Shift+Enter 换行。' }),
+      ),
+      el('li', { class: 'ea-tut-step' },
+        el('strong', { text: '看回答里的依据' }),
+        el('p', { text: '每条结论后面都标着它凭什么这么说 —— 见下一节。' }),
+      ),
+    ),
+  ))
+
+  rows.push(el('section', { class: 'ea-tut-sec' },
+    el('h3', { class: 'ea-tut-h', text: '「依据分级」是什么' }),
+    el('ul', { class: 'ea-tut-tiers' },
+      el('li', {}, el('span', { class: 'ea-evidence-tier ea-tier-observed', text: '已观察到' }), el('span', { text: '真的跑出来的结果（工具输出、命令返回），有记录可查。' })),
+      el('li', {}, el('span', { class: 'ea-evidence-tier ea-tier-reported', text: '仅据汇报' }), el('span', { text: '只是主 agent 自己说它做了什么，还没看到实际结果。' })),
+      el('li', {}, el('span', { class: 'ea-evidence-tier ea-tier-unavailable', text: '信息不足' }), el('span', { text: '记录里没有能判定的内容 —— 这时它会直说，而不是编一个。' })),
+    ),
+    el('p', { class: 'ea-tut-note', text: '为什么必须分三级：主 agent 说「已完成」和「真的跑完了」是两件事。前者只是它的话。' }),
+  ))
+
+  rows.push(el('section', { class: 'ea-tut-sec' },
+    el('h3', { class: 'ea-tut-h', text: '标题栏那几颗按钮' }),
+    el('dl', { class: 'ea-tut-keys' },
+      el('dt', { text: '模型' }), el('dd', { text: '现在是哪个模型，点开可以换一个（只影响小助手自己）。' }),
+      el('dt', { text: '选择主对话内容' }), el('dd', { text: '进出选择模式；选中的内容会钉在输入框上方，问完自动清掉。' }),
+      el('dt', { text: '/compact' }), el('dd', { text: '把「小助手自己的上下文」压成一份摘要，省上下文；不影响主对话，摘要默认折叠。' }),
+      el('dt', { text: '?' }), el('dd', { text: '就是这一页。' }),
+      el('dt', { text: '×' }), el('dd', { text: '关闭（Esc）。关掉不丢记录，下次打开还在。' }),
+    ),
+  ))
+
+  rows.push(el('section', { class: 'ea-tut-sec' },
+    el('h3', { class: 'ea-tut-h', text: '键盘' }),
+    el('dl', { class: 'ea-tut-keys' },
+      el('dt', {}, el('kbd', { text: 'Enter' })), el('dd', { text: '发送' }),
+      el('dt', {}, el('kbd', { text: 'Shift' }), el('span', { text: ' + ' }), el('kbd', { text: 'Enter' })), el('dd', { text: '换行' }),
+      el('dt', {}, el('kbd', { text: 'Esc' })), el('dd', { text: '退出选择模式 / 关闭浮窗' }),
+      el('dt', {}, el('kbd', { text: 'Ctrl' }), el('span', { text: ' / ' }), el('kbd', { text: '⌘' }), el('span', { text: ' + 点击' })), el('dd', { text: '多选内容' }),
+      el('dt', { text: '方向键' }), el('dd', { text: '标题栏获得焦点时移动窗口' }),
+      el('dt', { text: '拖边 / 拖角' }), el('dd', { text: '像普通窗口一样改大小' }),
+    ),
+  ))
+
+  rows.push(el('section', { class: 'ea-tut-sec' },
+    el('h3', { class: 'ea-tut-h', text: '上下文与占用' }),
+    el('div', { class: 'ea-tut-two' },
+      el('div', {},
+        el('strong', { text: '会被算进上下文的' }),
+        el('ul', { class: 'ea-tut-list' },
+          el('li', { text: '主 agent 最近这一段的过程（超长会被截断）' }),
+          el('li', { text: '你和小助手的问答' }),
+          el('li', { text: '你选中的那几条内容' }),
+        ),
+      ),
+      el('div', {},
+        el('strong', { text: '不进上下文的' }),
+        el('ul', { class: 'ea-tut-list' },
+          el('li', { text: '主对话的全部历史' }),
+          el('li', { text: '小助手的旧记录（除非你自己翻出来问）' }),
+          el('li', { text: '它读不到的文件' }),
+        ),
+      ),
+    ),
+    el('p', { class: 'ea-tut-note', text: '输入框左边那个圆环是当前占用；标着「估算」表示是推算值。鼠标移上去可以看到两块各占多少。' }),
+  ))
+
+  const faq: Array<[string, string]> = [
+    ['它说「信息不足」是什么意思？', '记录里没有能判定这件事的内容。这时它不会猜 —— 你可以先选中相关的那一步，再问一次。'],
+    ['会不会动我的文件或命令？', '不会。它只读主对话的记录；工具和命令都是主 agent 在跑。'],
+    ['会不会花我很多 token？', '每一问都会带上一段上下文，圆环显示当前占用。觉得太高就按 /compact 压成一份摘要。'],
+    ['关掉浮窗后记录还在吗？', '在。记录按会话保存，重新打开还是那些内容；会话归档后会被清掉。'],
+  ]
+  rows.push(el('section', { class: 'ea-tut-sec' },
+    el('h3', { class: 'ea-tut-h', text: '常见问题' }),
+    el('div', { class: 'ea-tut-faq' },
+      ...faq.map(([question, answer]) => el('details', { class: 'ea-tut-q' },
+        el('summary', { text: question }),
+        el('p', { class: 'ea-tut-a', text: answer }),
+        button('问它一句', '把这个问题发给小助手', () => {
+          if (!canSubmit(ctx.state)) return
+          closeTutorial(ctx, { focus: false })
+          void ctx.plugin.submit(question)
+        }, { class: 'ea-btn ea-btn-soft ea-tut-ask' }),
+      )),
+    ),
+  ))
+
+  rows.push(el('footer', { class: 'ea-tut-foot' },
+    el('small', { class: 'ea-meta', text: '解释小助手 v0.3.0 · 只读 · 记录留在本机' }),
+    button('回到对话', '关闭教程，回到对话', () => closeTutorial(ctx), { class: 'ea-btn ea-btn-soft' }),
+  ))
+  return rows
+}
+
+type TutorialPanel = { root: HTMLElement; body: HTMLElement; back: HTMLButtonElement }
+
+function buildTutorialPanel(getCtx: () => OverlayContext | undefined): TutorialPanel {
+  const body = el('div', { class: 'ea-tut-body' })
+  const back = button('返回对话', '关闭使用教程', () => { const ctx = getCtx(); if (ctx) closeTutorial(ctx) }, { class: 'ea-btn ea-btn-soft ea-tut-back' })
+  const root = el('section', { class: 'ea-page ea-tutorial-panel', 'aria-label': '使用教程', tabindex: '-1' },
+    el('header', { class: 'ea-tut-bar' }, el('span', { class: 'ea-tut-bar-title', text: '使用教程' }), back),
+    body,
+  )
+  return { root, body, back }
+}
+
+function ensureTutorialPanel(ctx: OverlayContext): TutorialPanel {
+  if (!ctx.tutorialPanel) {
+    ctx.tutorialPanel = buildTutorialPanel(() => ctx)
+    ctx.tutorialSlot.appendChild(ctx.tutorialPanel.root)
+  }
+  return ctx.tutorialPanel
+}
+
+function renderTutorial(ctx: OverlayContext): void {
+  const panel = ensureTutorialPanel(ctx)
+  fill(panel.body, tutorialNodes(ctx))
+}
+
+function openTutorial(ctx: OverlayContext): void {
+  ctx.tutorialCloseToken++
+  const panel = ensureTutorialPanel(ctx)
+  if (panel.root.hasAttribute('data-closing')) {
+    panel.root.removeAttribute('data-closing')
+    panel.root.removeAttribute('aria-hidden')
+  }
+  ctx.tutorialOpen = true
+  ctx.tutorialBtn.setAttribute('aria-expanded', 'true')
+  // 与模型页同一套"翻页"语义：data-view 一改，CSS 负责两页互相推拉。
+  ctx.root.removeAttribute('data-returning')
+  ctx.root.setAttribute('data-view', 'tutorial')
+  renderTutorial(ctx)
+  queueMicrotask(() => { try { panel.back.focus({ preventScroll: true }) } catch { /* 老浏览器没有参数 */ } })
+}
+
+function closeTutorial(ctx: OverlayContext, options: { focus?: boolean } = {}): void {
+  const wasOpen = ctx.tutorialOpen
+  ctx.tutorialOpen = false
+  ctx.tutorialBtn.setAttribute('aria-expanded', 'false')
+  ctx.root.setAttribute('data-view', 'chat')
+  const panel = ctx.tutorialPanel
+  if (wasOpen && panel && !prefersReducedMotion()) {
+    panel.root.setAttribute('data-closing', 'true')
+    panel.root.setAttribute('aria-hidden', 'true')
+    const token = ++ctx.tutorialCloseToken
+    setTimeout(() => {
+      if (ctx.tutorialCloseToken !== token || ctx.tutorialPanel !== panel) return
+      fill(ctx.tutorialSlot, [])
+      ctx.tutorialPanel = undefined
+    }, MODEL_EXIT_MS)
+  } else {
+    fill(ctx.tutorialSlot, [])
+    ctx.tutorialPanel = undefined
+  }
+  if (wasOpen) ctx.root.setAttribute('data-returning', 'true')
+  if (wasOpen && options.focus !== false) { try { ctx.tutorialBtn.focus({ preventScroll: true }) } catch { /* 老浏览器没有参数 */ } }
+}
+
 function evidenceTierOf(item: EvidenceItem): { key: string; label: string; hint: string } {
   if (item.evidenceState === 'observed') {
     return { key: 'observed', label: '已观察到', hint: '这是实际跑出来的结果或输出，有记录可查。' }
@@ -930,8 +1226,20 @@ const chipEntries = new WeakMap<HTMLElement, Map<string, ChipEntry>>()
  * 所以这里按锚点复用节点：新来的建节点（播入场动画），要走掉的先挂 data-leaving
  * 播 140ms 再摘，留下来的原地更新文案、不重播动画。
  */
-function renderPickRow(ctx: OverlayContext): void {
-  const row = ctx.targetBar
+/**
+ * 选择模式浮动条上的「已选 N 条」。
+ *
+ * 只改文字，不换节点：进模式时键盘焦点就落在「完成」这颗按钮上，
+ * 每次状态变化都重建整条浮动条，等于把用户的焦点一次次弄丢。
+ */
+function syncSelectBar(ctx: OverlayContext, state: AssistantClientState): void {
+  const text = '已选 ' + state.evidence.length + ' 条'
+  if (ctx.selectBarCount.textContent !== text) ctx.selectBarCount.textContent = text
+  // 「完成」永远可点：它是唯一一个「不管现在选中了什么都能退出」的出口，
+  // 一条都没选时也必须在（禁用等于把用户关在模式里）。
+}
+
+function renderPickRow(ctx: OverlayContext): void {  const row = ctx.targetBar
   const chips = pickChipsOf(ctx.state)
   let live = chipEntries.get(row)
   if (!live) { live = new Map(); chipEntries.set(row, live) }
@@ -1507,6 +1815,10 @@ type OverlayContext = {
   body: HTMLElement
   phase: HTMLElement
   selectionStatus: HTMLElement
+  /** 选择模式的浮动条（挂在 body 上，进出模式时挂/摘）。 */
+  selectBar: HTMLElement
+  selectBarCount: HTMLElement
+  selectBarDone: HTMLButtonElement
   errorSlot: HTMLElement
   currentSlot: HTMLElement
   /**
@@ -1531,6 +1843,17 @@ type OverlayContext = {
   modelCloseToken: number
   evidenceSlot: HTMLElement
   compactSlot: HTMLElement
+  /** 压缩摘要是否展开（默认折叠，用户要求）。重画时保留。 */
+  compactOpen?: boolean
+  /** 上一次看到的压缩状态签名：只在状态真的变了时把卡片带进视野。 */
+  compactSig?: string
+  /** 标题栏那颗 /compact 按钮（忙碌时要真的置灰）。 */
+  compactBtn: HTMLButtonElement
+  tutorialBtn: HTMLButtonElement
+  tutorialSlot: HTMLElement
+  tutorialPanel?: TutorialPanel
+  tutorialOpen: boolean
+  tutorialCloseToken: number
   historySlot: HTMLElement
   /** 当前这一问（问句气泡 + 正在写的回答）。和历史同属一条对话流，只是位置在最下面。 */
   liveTurn: HTMLElement
@@ -1635,42 +1958,86 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
    * 进出选择模式。
    *
    * 两件事必须同时发生，缺一件就是「看着像进了模式，其实没进」：
-   * 1. 浮窗自己：data-selection-mode（描边）+ 按钮文案 + 提示；
+   * 1. 浮窗自己：data-selection-mode（浮窗让开）+ 按钮文案 + 顶部浮动条；
    * 2. 页面：documentElement 上的 data-ea-selecting —— 主对话里的卡片在悬停时
    *    才会出现虚线框与十字光标（用户得先知道「这里能点」），控制器也据此决定
    *    「这一下点击是选，还是只是普通点击」。
+   *
+   * ── 为什么这一版要「让开」──────────────────────────────────────
+   * 用户原话：「进入选择模式后，解释小助手暂时不显示，方便用户选择」。
+   * 旧版浮窗原地不动，而它常常正好压住用户要选的那一块：420×620 的一层玻璃盖在对话区上，
+   * 要选的东西有一半在它后面 —— 只能先拖窗、再选、再把窗拖回来。
+   * 现在进模式就让浮窗退到一边：不是 display:none（那会把焦点和 Esc 一起弄丢），
+   * 而是透明度 + 缩放到不可见、并且 visibility:hidden 把它从 Tab 序列里摘出去。
+   *
+   * ── 退出比进来更重要 ─────────────────────────────────────────
+   * 浮窗一让开，「退出选择模式」那颗按钮也就看不见了。所以出口有三条，且都必须真的通：
+   *   · 顶部浮动条上的「完成」；
+   *   · Esc —— 挂在 document 上，因为浮窗让开之后焦点多半在主对话里，root 上的监听收不到；
+   *   · 关掉浮窗（含切会话 / 插件卸载）：dispose 时必须把模式一起清干净。
+   * 任何一条漏掉，用户就掉进「所有点击都被吞掉、没有出路」的状态 —— 那是修过一次的老缺陷。
    */
   const leaveSelectionMode = () => {
+    if (!root.hasAttribute('data-selection-mode')) return
     root.removeAttribute('data-selection-mode')
     select.setAttribute('aria-pressed', 'false')
     select.textContent = '选择主对话内容'
     selectionStatus.textContent = ''
+    document.removeEventListener('keydown', escapeWhileSelecting, true)
     document.documentElement?.removeAttribute('data-ea-selecting')
+    selectBar.remove()
+    // 焦点还回标题栏那颗按钮：此刻它又可见了。
+    queueMicrotask(() => { try { select.focus({ preventScroll: true }) } catch { /* 老浏览器没有参数 */ } })
     document.dispatchEvent(new CustomEvent('dsh-explain-assistant:select-exit', { detail: { sessionId: state.sessionId } }))
+  }
+  /** 选择模式下的 Esc：浮窗已经让开、焦点多半在主对话里，所以这条监听只能挂在 document 上。 */
+  const escapeWhileSelecting = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || !root.hasAttribute('data-selection-mode')) return
+    event.preventDefault()
+    // 拦在这里：外层（浮窗自己的 Esc → 关窗）不得顺手把整扇窗关掉 —— 用户想退的是模式。
+    event.stopPropagation()
+    leaveSelectionMode()
   }
   const enterSelectionMode = () => {
     root.setAttribute('data-selection-mode', 'true')
     select.setAttribute('aria-pressed', 'true')
     select.textContent = '退出选择模式'
-    selectionStatus.textContent = '选择模式：点一条内容选中；再点一次取消。按 Esc 或再点本按钮退出。'
+    selectionStatus.textContent = ''
     document.documentElement?.setAttribute('data-ea-selecting', 'true')
+    document.addEventListener('keydown', escapeWhileSelecting, true)
+    // 浮动条挂在 body 上：浮窗有 backdrop-filter（它会让浮窗成为 fixed 定位的包含块）
+    // 且 overflow:hidden，挂在浮窗里面会被裁掉、还会跟着浮窗一起让开 —— 正好是要避免的。
+    document.body?.appendChild(selectBar)
+    // 浮窗让开之后焦点不能还留在里面的输入框上：那样用户在主对话里敲键盘是敲给空气的。
+    const active = document.activeElement as HTMLElement | null
+    if (active && typeof root.contains === 'function' && root.contains(active)) { try { active.blur() } catch { /* 没实现就算了 */ } }
+    queueMicrotask(() => { try { selectBarDone.focus({ preventScroll: true }) } catch { /* 同上 */ } })
     document.dispatchEvent(new CustomEvent('dsh-explain-assistant:select', { detail: { sessionId: state.sessionId } }))
   }
   const select = button('选择主对话内容', '选择主对话中的步骤或工具卡片', () => {
     if (root.hasAttribute('data-selection-mode')) leaveSelectionMode()
     else enterSelectionMode()
   }, { class: 'ea-btn ea-btn-soft', pressed: false })
-  // 选中一条依据后自动退出选择模式：用户已经表达了要讲哪一条，不该继续吞掉后续点击。
-  const onEvidenceSelected = (event: Event) => {
-    const detail = (event as CustomEvent).detail || {}
-    if (detail.sessionId !== state.sessionId) return
-    leaveSelectionMode()
-  }
-  document.addEventListener('dsh-explain-assistant:evidence-selected', onEvidenceSelected)
-  root.addEventListener('dsh-explain-assistant:dispose', () => document.removeEventListener('dsh-explain-assistant:evidence-selected', onEvidenceSelected), { once: true })
-  // Esc 也要能退出选择模式（先退模式，再关窗由外层 keydown 处理）。
+  // Esc 的第二条路径：焦点恰好在浮窗里时（刚点过标题栏按钮就会这样），事件落在 root 上。
   root.addEventListener('keydown', event => { if (event.key === 'Escape' && root.hasAttribute('data-selection-mode')) leaveSelectionMode() }, true)
-  const compact = button('/compact', '压缩小助手上下文', () => {
+  // 注意：这里**没有**「选中一条就自动退出」了。
+  //
+  // 旧版有这条，理由正当：选完就该回到提问，别继续吞点击。但用户这一轮要的是
+  // 「Ctrl+左键可选择多个内容」—— 自动退出会让多选根本没法发生（第二条没机会被点）。
+  // 代价是「卡在模式里」的风险变大，所以出口做成三条（完成 / Esc / dispose 兜底），
+  // 并且三条都有测试钉着（tests/selection-multiselect.test.mjs）。
+  /**
+   * 教程入口做成一颗**图标**而不是文字按钮：标题栏这一行已经挤着
+   * 「模型 / 选择主对话内容 / /compact / ×」，再加一个四字按钮，窗口一窄就开始压缩标题。
+   * 图标只占 24px，而且「?」在软件里就是"帮助"的通用记号。
+   */
+  const tutorialBtn = button('?', '使用教程', () => {
+    const current = contexts.get(root)
+    if (!current) return
+    if (current.tutorialOpen) closeTutorial(current)
+    else openTutorial(current)
+  }, { class: 'ea-btn ea-btn-soft ea-tutorial-trigger', expanded: false })
+  const compactBtn = button('/compact', '压缩小助手上下文', () => {
     const current = contexts.get(root)
     if (current && !isBusy(current.state)) void current.plugin.submit('/compact')
   }, { class: 'ea-btn ea-btn-soft', title: '整理小助手自己的上下文；不影响主对话' })
@@ -1680,10 +2047,33 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   titlebar.append(
     el('strong', { id: 'dsh-explain-assistant-title', class: 'ea-title', text: '解释小助手' }),
     phase,
-    el('div', { class: 'ea-header-actions' }, modelTrigger.root, select, compact, close),
+    el('div', { class: 'ea-header-actions' }, modelTrigger.root, select, compactBtn, tutorialBtn, close),
   )
 
   const selectionStatus = el('span', { class: 'dsh-explain-assistant-selection-status ea-selection-status', role: 'status' })
+  /**
+   * 选择模式期间浮窗让开，但「现在在选、选了几条、怎么退出」必须一直看得见。
+   *
+   * 这条细浮动条就是那个出口，也是这一版唯一新增的可见元件：
+   *   · 左边一个呼吸的点 = 模式还开着（静止的界面里，一个不动的小圆点很难被读成「正在等待你操作」）；
+   *   · 中间写清「已选 N 条」与键盘/鼠标两种加法；
+   *   · 右边「清空」和「完成」——「完成」是主按钮，因为它是用户 90% 会点的那个。
+   * 它挂在 body 上（见 enterSelectionMode），所以既不会被浮窗的 overflow 裁掉，也不会跟着浮窗一起让开。
+   */
+  const selectBarCount = el('strong', { class: 'ea-select-bar-count', role: 'status', 'aria-live': 'polite', text: '已选 0 条' })
+  const selectBarDone = button('完成', '结束选择，回到解释小助手', () => leaveSelectionMode(), { class: 'ea-btn ea-select-bar-done' })
+  const selectBarClear = button('清空', '清空已选内容，继续选择', () => {
+    const current = contexts.get(root)
+    if (!current) return
+    current.plugin.registry.update(current.state.sessionId, state => { state.evidence = [] })
+  }, { class: 'ea-btn ea-select-bar-clear' })
+  const selectBar = el('div', { class: 'ea-select-bar', role: 'group', 'aria-label': '选择主对话内容' },
+    el('span', { class: 'ea-select-bar-dot', 'aria-hidden': 'true' }),
+    selectBarCount,
+    el('span', { class: 'ea-select-bar-hint', text: 'Ctrl+点击 可加选 · Esc 完成' }),
+    selectBarClear,
+    selectBarDone,
+  )
   const body = el('div', { class: 'dsh-explain-assistant-content ea-body' })
   const errorSlot = el('div', { class: 'ea-slot' })
   const currentSlot = el('div', { class: 'ea-slot' })
@@ -1697,6 +2087,8 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   // 只在这里建一次，之后按需填列表（见 renderModelPanel）。
   const catalogNoteSlot = el('div', { class: 'ea-slot ea-catalog-note-slot' })
   const modelPanelSlot = el('div', { class: 'ea-slot ea-model-panel-slot' })
+  /** 教程页的槽位：与模型页同一套「另一页」机制（见 data-view）。 */
+  const tutorialSlot = el('div', { class: 'ea-slot ea-tutorial-panel-slot' })
   const evidenceSlot = el('div', { class: 'ea-slot' })
   const compactSlot = el('div', { class: 'ea-slot' })
   const historySlot = el('div', { class: 'ea-slot ea-conv-slot' })
@@ -1765,7 +2157,7 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   // 中间层：正文 + 输入区 + 模型页槽。模型页绝对定位盖满它，
   // 于是「打开时输入区隐藏」造成的重排发生在遮挡物后面（看不见）。
   const main = el('div', { class: 'ea-main' })
-  main.append(body, form, modelPanelSlot)
+  main.append(body, form, modelPanelSlot, tutorialSlot)
   root.append(titlebar, main, ...resizeZones.map(zone => zone.element))
   /**
    * 「查看完整内容」面板的高度上限要用「正文区有多高」来算（见 styles.css 的 .dsh-explain-assistant-detail）。
@@ -1789,6 +2181,7 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     // 见 updateOverlay：用来判断「后面来的几何值是不是新值」。
     // 不这样做的话，每次重画都会把用户刚拖好的位置按旧值拽回去。
     errorSlot, currentSlot, answerSlot, answerView, heroSlot, quickSlot, evidenceSlot, compactSlot, historySlot, detailSlot, ringSlot, targetBar, catalogNoteSlot, modelPanelSlot, modelTrigger,
+    selectBar, selectBarCount, selectBarDone, compactBtn, tutorialBtn, tutorialSlot, tutorialOpen: false, tutorialCloseToken: 0,
     liveTurn, liveQuestion, expandedIds: new Set<string>(), sessionId: state.sessionId,
     loadingSlot, stateErrorSlot, root,
     // 默认折叠模型列表：一开就摊开 33 个模型会把「使用说明 + 快捷问题」顶出可视区。
@@ -1818,22 +2211,63 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     if (question) void current.plugin.submit(question)
   })
 
+  /**
+   * 输入框的回车语义：Enter 发送、Shift+Enter 换行。
+   *
+   * 为什么必须自己接管：输入框是 textarea，浏览器给的默认行为就是换行，
+   * 而"发送"只挂在按钮上 —— 用户敲完一句话按回车，得到的是多一个空行，
+   * 然后必须抬手去点那颗按钮。这是对话式界面里最不该缺的一条。
+   *
+   * 四条不能破的边界（少一条都会被当成"坏了"）：
+   * 1. **输入法**：用拼音/五笔选词时那一下回车是"确认候选词"，发出去就是半句话。
+   *    两个判据一起用 —— event.isComposing（Chrome/Safari/Firefox 都有）
+   *    与 compositionstart/end 记下的状态（部分浏览器在 compositionend 之后才派发 keydown，
+   *    那一帧 isComposing 已经是 false，只靠它仍会误发），再加 keyCode 229 兜旧内核。
+   * 2. **发不出去时不拦**：读取中/处理中/加载失败时，回车应当照常换行。
+   *    拦下来又发不出去，等于"按了没反应，而且还不让我换行"。
+   * 3. **带修饰键不接管**：Shift 是换行；Ctrl/⌘/Alt+Enter 留给浏览器（有宿主用它做别的）。
+   * 4. **走同一道闸**：不直接调 plugin.submit，而是 form.requestSubmit()，
+   *    于是 loading/failed/busy 的拦截逻辑与点按钮完全同一条（见上面的注释）。
+   */
+  let composing = false
+  input.addEventListener('compositionstart', () => { composing = true })
+  input.addEventListener('compositionend', () => { composing = false })
+  // 焦点切走时清掉：compositionend 在某些浏览器里不会到达，
+  // 留着 true 会让此后所有回车都变成换行（看起来像"回车发送坏了"，很难查）。
+  input.addEventListener('blur', () => { composing = false })
+  input.addEventListener('keydown', (event: KeyboardEvent) => {
+    if (event.key !== 'Enter') return
+    if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return
+    const legacyIme = (event as KeyboardEvent & { keyCode?: number }).keyCode === 229
+    if (composing || event.isComposing || legacyIme) return
+    const current = contexts.get(root)
+    if (!current || !canSubmit(current.state) || !input.value.trim()) return
+    event.preventDefault()
+    form.requestSubmit()
+  })
+
   updateOverlay(root, state, like)
 
   const focusable = () => {
     const inPanel = (element: HTMLElement) => Boolean(element.closest('.ea-model-panel-slot'))
-    const panelOpen = Boolean(contexts.get(root)?.modelOpen)
+    const inTutorial = (element: HTMLElement) => Boolean(element.closest('.ea-tutorial-panel-slot'))
+    const live = contexts.get(root)
+    const panelOpen = Boolean(live?.modelOpen)
+    const tutorialOpen = Boolean(live?.tutorialOpen)
     return Array.from(root.querySelectorAll<HTMLElement>('button, textarea, input, select, summary, [tabindex]:not([tabindex="-1"])'))
       .filter(element => !element.hasAttribute('disabled') && element.tabIndex >= 0 && !element.hidden)
       // 选择页与对话页互斥显示，但 querySelectorAll 仍然取得到被 CSS 藏起来的那一半。
       // 不按当前页过滤，Tab 就会跳到看不见的按钮上。
       .filter(element => panelOpen ? inPanel(element) : !inPanel(element))
+      // 教程页与对话页也是互斥的：不按当前页过滤，Tab 会跳到被 CSS 藏起来的那一半。
+      .filter(element => tutorialOpen ? inTutorial(element) : !inTutorial(element))
   }
   const keydown = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {
       event.preventDefault()
       // 选择页开着时 Esc 先关选择页（用户想退出的是这一页），再按一次才关窗。
       const current = contexts.get(root)
+      if (current?.tutorialOpen) { closeTutorial(current); return }
       if (current?.modelOpen) { closeModelPanel(current); return }
       close.click()
       return
@@ -1858,7 +2292,15 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     current.plugin.saveGeometry?.(current.state.sessionId, next)
   }, resizeZones)
   ctx.controller = controller
-  root.addEventListener('dsh-explain-assistant:dispose', () => { controller.dispose(); answerView.dispose(); bodyObserver?.disconnect() }, { once: true })
+  root.addEventListener('dsh-explain-assistant:dispose', () => {
+    controller.dispose()
+    answerView.dispose()
+    bodyObserver?.disconnect()
+    // 选择模式的三样残留必须一起清：少一样就是「关掉浮窗之后主对话里所有点击还是被吞」。
+    document.removeEventListener('keydown', escapeWhileSelecting, true)
+    document.documentElement?.removeAttribute('data-ea-selecting')
+    selectBar.remove()
+  }, { once: true })
 
   // preventScroll：默认的 focus() 会把浏览器滚动到输入框，于是首屏直接停在模型列表上、
   // 「使用说明 + 快捷问题」被顶到可视区外面——第一眼就看不到这窗口是干什么的。
@@ -2170,6 +2612,7 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     // 真正的拦截在 form 的 submit 监听里（见 canSubmit）。
     ctx.send.textContent = sendLabel(state, 'loading')
     ctx.send.disabled = true
+    ctx.compactBtn.disabled = true
     fill(ctx.loadingSlot, loadingNodes())
     // 选择痕迹一并收掉：加载页上不该出现上一档的任何「已选」标签。
     resetPickRow(ctx)
@@ -2206,6 +2649,7 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     // A3：失败页同样不许提交（数据没读到，提问没有可用上下文）。
     ctx.send.textContent = sendLabel(state, 'failed')
     ctx.send.disabled = true
+    ctx.compactBtn.disabled = true
     fill(ctx.stateErrorSlot, stateErrorNodes(state, ctx.plugin, readFailure(state)))
     resetPickRow(ctx)
     return
@@ -2215,7 +2659,13 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   // 「落地」：这一问的回答已经作为记录进了历史 → 当前这一块收起来，避免同一条回答出现两次。
   // 失败/中断没有落地（没有记录或记录未完成）时照常显示，用户得看到自己问过什么、为什么失败。
   const landed = Boolean(state.liveRecordId) && state.records.some(record => recordIdOf(record) === state.liveRecordId)
-  const showLive = !landed && Boolean(state.question || state.text || isBusy(state))
+  /**
+   * 压缩中**不**进对话流：那段流式正文是"摘要"，不是"回答"。
+   * 旧版把它按回答渲染，屏幕上会出现一个空问句气泡 + 自己滚出来的摘要 ——
+   * 用户看到的是"我问了什么？它怎么自己答起来了？"。进度改在压缩卡片里给。
+   */
+  const compacting = state.compactState?.status === 'running'
+  const showLive = !compacting && !landed && Boolean(state.question || state.text || isBusy(state))
   ctx.liveTurn.hidden = !showLive
   ctx.liveQuestion.textContent = showLive ? (state.question || '') : ''
   fill(ctx.currentSlot, [...currentStatusNodes(state, ctx.plugin), ...currentDetailNodes(state), ...offlineFallbackNodes(state)])
@@ -2228,7 +2678,7 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   ctx.answerSlot.hidden = !state.text
   if (state.text) ctx.answerView.update(state.text, isBusy(state))
   else ctx.answerView.update('', false)
-  fill(ctx.heroSlot, heroNodes(state))
+  fill(ctx.heroSlot, heroNodes(state, ctx))
   fill(ctx.quickSlot, quickNodes(state, ctx.plugin))
 
   // 模型：标题栏按钮恒显示「现在用哪个」，选择页开着就跟着刷新（目录可能刚被「刷新」换掉）。
@@ -2238,7 +2688,7 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   if (ctx.modelOpen) renderModelPanel(ctx)
 
   fill(ctx.evidenceSlot, evidenceNodes(state, ctx.plugin))
-  fill(ctx.compactSlot, compactNodes(state))
+  fill(ctx.compactSlot, compactNodes(state, ctx))
   ctx.detailInline = false
   renderHistory(ctx, state)
   // 面板平时挂在那一轮下面（见 historyNodes）；只有那一轮不在当前挂载窗口里时，
@@ -2253,6 +2703,7 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   ctx.ringSlot.replaceChildren(ringNode(state))
   // §5.2：常驻显示「这一问围绕哪几条」。每条一个可拆掉的标签；没有选择时整行收起。
   renderPickRow(ctx)
+  syncSelectBar(ctx, state)
 
   // 只在草稿真的被外部改写（例如提交后清空）时回写输入框，避免打字时被顶掉光标。
   if (ctx.input.value !== state.draft) ctx.input.value = state.draft
@@ -2260,6 +2711,9 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   // 这样「加载/失败时禁用、回到 ready 后恢复」只有一处真相，不会两边漂移。
   ctx.send.textContent = sendLabel(state, 'ready')
   ctx.send.disabled = !canSubmit(state)
+  // /compact 同理：忙碌时再点只是静默返回，按钮看起来可点却毫无反应（旧版的真问题）。
+  ctx.compactBtn.disabled = !canSubmit(state)
+  ctx.compactBtn.setAttribute('title', canSubmit(state) ? '整理小助手自己的上下文；不影响主对话' : '正在处理中，等这一次结束再压缩')
   // 往上补历史之后把阅读位置还回去：量一下参照的那一轮现在跑到哪，把差值补进 scrollTop。
   // 这是闭环的 —— 浏览器如果已经自己锚定过，这里量到的差值就是 0，不会双倍偏移。
   if (ctx.anchor) {
