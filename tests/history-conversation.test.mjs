@@ -72,7 +72,11 @@ test('历史是对话：问句右气泡、回答左正文、没有卡片边框',
   // 位置关系：气泡 → 时间 → 回答 → 动作行，这个顺序就是阅读顺序
   const classes = first.children.map(child => child.className);
   assert.deepEqual(classes.slice(0, 3).map(name => String(name).split(' ')[0]), ['ea-turn-q', 'ea-turn-meta', 'ea-turn-a'], '顺序错了就是位置关系错了：' + classes.join(' / '));
-  assert.ok(first.querySelector('.ea-turn-foot'), '回答下面要有动作行（查看完整内容）');
+  // 动作行只在有东西可点时才出现：纯问答记录上不再挂「查看完整内容」
+  // （用户 2026-10-25：「明明已经显示完整内容的还有展开完整内容这个选项」）。
+  assert.equal(first.querySelector('.ea-turn-foot'), null, '纯问答记录不该有动作行');
+  const withMaterial = overlay.renderOverlay(state({ records: records(2, i => (i === 0 ? { evidence: [{ title: '依据0' }] } : {})) }), plugin);
+  assert.ok(historyTurns(withMaterial)[0].querySelector('.ea-turn-foot'), '有依据/工具过程的记录才挂动作行')
   // 不再是卡片：历史区自己不能带 ea-card，轮与轮之间也不能有横线卡片感
   const history = root.querySelector('.dsh-explain-assistant-history');
   assert.ok(history, '历史区必须还在');

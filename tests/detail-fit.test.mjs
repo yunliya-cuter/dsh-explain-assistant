@@ -67,3 +67,71 @@ test('完整内容: 高度是从正文区量出来写进 --ea-body-h 的，并�
   assert.match(source, /new ResizeObserver/, '必须随窗口/正文区尺寸变化重算，不能只在首帧量一次');
   assert.match(source, /bodyObserver\?\.disconnect\(\)/, '浮窗销毁时必须断开观察器，不能留着泄漏');
 });
+
+test('完整内容: 面板挂在被点的那一轮下面，而不是正文最顶上', async () => {
+  const overlay = await moduleFromSource('src/client/overlay.tsx');
+  const dom = fakeDom();
+  const detailState = Object.assign({}, state, {
+    records: [
+      { id: 'r0', question: '第一条问题', answerText: '第一条回答', status: 'complete', createdAt: '2026-01-01T00:00:00.000Z' },
+      { id: 'rec-1', question: '这一步在做什么', answerText: '它在读取配置。', status: 'complete', createdAt: '2026-01-01T00:01:00.000Z', evidence: [{ title: '依据0' }] },
+    ],
+    hasEarlier: false,
+    historyDetail: Object.assign({}, state.historyDetail, { recordId: 'rec-1' }),
+  });
+  const plugin = {
+    registry: { update() {}, get: () => detailState }, api: {}, cancel() {}, submit() {}, loadEarlier() {},
+    closeHistoryDetail() {}, loadMoreHistoryDetail() {},
+  };
+  try {
+    const root = overlay.renderOverlay(detailState, plugin);
+    const turns = Array.from(root.querySelectorAll('.ea-turn'));
+    const own = turns.find(turn => turn.getAttribute('data-record-id') === 'rec-1');
+    assert.ok(own, '被点的那一轮必须还在');
+    assert.equal(own.getAttribute('data-detail-open'), 'true', '被点的那一轮要打上「正在展开」的标记');
+    assert.ok(own.querySelector('.dsh-explain-assistant-detail'), '面板必须在那一轮里面（用户要的是「在按钮下方展开」）');
+    const children = own.children;
+    const panelAt = children.findIndex(node => String(node.className).includes('dsh-explain-assistant-detail'));
+    assert.equal(panelAt, children.length - 1, '面板必须挂在这一轮的最后（也就是动作行下面）');
+    // 面板已经开着，内容就在眼前：不许再挂一个「查看完整内容」按钮（用户 2026-10-25 的第 1 条）。
+    assert.equal(own.querySelector('.ea-turn-detail'), null, '面板开着时不得再出现「查看完整内容」入口');
+    const other = turns.find(turn => turn.getAttribute('data-record-id') === 'r0');
+    assert.equal(other.querySelector('.dsh-explain-assistant-detail'), null, '别的记录下面不许挂面板');
+  } finally {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    dom.restore();
+  }
+});
+
+test('完整内容: 正文取回来之后面板要换成正文，不能停在「正在读取」', async () => {
+  const overlay = await moduleFromSource('src/client/overlay.tsx');
+  const dom = fakeDom();
+  const records = [{ id: 'rec-1', question: '这一步在做什么', answerText: '它在读取配置。', status: 'complete', createdAt: '2026-01-01T00:00:00.000Z' }];
+  const loadingState = Object.assign({}, state, {
+    records,
+    historyDetail: { recordId: 'rec-1', status: 'loading', hasEarlier: false, loadingMore: false, counts: {}, cursor: null, record: { id: 'rec-1' } },
+  });
+  const readyState = Object.assign({}, state, {
+    records,
+    historyDetail: {
+      recordId: 'rec-1', status: 'ready', hasEarlier: false, loadingMore: false, counts: { evidence: 1, tools: 0, images: 0 }, cursor: null,
+      record: { id: 'rec-1', question: '这一步在做什么', answerText: '它在读取配置。', evidence: [{ title: '依据0', summary: '第0条依据摘要', source: 'selected_frozen', evidenceState: 'observed' }] },
+    },
+  });
+  const plugin = {
+    registry: { update() {}, get: () => readyState }, api: {}, cancel() {}, submit() {}, loadEarlier() {},
+    closeHistoryDetail() {}, loadMoreHistoryDetail() {},
+  };
+  try {
+    const root = overlay.renderOverlay(loadingState, plugin);
+    assert.match(root.querySelector('.dsh-explain-assistant-detail').textContent, /正在读取/, '先显示读取中');
+    // 同一条记录、recordId 没变，只是内容回来了：历史区必须重画（否则面板永远停在「正在读取」）
+    overlay.updateOverlay(root, readyState, plugin);
+    const panel = root.querySelector('.dsh-explain-assistant-detail');
+    assert.doesNotMatch(panel.textContent, /正在读取/, '内容回来之后不许还写着「正在读取」');
+    assert.match(panel.textContent, /第0条依据摘要/, '取回来的依据必须显示出来');
+  } finally {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    dom.restore();
+  }
+});

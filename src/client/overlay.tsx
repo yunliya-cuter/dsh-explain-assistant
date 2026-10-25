@@ -1123,10 +1123,57 @@ function historyTurnNodes(input: unknown, ctx: OverlayContext, newestId: string)
   const foot: Child[] = [];
   if (folded) foot.push(button('展开全文', '展开这条回答的全文', () => { ctx.expandedIds.add(id); ctx.rerender(); }, { class: 'ea-turn-more' }));
   else if (expanded && longEnough) foot.push(button('收起', '收起这条回答', () => { ctx.expandedIds.delete(id); ctx.rerender(); }, { class: 'ea-turn-more' }));
-  if (id) foot.push(button('查看完整内容', '查看这条记录的完整内容', () => { void ctx.plugin.openHistoryDetail?.(id) }, { class: 'ea-turn-detail', pressed: ctx.state.historyDetail?.recordId === id }));
+  // 只有确实还有材料可看时才给入口；面板已经开着时更不再重复挂一个（内容就在下面）。
+  const hasMaterial = recordMaterialCount(record) > 0;
+  if (id && hasMaterial && ctx.state.historyDetail?.recordId !== id) {
+    foot.push(button('查看完整内容', '查看这条记录的依据与工具过程', () => { void ctx.plugin.openHistoryDetail?.(id) }, { class: 'ea-turn-detail' }))
+  }
   if (warnText) foot.push(el('span', { class: 'ea-warn ea-turn-warn', text: warnText }));
   if (foot.length) nodes.push(el('div', { class: 'ea-turn-foot' }, ...foot));
   return nodes;
+}
+
+/**
+ * 把「完整内容」面板摆进视野 —— 面板就挂在被点的那一行下面，所以**不是**把正文滚回顶部。
+ *
+ * 用户 2026-10-25 的原话：「完整内容并没有按直觉在红框下方展示剩余完整内容，
+ * 而是弹到了上下文的最上方」。位置已经改到那一轮下面（见 historyNodes），
+ * 这里只负责「刚好能看见」，不做多余跳动：
+ *   · 已经整块看得见 → 一个字节都不动；
+ *   · 只差底部 → 往下补到刚好露出底边，但别把按钮行顶出视野；
+ *   · 面板比正文区还高 → 把按钮行对齐到正文区顶部（视野里就是「按钮行 + 它下面这块记录」）。
+ *
+ * 返回 false 表示量不到布局（测试里的假 DOM）：调用方自己决定兜底动作。
+ */
+function placeDetailPanel(ctx: OverlayContext): boolean {
+  const body = ctx.body as HTMLElement & { getBoundingClientRect?: () => DOMRect }
+  const turn = ctx.root.querySelector('.ea-turn[data-detail-open="true"]')
+  const row = (turn && turn.querySelector('.ea-turn-foot')) || turn
+  const panel = (turn && turn.querySelector('.dsh-explain-assistant-detail')) || ctx.detailSlot.querySelector('.dsh-explain-assistant-detail')
+  if (typeof body.getBoundingClientRect !== 'function' || !row || typeof row.getBoundingClientRect !== 'function' || !panel || typeof panel.getBoundingClientRect !== 'function') return false
+  const view = body.getBoundingClientRect()
+  const rowRect = row.getBoundingClientRect()
+  const rect = panel.getBoundingClientRect()
+  const margin = 14
+  const top = view.top + margin
+  const bottom = view.bottom - margin
+  // 已经整块在视野里（常见：最后一条、面板又短）：不动。
+  if (rect.top >= top && rect.bottom <= bottom) return true
+  let delta: number
+  if (rect.height <= bottom - top) {
+    delta = rect.bottom > bottom ? rect.bottom - bottom : rect.top - top
+    // 往下补的时候别把按钮行顶出视野（否则用户看不见自己点的是哪一条）。
+    if (rowRect.top - delta < top) delta = rowRect.top - top
+  } else {
+    delta = rowRect.top - top
+  }
+  if (Math.abs(delta) >= 1) body.scrollTop += delta
+  return true
+}
+
+/** 打开面板的那一刻就要定位；量不到布局时退回老行为（滚到顶部），至少保证面板在视野里。 */
+function scrollDetailIntoView(ctx: OverlayContext): void {
+  if (!placeDetailPanel(ctx)) ctx.body.scrollTop = 0
 }
 
 /** 顶部那颗「更早的 N 条」：补齐的方向只有一个 —— 往上。 */
@@ -1202,15 +1249,43 @@ function historyNodes(state: AssistantClientState, plugin: PluginLike, ctx: Over
   const newestId = recordIdOf(state.records[state.records.length - 1]);
   for (const record of win.items) {
     const id = recordIdOf(record);
+    const nodes = historyTurnNodes(record, ctx, newestId);
+    /*
+     * 「查看完整内容」就挂在这一轮**下面**（用户 2026-10-25 的原话：
+     * 「完整内容并没有按直觉在红框下方展示剩余完整内容，而是弹到了上下文的最上方」）。
+     * 旧实现把面板放在正文最前面（当时的理由是「放在下面用户会以为按钮没反应」），
+     * 但那是「看不见」，不是「位置不对」——现在面板就长在按钮行下方，点完马上多出一块，
+     * 并且打开时会把它滚进视野（见 scrollDetailIntoView），两个问题一起解决。
+     */
+    const detailOpen = Boolean(id) && state.historyDetail?.recordId === id;
+    if (detailOpen) {
+      ctx.detailInline = true;
+      nodes.push(...historyDetailNodes(state, plugin, { inlineOfTurn: true }));
+    }
     children.push(el('article', {
       class: 'ea-turn',
       'data-record-id': id || undefined,
+      'data-detail-open': detailOpen ? 'true' : undefined,
       // 只有「刚落地的那一条」进场时动一下；后续重画不重播（由 ctx.enteredTurnId 控制）。
       'data-enter': ctx.pendingEnterId && ctx.pendingEnterId === id ? 'true' : undefined,
-    }, ...historyTurnNodes(record, ctx, newestId)));
+    }, ...nodes));
   }
   if (hasJump) children.push(historyJumpNode(ctx));
   return [el('section', { class: 'dsh-explain-assistant-history ea-conv' + (hasJump ? ' has-jump' : ''), 'aria-label': '历史问答' }, ...children)];
+}
+
+/**
+ * 这条记录里有没有「对话区看不到的东西」：依据 / 工具过程 / 图片快照。
+ *
+ * 用户 2026-10-25 的原话：「明明已经显示完整内容的还有展开完整内容这个选项」
+ * 「这个选项明显在大部分情况下用不着」。确实如此：记录本来就只有一段回答时，
+ * 点开也只是把上面那段回答再抄一遍（实测那个会话 3 条记录的依据/工具/图片全是 0）。
+ * 所以入口只在**确实还有材料可看**的时候才出现；纯问答记录上不再挂这个按钮。
+ */
+function recordMaterialCount(record: unknown): number {
+  const value = (record || {}) as Record<string, unknown>
+  const size = (item: unknown) => (Array.isArray(item) ? item.length : 0)
+  return size(value.evidence) + size(value.tools) + size(value.images)
 }
 
 /**
@@ -1224,7 +1299,7 @@ function historyNodes(state: AssistantClientState, plugin: PluginLike, ctx: Over
  *
  * 宿主按页给（一页三组各若干条），所以底部有「继续加载」。分页与首页共用同一个游标。
  */
-function historyDetailNodes(state: AssistantClientState, plugin: PluginLike): Child[] {
+function historyDetailNodes(state: AssistantClientState, plugin: PluginLike, options: { inlineOfTurn?: boolean } = {}): Child[] {
   const detail = state.historyDetail
   if (!detail) return []
   const record = (detail.record || {}) as Record<string, any>
@@ -1261,12 +1336,14 @@ function historyDetailNodes(state: AssistantClientState, plugin: PluginLike): Ch
     return [detailCard(rows)]
   }
 
-  if (record.question) rows.push(el('p', { class: 'ea-detail-question', text: '问题：' + String(record.question) }))
+  // 面板挂在那一轮下面时，问题与回答就在它上面几厘米处：再抄一遍就是用户说的「重复」，所以跳过。
+  // （只有那一轮不在挂载窗口里、面板落到正文顶部时，才把问答带上当上下文。）
+  if (record.question && !options.inlineOfTurn) rows.push(el('p', { class: 'ea-detail-question', text: '问题：' + String(record.question) }))
   const answer = typeof record.answerText === 'string' && record.answerText ? record.answerText : record.answer
   // 同历史区：没有 recordId 时用正文指纹当键，避免两条不同记录撞同一键而互相顶掉正文。
-  if (answer) rows.push(el('article', { class: 'ea-detail-answer ea-md-scope' }, ...cachedMarkdownNodes('detail-' + (detail.recordId || 'rec#' + contentKey(String(answer))), String(answer))))
+  if (answer && !options.inlineOfTurn) rows.push(el('article', { class: 'ea-detail-answer ea-md-scope' }, ...cachedMarkdownNodes('detail-' + (detail.recordId || 'rec#' + contentKey(String(answer))), String(answer))))
   const reasoning = typeof record.reasoningText === 'string' && record.reasoningText ? record.reasoningText : record.reasoning
-  if (reasoning) rows.push(el('details', { class: 'ea-disclosure' },
+  if (reasoning && !options.inlineOfTurn) rows.push(el('details', { class: 'ea-disclosure' },
     el('summary', {}, '完整推理过程'),
     el('div', { class: 'ea-disclosure-body ea-md-scope' }, ...cachedMarkdownNodes('detail-reasoning-' + (detail.recordId || 'rec#' + contentKey(String(reasoning))), String(reasoning))),
   ))
@@ -1300,7 +1377,7 @@ function historyDetailNodes(state: AssistantClientState, plugin: PluginLike): Ch
       rows.push(el('p', { class: 'ea-detail-image', text: [image?.relativePath, image?.mediaType, image?.bytes !== undefined ? image.bytes + ' 字节' : ''].filter(Boolean).join(' · ') }))
     }
   }
-  if (!evidence.length && !tools.length && !images.length && !answer) {
+  if (!evidence.length && !tools.length && !images.length && (!answer || options.inlineOfTurn)) {
     rows.push(el('p', { class: 'ea-empty', text: '这条记录里没有可展开的依据或工具过程。' }))
   }
 
@@ -1467,6 +1544,10 @@ type OverlayContext = {
   detailSlot: HTMLElement
   /** 上一次展开的 recordId：只有换成另一条记录时才把面板滚到可见处。 */
   detailRecordId?: string
+  /** 这一次重画里，完整内容面板是不是已经挂在那一轮记录下面了（见 historyNodes）。 */
+  detailInline?: boolean
+  /** 面板内容还在路上：等它从「正在读取」变成正文后要再摆一次（那时高度才定型）。 */
+  detailFit?: boolean
   /** 拖动/缩放控制器。用于把「后到的」几何值补应用上去（见 updateOverlay）。 */
   controller: WindowController
   /** 上一次已经套用到 DOM 的几何值。用来判断宿主这次给的是不是新值 —— 相同就不动，避免每次重画都重设位置。 */
@@ -1794,6 +1875,28 @@ function scheduleFoldCheck(ctx: OverlayContext): void {
  * 每条的状态与长度），这样流式回答时历史区一次都不会被重挂，
  * 顺带也避免了「每次重画都重播进场动画」。
  */
+/**
+ * 「完整内容」面板的签名。
+ *
+ * 面板现在挂在历史的那一轮下面，就跟着 renderHistory 的缓存走；如果签名里只有 recordId，
+ * 正文取回来时（同一个 recordId，只是 status 从 loading 变 ready）签名不变 → 不重画 →
+ * 面板会永远停在「正在读取这条记录的完整内容…」（实测踩到：等 10 秒也不变）。
+ * 所以把状态、分页、以及每组已取到的条数与正文长度都算进来。
+ */
+function historyDetailSignature(detail: AssistantClientState['historyDetail']): string {
+  if (!detail) return ''
+  const record = (detail.record || {}) as Record<string, unknown>
+  const size = (value: unknown) => (Array.isArray(value) ? value.length : 0)
+  const text = (value: unknown) => (typeof value === 'string' ? value.length : 0)
+  const counts = (detail.counts || {}) as Record<string, unknown>
+  return [
+    detail.recordId || '', detail.status || '', detail.hasEarlier ? 1 : 0, detail.loadingMore ? 1 : 0, detail.error || '',
+    size(record.evidence), size(record.tools), size(record.images),
+    text(record.answerText ?? record.answer), text(record.reasoningText ?? record.reasoning),
+    Number(counts.evidence || 0), Number(counts.tools || 0), Number(counts.images || 0),
+  ].join(':')
+}
+
 function renderHistory(ctx: OverlayContext, state: AssistantClientState): void {
   const expand = ctx.pendingOlder || 0
   ctx.pendingOlder = 0
@@ -1813,7 +1916,7 @@ function renderHistory(ctx: OverlayContext, state: AssistantClientState): void {
     win.start, win.end, win.total,
     state.hasEarlier ? 1 : 0,
     state.loadingEarlier ? 1 : 0,
-    state.historyDetail?.recordId || '',
+    historyDetailSignature(state.historyDetail),
     [...ctx.expandedIds].sort().join('+'),
     state.records.map(record => recordIdOf(record) + ':' + String((record as { status?: unknown } | null)?.status || '') + ':' + recordAnswerText(record).length).join(','),
   ].join('|')
@@ -2007,12 +2110,17 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
 
   fill(ctx.evidenceSlot, evidenceNodes(state, ctx.plugin))
   fill(ctx.compactSlot, compactNodes(state))
+  ctx.detailInline = false
   renderHistory(ctx, state)
-  fill(ctx.detailSlot, historyDetailNodes(state, ctx.plugin))
+  // 面板平时挂在那一轮下面（见 historyNodes）；只有那一轮不在当前挂载窗口里时，
+  // 才会掉到正文顶部的这个槽位——否则用户点了按钮什么都看不到。
+  fill(ctx.detailSlot, ctx.detailInline ? [] : historyDetailNodes(state, ctx.plugin))
   // 换了一条记录来展开时把面板滚到可见处；同一记录的续读/重画不动滚动位置。
   const detailId = state.historyDetail?.recordId
-  if (detailId && detailId !== ctx.detailRecordId) { ctx.detailRecordId = detailId; ctx.body.scrollTop = 0 }
-  else if (!detailId) ctx.detailRecordId = undefined
+  if (detailId && detailId !== ctx.detailRecordId) { ctx.detailRecordId = detailId; ctx.detailFit = true; scrollDetailIntoView(ctx) }
+  else if (!detailId) { ctx.detailRecordId = undefined; ctx.detailFit = false }
+  // 内容回来时面板会从「正在读取」的几十像素长成整块记录：那一刻再摆一次，之后不再碰滚动位置。
+  else if (ctx.detailFit && state.historyDetail?.status !== 'loading') { ctx.detailFit = false; placeDetailPanel(ctx) }
   ctx.ringSlot.replaceChildren(ringNode(state))
   // §5.2：常驻显示「这一问围绕哪几条」。每条一个可拆掉的标签；没有选择时整行收起。
   renderPickRow(ctx)

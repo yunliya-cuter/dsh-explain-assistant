@@ -329,7 +329,7 @@ test('客户端: 收起后不再保留展开状态', async () => {
 
 /* ---------------- 页面入口：浮窗上真的有一个能点的按钮 ---------------- */
 
-test('浮窗入口: 每条历史记录旁都有「查看完整内容」，点了会去打宿主', async () => {
+test('浮窗入口: 只有确实还有材料可看时才给「查看完整内容」，点了会去打宿主', async () => {
   const overlay = await moduleFromSource('src/client/overlay.tsx');
   const dom = fakeDom();
   const opened = [];
@@ -337,14 +337,26 @@ test('浮窗入口: 每条历史记录旁都有「查看完整内容」，点了
     sessionId: SESSION_A, open: true, unread: false, draft: '', phase: 'idle', reasoning: '', text: '',
     tools: [], loadingEarlier: false, evidence: [], occupancyKnown: false, occupancyEstimated: false,
     quickQuestionsDismissed: true, hasEarlier: false,
-    records: [{ id: 'rec-1', question: '这一步在做什么', answerText: '回答', startedAt: '2026-01-01T00:00:00.000Z' }],
+    records: [
+      { id: 'rec-plain', question: '纯问答', answerText: '回答', startedAt: '2026-01-01T00:00:00.000Z' },
+      { id: 'rec-1', question: '这一步在做什么', answerText: '回答', startedAt: '2026-01-01T00:01:00.000Z', evidence: [{ title: '依据0' }] },
+    ],
   };
   const plugin = { registry: { update() {}, get: () => base }, api: {}, cancel() {}, submit() {}, loadEarlier() {}, openHistoryDetail: (id) => { opened.push(id) } };
   try {
     const root = overlay.renderOverlay(base, plugin);
-    assert.match(root.textContent, /查看完整内容/, '记录旁必须有可点入口（旧实现没有任何入口）');
+    /*
+     * 用户 2026-10-25：「明明已经显示完整内容的还有展开完整内容这个选项」
+     * 「这个选项明显在大部分情况下用不着」。
+     * 所以入口只在**这条记录里还有对话区看不到的材料**（依据 / 工具过程 / 图片快照）时才出现 ——
+     * 纯问答记录点开只会把上面那段回答再抄一遍，不该有这个按钮。
+     */
+    const plainTurn = Array.from(root.querySelectorAll('.ea-turn')).find(turn => turn.getAttribute('data-record-id') === 'rec-plain');
+    assert.ok(plainTurn, '纯问答记录还在');
+    assert.equal(plainTurn.querySelector('.ea-turn-detail'), null, '纯问答记录上不得出现「查看完整内容」');
     const entry = root.querySelector('.ea-turn-detail');
-    assert.ok(entry, '入口必须挂在这条记录上');
+    assert.ok(entry, '有依据/工具过程的记录必须有入口');
+    assert.match(root.textContent, /查看完整内容/, '入口文案必须还在');
     entry.click();
     assert.deepEqual(opened, ['rec-1'], '点击必须真的去取这条记录的完整内容');
   } finally {
