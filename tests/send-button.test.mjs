@@ -91,28 +91,33 @@ test('发送按钮形态: 胶囊外形 + 背景模糊 + 内阴影叠出的玻璃
     '边缘反光至少三层（顶光 / 侧沿 / 底沿压暗）才叠得出厚度，实际 ' + insets + ' 层：' + RIM);
   const shadow = String(SEND['box-shadow'] ?? '');
   assert.ok(shadow.includes('var(--ea-send-rim)'), '边缘那几层要收在 --ea-send-rim 里，深浅两套主题各自配');
-  assert.ok(shadow.includes('var(--ea-send-lift-y)') && shadow.includes('var(--ea-send-lift-color)'),
+  assert.ok(shadow.includes('var(--ea-send-lift-y)') && shadow.includes('var(--ea-send-lift-blur)')
+    && shadow.includes('var(--ea-send-lift-alpha)'),
     '外投影的参数要放在变量里：悬停/按下靠改它们让阴影摊开或收窄，实际 ' + shadow);
+  assert.ok(String(SEND['background-image']).includes('var(--ea-send-grad)'),
+    '表面那道竖向渐变必须引用 --ea-send-grad（受光面在上、暗部在下，厚度就来自它）');
 });
 
 test('发送按钮形态: 深浅两套主题各有自己的边缘反光', () => {
   assert.ok(SEND_DARK['--ea-send-rim'], '深色主题必须覆盖 --ea-send-rim（浅底上的白边会读成描边，要单独配）');
   assert.notEqual(SEND_DARK['--ea-send-rim'], SEND['--ea-send-rim'], '深浅两套的边缘反光不能是同一份数值');
   assert.ok(SEND_DARK['--ea-send-fill'], '深色主题要单独定填充（primary 在这套主题里是浅灰白，透明度得另外调）');
-  assert.ok(SEND_DARK['--ea-send-sheen'], '深色主题要有自己的顶光（浅底上的白边看不见，立体感只能靠这道光）');
+  assert.ok(SEND_DARK['--ea-send-grad'], '深色主题要有自己的表面渐变（浅底上的白边看不见，立体感只能靠这道光）');
+  assert.ok(SEND_DARK['--ea-send-label'], '深色主题的字色要单独定（浅底黑字 vs 深底白字）');
   // 两套的变量都必须被 .ea-send 真的用上，否则改了没效果
   assert.ok(String(SEND['background-color']).includes('var(--ea-send-fill)'), '填充必须引用 --ea-send-fill');
-  assert.ok(String(SEND['background-image']).includes('var(--ea-send-sheen)'), '顶光必须引用 --ea-send-sheen');
+  assert.ok(String(SEND['background-image']).includes('var(--ea-send-grad)'), '表面渐变必须引用 --ea-send-grad');
 });
 
 test('发送按钮尺寸: 起宽要真的容得下「处理中」，切状态时这一行不左右跳', () => {
-  assert.equal(px(SEND.height), 34, '定高 34px（贴着输入区那一行，比宿主的 36px 略收）');
+  assert.equal(px(SEND.height), 40, '定高 40px（参考是 44px，这里收 4px 以贴合输入区那一行）');
   const min = px(SEND['min-width']);
   assert.ok(min !== undefined && min >= 70, '必须有起宽，实际 ' + JSON.stringify(SEND['min-width']));
 
   const pad = String(SEND.padding ?? '').trim().split(/\s+/).map(px);
-  assert.deepEqual(pad.length === 2 ? pad : [], [0, 17], '内边距应为 0 17px（上下不撑、左右 17px）');
-  const need = pad[1] * 2 + textWidth('处理中', 13);
+  assert.deepEqual(pad.length === 2 ? pad : [], [0, 22], '内边距应为 0 22px（上下不撑、左右 22px）');
+  const fontSize = px(SEND['font-size']) ?? 14.5;
+  const need = pad[1] * 2 + textWidth('处理中', fontSize);
   assert.ok(min >= need,
     '起宽 ' + min + 'px 容不下「处理中」（需要 ' + need.toFixed(1) + 'px）：' +
     '忙碌态会把这一行撑宽，圆环与按钮的相对位置跟着抖 —— 旧版就是这样跳了 13px');
