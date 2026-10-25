@@ -4,15 +4,13 @@ import { readFile } from 'node:fs/promises';
 import { fakeDom, FakeElement, moduleFromSource } from './fixtures/runtime.mjs';
 
 /**
- * 关闭浮窗的退场（用户要求「优化关闭小助手后的动画」）。
+ * 关闭浮窗的退场。
  *
- * 旧实现是**瞬间消失**：清理函数里 host.replaceChildren() 一跑节点就没了，
- * 没有任何一帧可以拿来做动画。现在真节点立刻释放，克隆体留在原地播 180ms。
- *
- * 这组测试盯三件事，且都是"做错了也看不出来"的地方：
- * 1. 真节点必须**立刻**释放（监听、增量渲染器不能因为动画多活 200ms）；
- * 2. 克隆体必须是克隆体（不是原节点被延迟摘掉）—— 否则退场期间它还能吃点击；
- * 3. 减少动态偏好 / 强制不播 / 空宿主时不得留下任何东西。
+ * 用户这一轮报了两个现象：「关掉小助手时的动画卡卡的」「关掉过程中会弹至上下文最上方」。
+ * 上一版的做法是"克隆一份留在原地播动画"，两个现象都由它而来：
+ *   · 克隆体不继承 scrollTop → 从**对话最上面**开始播（= 弹回顶部）；
+ *   · 克隆整棵面板是一次十几毫秒的长任务，正好压在动画第一帧（= 卡）。
+ * 现在改成**原节点原地**播完再摘。这组测试钉的就是这两点，防止有人改回克隆。
  */
 
 const exitAnim = await moduleFromSource('src/client/exit-anim.ts');
@@ -23,100 +21,89 @@ function hostWith(child) {
   return host;
 }
 
-test('关闭：真节点立刻释放，克隆体留在原地并带 data-leaving', () => {
+test('退场的是**原来那个节点**，不是克隆体（克隆体会丢滚动位置）', () => {
   const dom = fakeDom();
   try {
     const panel = new FakeElement('section');
     panel.className = 'ea-overlay';
     const host = hostWith(panel);
-    let released = 0;
-    const animated = exitAnim.withExitGhost(host, () => { released++; panel.remove() });
+    const animated = exitAnim.beginExit(host, panel);
     assert.equal(animated, true, '默认应当播退场');
-    assert.equal(released, 1, '真节点必须在同一个 tick 里被释放，不能等动画');
-    assert.equal(host.children.length, 1, '退场期间宿主里应当还有一份画面');
-    const ghost = host.firstElementChild;
-    assert.notEqual(ghost, panel, '留在场上必须是克隆体，不是原节点（原节点带监听器，留着会吃点击）');
-    assert.equal(ghost.getAttribute('data-leaving'), 'true');
-    assert.equal(ghost.getAttribute('aria-hidden'), 'true', '退场中的画面必须对读屏隐藏');
-    assert.equal(ghost.className, 'ea-overlay', '克隆体要保留外观，否则动画是一条空框');
+    assert.equal(host.firstElementChild, panel, '留在场上的必须还是原节点（克隆体会从对话顶部开始播）');
+    assert.equal(panel.getAttribute('data-leaving'), 'true');
+    assert.equal(panel.getAttribute('aria-hidden'), 'true', '退场中的画面必须对读屏隐藏');
+    assert.equal(panel.style.pointerEvents, 'none', '退场期间绝不能拦住用户的下一次点击');
   } finally { dom.restore(); }
 });
 
-test('退场播完后克隆体必须被摘掉（不留幽灵节点）', async () => {
+test('滚动位置必须原样保留（用户报的「关掉过程中弹至最上方」）', () => {
+  const dom = fakeDom();
+  try {
+    const panel = new FakeElement('section');
+    const body = new FakeElement('div');
+    body.className = 'ea-body';
+    body.scrollTop = 1234;
+    panel.appendChild(body);
+    const host = hostWith(panel);
+    exitAnim.beginExit(host, panel);
+    const kept = host.firstElementChild;
+    assert.equal(kept.querySelector('.ea-body').scrollTop, 1234, '退场期间滚动位置不得被重置（否则就是"弹回顶部"）');
+  } finally { dom.restore(); }
+});
+
+test('播完之后才摘掉节点', async () => {
   const dom = fakeDom();
   try {
     const panel = new FakeElement('section');
     const host = hostWith(panel);
-    exitAnim.withExitGhost(host, () => panel.remove());
-    assert.equal(host.children.length, 1);
+    exitAnim.beginExit(host, panel);
+    assert.equal(host.children.length, 1, '刚播的时候还得在');
     await new Promise(resolve => setTimeout(resolve, exitAnim.EXIT_MS + 60));
-    assert.equal(host.children.length, 0, 'EXIT_MS 之后宿主必须是空的');
+    assert.equal(host.children.length, 0, 'EXIT_MS 之后必须摘掉，不留幽灵节点');
   } finally { dom.restore(); }
 });
 
-test('减少动态偏好：不播动画，宿主立刻清空', () => {
+test('减少动态偏好：不播，交给调用方立刻摘', () => {
   const dom = fakeDom();
   const previous = globalThis.matchMedia;
   try {
     globalThis.matchMedia = () => ({ matches: true });
     const panel = new FakeElement('section');
     const host = hostWith(panel);
-    let released = 0;
-    const animated = exitAnim.withExitGhost(host, () => { released++; panel.remove() });
-    assert.equal(animated, false, 'prefers-reduced-motion 下不得播退场');
-    assert.equal(released, 1);
-    assert.equal(host.children.length, 0, '既然不播，就不能留下任何节点');
+    assert.equal(exitAnim.beginExit(host, panel), false);
+    assert.equal(panel.getAttribute('data-leaving'), null, '不该挂退场标记');
   } finally { globalThis.matchMedia = previous; dom.restore(); }
 });
 
-test('强制不播（宿主销毁/插件卸载）：与减少动态偏好同一条路', () => {
+test('强制不播 / 节点不在宿主里：都返回 false', () => {
   const dom = fakeDom();
   try {
     const panel = new FakeElement('section');
     const host = hostWith(panel);
-    const animated = exitAnim.withExitGhost(host, () => panel.remove(), { animate: false });
-    assert.equal(animated, false);
-    assert.equal(host.children.length, 0);
+    assert.equal(exitAnim.beginExit(host, panel, { animate: false }), false);
+    const stranger = new FakeElement('section');
+    assert.equal(exitAnim.beginExit(host, stranger), false, '节点不在宿主里就不是这次退场的对象');
+    assert.equal(exitAnim.beginExit(host, null), false);
   } finally { dom.restore(); }
 });
 
-test('空宿主：不抛错，也不谎报"播了动画"', () => {
-  const dom = fakeDom();
-  try {
-    const host = hostWith(null);
-    let released = 0;
-    const animated = exitAnim.withExitGhost(host, () => { released++ });
-    assert.equal(animated, false);
-    assert.equal(released, 1, '释放回调仍然必须被调用（否则真节点的资源就漏了）');
-    assert.equal(host.children.length, 0);
-  } finally { dom.restore(); }
-});
-
-test('克隆体上的 id 必须被剥掉（否则页面上出现两份同名 id，aria-labelledby 会指错）', () => {
-  const dom = fakeDom();
-  try {
-    const panel = new FakeElement('section');
-    const title = new FakeElement('strong');
-    title.setAttribute('id', 'dsh-explain-assistant-title');
-    panel.appendChild(title);
-    const host = hostWith(panel);
-    exitAnim.withExitGhost(host, () => panel.remove());
-    const ghost = host.firstElementChild;
-    assert.equal(ghost.getAttribute('id'), null, '根节点上的 id 要剥掉');
-    assert.equal(ghost.querySelector('[id]'), null, '后代上的 id 也要剥掉');
-  } finally { dom.restore(); }
-});
-
-/* ---------- 源码契约：入口必须真的用上这套退场 ---------- */
-test('源码：entry.ts 的清理路径按 open 状态决定播不播退场（切会话不得播）', async () => {
+/* ---------- 源码契约 ---------- */
+test('源码：entry.ts 用原地退场，且不再 cloneNode（防退化）', async () => {
   const entry = await readFile(new URL('../src/client/entry.ts', import.meta.url), 'utf8');
-  assert.match(entry, /withExitGhost\(/, '必须调用 withExitGhost，否则"关闭有动画"会静默退化成瞬间消失');
-  assert.match(entry, /registry\.current\?\.open === false/, '必须先判断"这是关闭"再播：切会话时用户没有关窗，不该播关窗动画');
-  assert.equal(/withExitGhost\(host[^)]*\)\s*;\s*host\.replaceChildren\(\)/.test(entry), false, '必须在 withExitGhost 之后不要再清一次宿主（会把克隆体一起清掉）');
+  assert.match(entry, /beginExit\(/, '必须调用 beginExit');
+  assert.match(entry, /dispose\(\{ keepElement: true \}\)/, '必须告诉 dispose 别把节点摘掉（否则动画没得播）');
+  assert.match(entry, /registry\.current\?\.open === false/, '必须先判断"这是关闭"再播：切会话不该播关窗动画');
+  const exitRaw = await readFile(new URL('../src/client/exit-anim.ts', import.meta.url), 'utf8');
+  // 剥掉注释再查：注释里会写「曾经用 cloneNode」来说明为什么改掉，那不是实现。
+  const exit = exitRaw.replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.equal(/cloneNode/.test(exit), false, '退场不得再克隆节点：克隆体会丢滚动位置，而且克隆本身就是一次掉帧');
 });
 
-test('源码：选择模式的多选语义确实接到了入口（替换 vs 加选）', async () => {
-  const entry = await readFile(new URL('../src/client/entry.ts', import.meta.url), 'utf8');
-  assert.match(entry, /options\?\.additive === true \? before : \[\]/, '普通左键必须替换、Ctrl+左键必须加选');
-  assert.match(entry, /syncPickMarks\(document, next\)/, '替换时要立刻把上一张的高亮灭掉，不能等下一轮重画');
+test('样式：退场关键帧只动 opacity / transform，不得再有 blur 或 scale', async () => {
+  const css = await readFile(new URL('../src/client/styles.css', import.meta.url), 'utf8');
+  const block = css.slice(css.indexOf('@keyframes ea-overlay-out'), css.indexOf('}', css.indexOf('@keyframes ea-overlay-out')) + 1);
+  assert.ok(block.includes('opacity'), '必须淡出');
+  assert.equal(/blur\(/.test(block), false, '不得对整块玻璃做 blur：每帧重栅格化，实测掉帧');
+  assert.equal(/scale\(/.test(block), false, '不得缩放：同样迫使 backdrop 重算');
+  assert.match(css, /\.ea-overlay\[data-leaving=true\]\{[^}]*will-change:opacity,transform/, '要提前提成合成层');
 });

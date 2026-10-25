@@ -673,83 +673,119 @@ function renderModelList(ctx) {
  * 压缩中 / 已完成（带摘要正文）/ 已中断 / 失败（并说明保留上一份可用摘要）。
  */
 /**
- * §9.1 /compact 的结果 —— 小助手自己上下文的压缩报告。
+ * §9.1 /compact 的结果 —— 小助手上下文的一次「压缩事件」。
  *
- * 这一版按用户的原话重做：「按 /compact 后的页面设计进行仔细优化」「让摘要内容折叠起来」。
- * 旧版有四个真问题，都不是审美问题：
+ * ── 这一版为什么不是卡片 ───────────────────────────────────────
+ * 用户原话：「我不希望上下文压缩是这样的卡片的形式，因为用户这样子看不见（在上下文最上方）」
+ * 「参考一下 deepseek harness 是怎么处理摘要的显示的」。
  *
- * 1. **看不见**：卡片挂在正文最上面，而用户按 /compact 时通常正滚在底部 ——
- *    卡片出现在视口上方，看起来就是"按了没反应"。（现在：出现时把卡片带进视野）
- * 2. **像回答**：压缩过程中摘要走的是"回答"那条流式通道，屏幕上会出现
- *    一个空问句气泡 + 自动滚出来的摘要正文。它不是回答，却长着回答的样子。
- *    （现在：压缩中不进对话流，进度写在本卡片里）
- * 3. **不可操作**：只有一段状态文字 + 一整段摘要，不能收、不能复制、不能重试。
- * 4. **摘要太长**：一份摘要常常上千字，把整段历史顶到下面去。
- *    （现在：默认折成三行预览 + 「展开摘要」）
- *
- * 四种状态都给中文反馈：压缩中 / 已压缩（含占用变化）/ 已中断 / 失败（并说明上一份摘要仍可用）。
+ * 宿主的做法（@deepseek-ai/dsh-client-ui-chat 的 compactionRow）是一行**很安静的条**，
+ * 长在对话流里、就在压缩发生的位置，样式是：
+ *   [图标] 上下文已压缩 · 摘要首行……（单行省略）
+ *   hover 时图标变成展开箭头；点开就在同一位置往下长出正文（缩进 22px、次要色），
+ *   展开时头部还会 sticky 在滚动区顶部。
+ * 它不给"报告卡片"，也不占正文最上面 —— 因为那两样都会让人看不见或以为界面没反应。
+ * 这里照同一套来：一行、跟着对话走、点开看全文。
  */
 function compactNodes(state, ctx) {
     const compact = state.compactState;
     if (!compact || compact.status === 'idle')
         return [];
     // 防线：宿主落库的 compactState 是**落库结构**，没有 status 字段（§9.1 只有成功才落库）。
-    // 若某条路径把它整份带进来，status 会是 undefined —— 有摘要就按成功渲染，没摘要才按失败渲染。
     const status = compact.status ?? (compact.summary ? 'complete' : 'error');
     const running = status === 'running';
     const failed = status === 'error';
-    const badgeText = running ? '压缩中' : status === 'complete' ? '已压缩' : failed ? '压缩失败' : '已中断';
     const summary = typeof compact.summary === 'string' ? compact.summary : '';
-    const rows = [];
-    rows.push(el('div', { class: 'ea-card-head ea-compact-head' }, el('h3', { class: 'ea-card-title', text: '小助手上下文' }), 
-    // 徽章同时用颜色与文字两种编码：只靠颜色的话，色觉障碍用户分不出"已压缩"和"失败"。
-    el('span', { class: 'ea-compact-badge', 'data-status': running ? 'running' : status === 'complete' ? 'complete' : failed ? 'error' : 'interrupted', text: badgeText })));
-    // 元信息一行：时间 · 占用变化。拿不到就不写（宁可不显示，也不编一个数字）。
+    const open = ctx.compactOpen === true && !running;
+    const title = running ? '正在压缩上下文'
+        : status === 'complete' ? '上下文已压缩'
+            : failed ? '上下文压缩失败' : '上下文压缩已中断';
+    const line = running
+        ? '正在整理小助手自己的上下文…' + (state.text ? '（已收到 ' + state.text.length + ' 字）' : '')
+        : status === 'complete'
+            ? (firstLineOf(summary) || '点击查看压缩摘要')
+            : (compact.error || '没有拿到可用的摘要');
+    const row = el('section', {
+        class: 'ea-compact-row',
+        'data-status': running ? 'running' : status === 'complete' ? 'complete' : failed ? 'error' : 'interrupted',
+        'data-open': open ? 'true' : 'false',
+        'aria-label': '小助手上下文压缩',
+    });
+    const head = el('button', {
+        type: 'button', class: 'ea-compact-head', 'aria-expanded': open ? 'true' : 'false',
+    });
+    head.append(el('span', { class: 'ea-compact-chevron', 'aria-hidden': 'true', text: '▸' }), el('span', { class: 'ea-compact-title', text: title }), el('span', { class: 'ea-compact-sep', 'aria-hidden': 'true' }), el('span', { class: 'ea-compact-line', text: line }));
+    if (running)
+        head.setAttribute('disabled', '');
+    else
+        head.addEventListener('click', () => {
+            const next = !(ctx.compactOpen === true);
+            ctx.compactOpen = next;
+            row.setAttribute('data-open', next ? 'true' : 'false');
+            head.setAttribute('aria-expanded', next ? 'true' : 'false');
+            /**
+             * 展开时把这一行的头部顶到滚动区上方。
+             *
+             * 它本来就长在对话末尾（贴着滚动区底部），直接展开的话新增的正文全在视口外 ——
+             * 用户看到的是"点了没反应，只多出一条线"。滚一下，正文才真的进得来。
+             */
+            if (next && typeof row.getBoundingClientRect === 'function') {
+                const r = row.getBoundingClientRect();
+                const b = ctx.body.getBoundingClientRect();
+                if (r.height > 0 && b.height > 0)
+                    ctx.body.scrollTop += (r.top - b.top) - 6;
+            }
+        });
+    row.appendChild(head);
+    // 正文：只在展开时才有内容（宿主的 compactionBody 也是这么按需出现的）。
     const metaBits = [];
     if (compact.updatedAt)
         metaBits.push('压缩时间 ' + timeText(compact.updatedAt));
     const before = typeof compact.beforeOccupancy === 'number' ? compact.beforeOccupancy : undefined;
-    if (before !== undefined && state.occupancyKnown && typeof state.occupancy === 'number') {
-        metaBits.push('占用 ' + Math.round(before) + '% → ' + Math.round(state.occupancy) + '%');
+    // 0% → 0% 这种"什么都没变"的数字不写：那不是信息，是噪音。
+    const after = state.occupancyKnown && typeof state.occupancy === 'number' ? state.occupancy : undefined;
+    // 四舍五入之后的数才算数：0.4% → 0.3% 显示成「0% → 0%」是噪音，不是信息。
+    const beforeRounded = before !== undefined ? Math.round(before) : undefined;
+    const afterRounded = after !== undefined ? Math.round(after) : undefined;
+    if (beforeRounded !== undefined && afterRounded !== undefined && (beforeRounded > 0 || afterRounded > 0)) {
+        metaBits.push('占用 ' + beforeRounded + '% → ' + afterRounded + '%');
     }
-    else if (before !== undefined) {
-        metaBits.push('压缩前占用 ' + Math.round(before) + '%');
+    else if (beforeRounded !== undefined && beforeRounded > 0) {
+        metaBits.push('压缩前占用 ' + beforeRounded + '%');
     }
+    const body = [];
     if (metaBits.length)
-        rows.push(el('small', { class: 'ea-meta ea-compact-meta', text: metaBits.join(' · ') }));
-    if (running) {
-        // 进度写在这里，不写进对话流：压缩摘要不是"回答"，不该占用回答的位置。
-        // 已收到的字数是真实进度（宿主按 SSE 一段段推），不是假动画。
-        const received = (state.text || '').length;
-        rows.push(el('p', { class: 'ea-compact-status ea-compact-running', role: 'status' }, el('span', { class: 'ea-spinner' }), el('span', { text: '正在整理小助手自己的上下文…' + (received ? '（已收到 ' + received + ' 字）' : '') })));
-        rows.push(el('p', { class: 'ea-compact-hint', text: '只压缩小助手的上下文，不影响主对话；完整问答记录仍然保留在历史里。' }));
-    }
-    else if (status === 'complete') {
-        rows.push(el('p', { class: 'ea-compact-status', role: 'status', text: '已压缩：后续回答参考下面这份摘要。完整问答记录仍然保留在历史里，没有被删除。' }));
+        body.push(el('small', { class: 'ea-meta ea-compact-meta', text: metaBits.join(' · ') }));
+    // 失败/中断的**原因**要在展开后的正文里写清（头部那一行只有一句省略，长错误看不全）。
+    if (!running && status !== 'complete') {
+        body.push(el('p', {
+            class: 'ea-compact-error',
+            role: 'alert',
+            text: (failed ? '压缩失败：' : '压缩已中断：') + (compact.error || '没有拿到可用的摘要'),
+        }));
         if (summary)
-            rows.push(compactSummaryBlock(summary, ctx));
-        rows.push(el('div', { class: 'ea-compact-actions' }, compactAction('重新压缩', '再压缩一次小助手上下文', ctx), compactCopyAction(summary)));
+            body.push(el('small', { class: 'ea-meta', text: '下面是上一次成功压缩的摘要，仍然可用。' }));
     }
-    else {
-        // 失败 / 中断：说清原因，并且明确"上一份可用摘要还在"。
-        const label = failed ? '压缩失败：' : '压缩已中断：';
-        rows.push(el('p', { class: 'ea-compact-status ea-compact-error', role: 'alert', text: label + (compact.error || '没有拿到可用的摘要') }));
-        if (summary) {
-            rows.push(el('small', { class: 'ea-meta', text: '下面是上一次成功压缩的摘要，仍然可用。' }));
-            rows.push(compactSummaryBlock(summary, ctx));
-        }
-        rows.push(el('div', { class: 'ea-compact-actions' }, compactAction(failed ? '重试压缩' : '继续压缩', '再尝试压缩一次小助手上下文', ctx)));
-    }
-    return [el('section', {
-            class: 'dsh-explain-assistant-compact ea-card ea-compact',
-            'aria-label': '小助手上下文压缩',
-            'data-status': running ? 'running' : status === 'complete' ? 'complete' : failed ? 'error' : 'interrupted',
-        }, ...rows)];
+    if (summary)
+        body.push(el('div', { class: 'ea-compact-summary ea-md-scope' }, ...cachedMarkdownNodes('compact-' + (compact.updatedAt || contentKey(summary)), summary)));
+    else if (!running)
+        body.push(el('p', { class: 'ea-compact-hint', text: failed || status === 'interrupted' ? '这次没有拿到可用的摘要。' : '没有可用的摘要正文。' }));
+    if (status === 'complete')
+        body.push(el('div', { class: 'ea-compact-actions' }, compactAction('重新压缩', '再压缩一次小助手上下文', ctx), compactCopyAction(summary)));
+    else if (!running)
+        body.push(el('div', { class: 'ea-compact-actions' }, compactAction(failed ? '重试压缩' : '继续压缩', '再尝试压缩一次小助手上下文', ctx)));
+    row.appendChild(el('div', { class: 'ea-compact-body' }, ...body));
+    return [row];
+}
+/** 摘要的第一行，去掉 markdown 记号，用在这一行条上做省略显示（宿主的 compactionSummary 就是单行省略）。 */
+function firstLineOf(text) {
+    const plain = text.replace(/[#>*_`-]+/g, ' ').replace(/\s+/g, ' ').trim();
+    return plain.length > 80 ? plain.slice(0, 80) : plain;
 }
 /** 「重新压缩 / 重试」按钮：与标题栏那颗走同一条路（submit('/compact')），不另开一条。 */
 function compactAction(label, aria, ctx) {
     return button(label, aria, () => {
-        // 按钮禁用只是视觉挡板：requestSubmit / 直接调用都能绕过去，闸门必须在这里再判一次。
+        // 按钮禁用只是视觉挡板：直接调用也能绕过去，闸门必须在这里再判一次。
         if (!canSubmit(ctx.state))
             return;
         void ctx.plugin.submit('/compact');
@@ -767,29 +803,6 @@ function compactCopyAction(summary) {
         clipboard.writeText(summary).then(() => say('已复制'), () => say('复制失败'));
     }, { class: 'ea-btn ea-btn-soft ea-compact-action' });
     return node;
-}
-/**
- * 摘要块：**默认折起来**（用户明确要求）。
- *
- * 折叠不靠量高度：折叠态的预览是纯文本截断（CSS 三行 clamp），
- * 展开的全文用 grid-template-rows 0fr → 1fr 过渡 —— 不需要 clientHeight，
- * 也就不存在"量到 0 → 动画跳一下"这类老问题（"展开全文"当初踩过这个坑）。
- */
-function compactSummaryBlock(summary, ctx) {
-    const open = ctx.compactOpen === true;
-    const chars = summary.replace(/\s+/g, '').length;
-    const label = '展开摘要（约 ' + chars + ' 字）';
-    const preview = summary.replace(/[#>*_`-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
-    const box = el('div', { class: 'ea-compact-summary-box', 'data-open': open ? 'true' : 'false' });
-    const toggle = button(open ? '收起摘要' : label, open ? '收起压缩摘要' : '展开压缩摘要', () => {
-        const next = !(ctx.compactOpen === true);
-        ctx.compactOpen = next;
-        box.setAttribute('data-open', next ? 'true' : 'false');
-        toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
-        toggle.textContent = next ? '收起摘要' : label;
-    }, { class: 'ea-btn ea-btn-soft ea-compact-toggle', expanded: open });
-    box.append(el('p', { class: 'ea-compact-preview', text: preview + (chars > 120 ? '…' : '') }), el('div', { class: 'ea-compact-summary-inner' }, el('div', { class: 'dsh-explain-assistant-compact-summary ea-compact-summary ea-md-scope' }, ...cachedMarkdownNodes('compact-' + (ctx.state.compactState?.updatedAt || contentKey(summary)), summary))));
-    return el('div', { class: 'ea-compact-summary-wrap' }, box, toggle);
 }
 /**
  * §6.3 依据分级在界面上的呈现。
@@ -1739,7 +1752,10 @@ export function renderOverlay(state, plugin, initialGeometry) {
     const loadingSlot = el('div', { class: 'ea-slot ea-loading-slot' });
     const stateErrorSlot = el('div', { class: 'ea-slot ea-state-error-slot' });
     // 顺序即阅读顺序：错误 → 压缩摘要 → 首次引导 → 历史（旧） → 当前这一问（最新） → 依据（贴着输入框）。
-    body.append(stateErrorSlot, loadingSlot, catalogNoteSlot, detailSlot, errorSlot, compactSlot, heroSlot, quickSlot, historySlot, liveTurn, evidenceSlot, selectionStatus);
+    // 顺序即阅读顺序：错误 → 引导 → 历史 → **压缩事件** → 当前这一问 → 依据。
+    // 压缩这一行刻意排在历史**之后**：它是一次「刚刚发生的事」，就该出现在对话流末尾，
+    // 而不是钉在正文最上面（用户原话：「在上下文最上方，用户看不见」）。
+    body.append(stateErrorSlot, loadingSlot, catalogNoteSlot, detailSlot, errorSlot, heroSlot, quickSlot, historySlot, compactSlot, liveTurn, evidenceSlot, selectionStatus);
     const input = el('textarea', { class: 'ea-input', placeholder: '问小助手主 agent 正在做什么…', 'aria-label': '向解释小助手提问', rows: '2' });
     const send = button(isBusy(state) ? '处理中' : '发送', '发送问题', () => { form.requestSubmit(); }, { class: 'ea-btn ea-btn-primary ea-send' });
     const ringSlot = el('div', { class: 'ea-ring-slot' });
@@ -2337,6 +2353,41 @@ export function updateOverlay(root, state, plugin) {
         renderModelPanel(ctx);
     fill(ctx.evidenceSlot, evidenceNodes(state, ctx.plugin));
     fill(ctx.compactSlot, compactNodes(state, ctx));
+    /*
+     * 压缩状态一变就把那一行带进视野。
+     *
+     * 为什么必须做：/compact 是用户主动按的，按完那一刻他正看着面板底部；
+     * 若这一行在他看不到的位置，界面就等于「没有任何反应」。
+     * 只在**状态真的变了**时滚一次 —— 每次重画都滚会把正在读的历史顶走。
+     */
+    const compactSig = [state.compactState?.status, state.compactState?.updatedAt, state.compactState?.error].join('|');
+    if (ctx.compactSig !== compactSig) {
+        ctx.compactSig = compactSig;
+        const row = ctx.compactSlot.querySelector?.('.ea-compact-row');
+        // 自己算滚动量，不用 scrollIntoView：
+        // 浮窗外层是 overflow:hidden，scrollIntoView 在真实页面上会把祖先链一起卷，
+        // 实测这里 scrollTop 仍是 0（那一行留在视口下面，等于没滚）。按两个矩形差补 scrollTop 最确定。
+        const scrollToRow = () => {
+            if (!row || typeof row.getBoundingClientRect !== 'function')
+                return;
+            const r = row.getBoundingClientRect();
+            const b = ctx.body.getBoundingClientRect();
+            if (!(r.height > 0 && b.height > 0))
+                return;
+            if (r.bottom > b.bottom)
+                ctx.body.scrollTop += (r.bottom - b.bottom) + 10;
+            else if (r.top < b.top)
+                ctx.body.scrollTop -= (b.top - r.top) + 10;
+        };
+        // 排在下一帧、并再补一次 150ms：
+        // 压缩刚完成时这一行是"边渲染边被撑开"的（上面还有历史/元信息在变），
+        // 当场量出来的位置很快就会过时 —— 实测只量一次时 scrollTop 差 400 多像素。
+        if (typeof requestAnimationFrame === 'function')
+            requestAnimationFrame(() => scrollToRow());
+        else
+            scrollToRow();
+        setTimeout(scrollToRow, 150);
+    }
     ctx.detailInline = false;
     renderHistory(ctx, state);
     // 面板平时挂在那一轮下面（见 historyNodes）；只有那一轮不在当前挂载窗口里时，

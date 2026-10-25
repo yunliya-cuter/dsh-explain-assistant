@@ -1,18 +1,22 @@
 /**
- * 关闭浮窗的退场：把面板克隆一份留在原地把动画播完，再把真节点摘掉。
+ * 关闭浮窗的退场。
  *
- * ── 为什么需要这一层 ──────────────────────────────────────────
- * 浮窗是 React 渲染出来、由一个 effect 的清理函数摘掉的。清理函数里
- * `host.replaceChildren()` 一执行节点就没了 —— 没有任何一帧可以拿来播动画，
- * 用户看到的就是"啪"一下消失（这正是用户这一轮说的"关闭小助手后的动画"）。
- * 模型选择页早就解决了同类问题（挂 data-closing → 播完再摘，见 overlay.tsx 的
- * closeModelPanel）；浮窗本体一直没跟上。
+ * ── 为什么是"原地留着播完"，而不是"克隆一份播动画" ─────────────
+ * 曾经的做法是把面板 cloneNode 一份留在原地播 180ms。两个真问题：
  *
- * ── 为什么用"克隆体"而不是延迟摘真节点 ────────────────────────
- * 延迟摘真节点要处理一串竞态：期间又被打开、切会话、宿主销毁、插件卸载……
- * 而且真节点上挂着监听器，多留 220ms 就意味着这段时间里它仍然吃点击和键盘。
- * 克隆体没有监听器、不参与状态、pointer-events:none，播完就删 —— 它只是一张画面。
- * 真节点该释放的全部**立刻**释放（controller.dispose / selection.dispose），语义不变。
+ * 1. **滚动位置丢了**：克隆体不继承 scrollTop，于是它从**对话最上面**开始播 ——
+ *    用户看到的就是"关掉的过程中画面弹回上下文顶部"。这是用户报的 bug。
+ * 2. **卡**：克隆整棵面板（几百个节点、还带 backdrop-filter）本身就是一次十几毫秒的
+ *    长任务，正好压在关闭动画的第一帧上。
+ *
+ * 现在改成：**原节点原地不动**，只摘掉监听器（不再接收任何输入）、挂 data-leaving，
+ * 让 CSS 播完再把节点摘掉。滚动位置天然保留，也没有克隆开销。
+ *
+ * 三条约束：
+ *   · 动画只动 opacity / transform（不 blur、不 scale）：blur 与 scale 会让
+ *     backdrop-filter 每帧重新栅格化，420×620 的一块玻璃上就是明显的掉帧；
+ *   · 退场期间 pointer-events:none + aria-hidden，绝不拦住用户的下一次点击；
+ *   · prefers-reduced-motion 下不播（调用方直接摘掉）。
  */
 
 /** 与 styles.css 的 --ea-exit-dur（180ms）对齐，多留 40ms：定时器与最后一帧同值时容易赛跑。 */
@@ -23,33 +27,34 @@ type HostLike = {
   replaceChildren(...nodes: Element[]): void
 }
 
+type NodeLike = Element & {
+  style?: { pointerEvents?: string }
+  parentElement?: Element | null
+}
+
 export function prefersReducedMotion(): boolean {
   // 假 DOM 里没有 matchMedia：当作"可以播动画"，于是测试跑的是带过渡的真实路径。
   return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
 /**
- * 摘掉浮窗，并在关闭时留一份会播退场的克隆体。
+ * 让刚被摘下来的浮窗原地播完退场。
  *
- * @param host 浮窗的宿主容器（浮窗是它的 firstElementChild）。
- * @param removeReal 立刻释放真节点（解监听、dispose markdown 增量器等）。**必须先跑**。
+ * @param host 浮窗的宿主容器。
+ * @param element 刚才那个浮窗节点（**必须在 host 里**，调用方不要先 remove）。
  * @param options.animate false = 强制不播（宿主销毁、插件卸载这类"立刻消失"的场合）。
- * @returns 是否真的挂上了一份退场克隆体（测试据此区分两条路径）。
+ * @returns 是否真的在播（false 表示调用方应当立刻把它摘掉）。
  */
-export function withExitGhost(host: HostLike, removeReal: () => void, options: { animate?: boolean } = {}): boolean {
-  const node = host.firstElementChild
-  const animate = options.animate !== false && Boolean(node) && !prefersReducedMotion()
-  if (!animate || !node) { removeReal(); host.replaceChildren(); return false }
-  const ghost = node.cloneNode(true) as Element
-  // 克隆体会让页面上出现两份同名 id（aria-labelledby 会指到错的那一份），一并剥掉。
-  if (typeof ghost.removeAttribute === 'function') ghost.removeAttribute('id')
-  const marked = typeof ghost.querySelectorAll === 'function' ? Array.from(ghost.querySelectorAll('[id]')) : []
-  for (const child of marked) child.removeAttribute('id')
-  ghost.setAttribute('data-leaving', 'true')
-  ghost.setAttribute('aria-hidden', 'true')
-  // 真节点先摘、克隆体紧接着占住同一个位置：两张图重合，看不出接缝。
-  removeReal()
-  host.replaceChildren(ghost)
-  setTimeout(() => { if (ghost.parentElement === host) ghost.remove() }, EXIT_MS)
+export function beginExit(host: HostLike, element: NodeLike | null | undefined, options: { animate?: boolean } = {}): boolean {
+  if (!element || options.animate === false || prefersReducedMotion()) return false
+  if (host.firstElementChild !== element) return false
+  element.setAttribute('data-leaving', 'true')
+  element.setAttribute('aria-hidden', 'true')
+  // 退场期间彻底不接输入：这一份已经不是界面了，只是一张正在淡出的画面。
+  if (element.style) element.style.pointerEvents = 'none'
+  const parent = element.parentElement
+  setTimeout(() => {
+    if (parent && element.parentElement === parent) element.remove()
+  }, EXIT_MS)
   return true
 }

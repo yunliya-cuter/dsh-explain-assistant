@@ -4,7 +4,7 @@ import { readAppliedGeometry } from './window.js';
 import { attachSelection } from './selection.js';
 import { syncPickMarks } from './pick-marks.js';
 import { createArchiveWatcher } from './archive-watch.js';
-import { withExitGhost } from './exit-anim.js';
+import { beginExit } from './exit-anim.js';
 import { headerButtonText, headerButtonTitle, watchUnread } from './header-badge.js';
 import { shouldMountOverlay, isOpening, watchOpening, openingLabel, openingTitle } from './open-gate.js';
 import css from './styles.css';
@@ -193,7 +193,7 @@ export function apply(ctx: any): void {
          * 首次挂载时清理函数从未跑过 → ref 为 undefined → 仍落默认值（A2 要的那一种）。
          */
         const previousGeometry = lastGeometryRef.current;
-        let controller: { dispose(): void } | undefined;
+        let controller: { dispose(options?: { keepElement?: boolean }): void } | undefined;
         let selection: ReturnType<typeof attachSelection> | undefined;
         const current = registry.current;
         const mounting = Boolean(shouldMount && current?.open);
@@ -264,7 +264,7 @@ export function apply(ctx: any): void {
           const onSelectExit = () => selection?.exit();
           document.addEventListener('dsh-explain-assistant:select', onSelectMode);
           document.addEventListener('dsh-explain-assistant:select-exit', onSelectExit);
-          controller = { dispose: () => { document.removeEventListener('dsh-explain-assistant:select', onSelectMode); document.removeEventListener('dsh-explain-assistant:select-exit', onSelectExit); selection?.dispose(); syncPickMarks(document, []); element.dispatchEvent(new Event('dsh-explain-assistant:dispose')); element.remove(); } };
+          controller = { dispose: (options?: { keepElement?: boolean }) => { document.removeEventListener('dsh-explain-assistant:select', onSelectMode); document.removeEventListener('dsh-explain-assistant:select-exit', onSelectExit); selection?.dispose(); syncPickMarks(document, []); element.dispatchEvent(new Event('dsh-explain-assistant:dispose')); /* 退场动画期间要留着这个节点原地播完（见 exit-anim.ts）。 */ if (!options?.keepElement) element.remove(); } };
         }
         return () => {
           // 摘除**之前**把这一刻的实际几何记下来 —— 这是下一次重建能「原地不动」的唯一依据。
@@ -279,9 +279,29 @@ export function apply(ctx: any): void {
            * 插件卸载与宿主销毁走外层 cleanup，走不到这里，所以不会留下幽灵窗。
            */
           const closing = registry.current?.open === false;
-          const release = () => { controller?.dispose(); selection?.dispose(); };
-          if (closing) withExitGhost(host as unknown as { firstElementChild: Element | null; replaceChildren(...nodes: Element[]): void }, release);
-          else { release(); host.replaceChildren(); }
+          const element = host.firstElementChild as HTMLElement | null;
+          if (closing && element) {
+            /**
+             * 关闭：**原节点原地**播退场，不克隆、不重建。
+             *
+             * 旧写法是"克隆一份留着播" —— 克隆体不继承 scrollTop，于是动画从对话最上面开始，
+             * 用户看到的就是"关掉的瞬间画面弹回顶部"（用户报的 bug）；克隆整棵面板本身
+             * 也是一次十几毫秒的长任务，正好压在动画第一帧上，于是"卡卡的"。
+             * 现在只摘监听器（这一步必须做：退场期间它不再是界面），节点留在原地淡出。
+             */
+            selection?.dispose();
+            /**
+             * 顺序很重要：先挂退场标记（这一步只改两个属性，几乎不花时间，动画立刻开始），
+             * 再把"卸监听/卸 markdown 增量器"这些稍重的事放到下一个任务里做。
+             * 反过来的话，那几十毫秒的收尾工作会正好压在动画第一帧上 —— 那就是"卡一下"的来源。
+             */
+            const animated = beginExit(host as unknown as { firstElementChild: Element | null; replaceChildren(...nodes: Element[]): void }, element);
+            const teardown = () => { controller?.dispose({ keepElement: true }); };
+            if (animated) setTimeout(teardown, 0);
+            else { teardown(); element.remove(); }
+          } else {
+            controller?.dispose(); selection?.dispose(); host.replaceChildren();
+          }
         };
       }, [open, sessionId, shouldMount]);
 
