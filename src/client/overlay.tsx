@@ -168,6 +168,9 @@ function loadingNodes(): Child[] {
       el('span', { class: 'ea-loading-text', text: '正在读取小助手的当前状态…' }),
     ),
     el('p', { class: 'ea-loading-hint', text: '模型列表、历史记录与上下文占用会在数据到位后一次性显示出来。这里现在什么都没有显示，是因为还没读到，不是因为你没有数据。' }),
+    // 第一次打开确实比后面慢：要读主 agent 这一段的过程、算占用、拉一次模型目录。
+    // 写出来，用户才知道"等"是正常的、不是卡死（读一次之后有缓存，再打开就是秒开）。
+    el('p', { class: 'ea-loading-hint ea-loading-slow', text: '第一次打开可能要几秒：需要先把主 agent 最近这一段的过程读一遍、再算上下文占用。读到之后会缓存，之后再打开就是秒开。' }),
   )]
 }
 
@@ -185,7 +188,18 @@ function stateErrorNodes(state: AssistantClientState, plugin: PluginLike, failur
     el('h3', { class: 'ea-card-title', text: info.title }),
     el('p', { class: 'ea-state-error-reason ea-error', role: 'alert', text: info.message }),
     el('p', { class: 'ea-state-error-hint', text: '注意：这不是「没有内容」。模型列表、历史记录与上下文占用这次都没有取到，所以下面不显示空的列表或「还没有历史」这类结论 —— 那会把「没读到」说成「真的没有」。' }),
-    button('重试', '重新读取小助手状态', () => { void plugin.retryState?.(state.sessionId) }, { class: 'ea-btn ea-btn-primary ea-state-retry' }),
+    button('重试', '重新读取小助手状态', () => {
+      if (!plugin.retryState) return
+      /**
+       * 先让界面**立刻**回到「正在重新读取」，再发请求。
+       *
+       * 旧写法只发请求、什么都不改 —— 接下来最长 15 秒里界面一动不动，
+       * 用户看到的就是「重试按了没反应」（3081 上就是这么报的）。
+       * 置 stateReady=false 会切到加载页；无论成功还是再次失败，都会有明确结局。
+       */
+      plugin.registry.update(state.sessionId, { stateReady: false, stateError: undefined })
+      void plugin.retryState(state.sessionId)
+    }, { class: 'ea-btn ea-btn-primary ea-state-retry' }),
   )]
 }
 

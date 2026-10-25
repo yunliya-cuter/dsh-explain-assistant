@@ -124,13 +124,25 @@ export function apply(ctx: any): void {
   };
 
   /** 目录可能随时变化（换 provider、加模型），故做短时缓存，避免每个请求都打一遍宿主。 */
-  let catalogCache: { at: number; value: any } | undefined;
-  const CATALOG_TTL_MS = 30000;
+  let catalogCache: { at: number; value: any; ttl: number } | undefined;
+  /**
+   * 目录缓存时长。
+   *
+   * 30 秒太短了：这份目录要打一次 https://api.deepseek.com/models（真实网络往返），
+   * 而它是 /state 的一部分 —— 于是"隔了一会儿第一次打开浮窗"总是白等一次网络。
+   * 实测（3081）：冷 0.55 秒、命中 0.005 秒；目录 TTL 一过期，下一次 /state 立刻回到 0.5 秒以上。
+   * 模型目录本来就是"换 provider / 加模型"才变，5 分钟足够新，也足够快。
+   */
+  const CATALOG_TTL_MS = 300_000;
+  /** 没读到的时候只缓存 5 秒：失败不该被缓存住，否则一次启动期的抖动会让界面 5 分钟都显示"没有读到目录"。 */
+  const CATALOG_FAILURE_TTL_MS = 5_000;
   const loadCatalog = async (signal?: AbortSignal) => {
     const now = Date.now();
-    if (catalogCache && now - catalogCache.at < CATALOG_TTL_MS) return catalogCache.value;
+    if (catalogCache && now - catalogCache.at < catalogCache.ttl) return catalogCache.value;
     const value = await discoverCatalog(ctx?.llm, signal);
-    catalogCache = { at: now, value };
+    const groups = Array.isArray((value as { groups?: unknown[] })?.groups) ? (value as { groups: unknown[] }).groups : [];
+    const failed = groups.length === 0;
+    catalogCache = { at: now, value, ttl: failed ? CATALOG_FAILURE_TTL_MS : CATALOG_TTL_MS };
     return value;
   };
 
@@ -223,17 +235,27 @@ export function apply(ctx: any): void {
      */
     llmTimeouts: readConfiguredTimeouts(),
     loadState: async (id: string, signal?: AbortSignal) => {
-      const state: any = store ? (await store.load(id)).state : { sessionId: id, records: [], unread: false, archived: false };
+      /**
+       * 这四件事**互相独立**，必须并行。
+       *
+       * 旧写法是一条串行链：读本地记录 → 克隆主 agent 表面 → 算占用 → 拉模型目录。
+       * 每一项在真实会话上都是几十毫秒到一秒多（1.4 万事件的会话约 23ms、3.4 万事件约 1.2 秒；
+       * 目录要打一次网络，冷 0.5 秒），串起来就是"第一次打开要等很久"——
+       * 用户这一轮问的正是这件事。并行之后总耗时≈最慢的那一项，而不是四项相加。
+       */
+      const stateTask = store ? store.load(id).then(loaded => loaded.state) : Promise.resolve({ sessionId: id, records: [], unread: false, archived: false });
+      const mainlineTask = readMainlineCached(id, signal);
+      const [state, mainline] = await Promise.all([stateTask, mainlineTask]) as [any, Awaited<ReturnType<typeof readMainlineCached>>];
       const explicit = state.explicitModel as { provider?: string; model?: string } | undefined;
       // 0.2：主 agent 上下文同时驱动两件事——占用数字（圆环）与悬停显示的构成。
-      const mainline = await readMainlineCached(id, signal);
-      const occupancy = await readOccupancy(ctx, state, mainline);
+      const occupancyTask = readOccupancy(ctx, state, mainline);
+      const catalogTask = loadCatalog(signal).catch(error => catalogReadFailure(error));
+      const [occupancy, catalog] = await Promise.all([occupancyTask, catalogTask]);
       // 目录读取失败**不得**被吞成「空目录」（t6 评审的 F2）：
       // 旧写法 .catch(() => ({ groups: [], failures: [] })) 让「没读到」与「真的没有」
       // 变成同一个形状 —— /state 依然 200、stateError 为 undefined、界面判为 ready，
       // 于是显示「还没有选择模型 / 共 0 个可选 / 还没有小助手历史 / 占用未知」且没有任何「没读到」的提示。
       // 现在把失败如实填进 failures（带中文原因），由客户端已有的 failures 渲染路径显示出来。
-      const catalog = await loadCatalog(signal).catch(error => catalogReadFailure(error));
       // §5.1/§8：首屏只给最近一页，更早的靠「查看更早历史」按页取。
       // 一次全给会在记录变多后把浮窗塞满，也让首屏变慢。
       const allRecords: any[] = Array.isArray(state?.records) ? state.records : [];
@@ -344,7 +366,8 @@ export function apply(ctx: any): void {
      */
     listModels: async (signal?: AbortSignal) => {
       const fresh = await discoverCatalog(ctx?.llm, signal);
-      catalogCache = { at: Date.now(), value: fresh };
+      const freshGroups = Array.isArray((fresh as { groups?: unknown[] })?.groups) ? (fresh as { groups: unknown[] }).groups : [];
+      catalogCache = { at: Date.now(), value: fresh, ttl: freshGroups.length === 0 ? CATALOG_FAILURE_TTL_MS : CATALOG_TTL_MS };
       return { groups: fresh.groups, failures: fresh.failures };
     },
     /**

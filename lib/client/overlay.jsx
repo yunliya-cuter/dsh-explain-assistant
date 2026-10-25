@@ -112,7 +112,10 @@ function surfaceGate(state) {
 }
 /** 明确的加载页。第一眼必须被读成「正在加载」，而不是「没有数据」「插件坏了」。 */
 function loadingNodes() {
-    return [el('section', { class: 'ea-loading', 'aria-label': '正在加载' }, el('div', { class: 'ea-loading-row', role: 'status', 'aria-live': 'polite' }, el('span', { class: 'ea-spinner', 'aria-hidden': 'true' }), el('span', { class: 'ea-loading-text', text: '正在读取小助手的当前状态…' })), el('p', { class: 'ea-loading-hint', text: '模型列表、历史记录与上下文占用会在数据到位后一次性显示出来。这里现在什么都没有显示，是因为还没读到，不是因为你没有数据。' }))];
+    return [el('section', { class: 'ea-loading', 'aria-label': '正在加载' }, el('div', { class: 'ea-loading-row', role: 'status', 'aria-live': 'polite' }, el('span', { class: 'ea-spinner', 'aria-hidden': 'true' }), el('span', { class: 'ea-loading-text', text: '正在读取小助手的当前状态…' })), el('p', { class: 'ea-loading-hint', text: '模型列表、历史记录与上下文占用会在数据到位后一次性显示出来。这里现在什么都没有显示，是因为还没读到，不是因为你没有数据。' }), 
+        // 第一次打开确实比后面慢：要读主 agent 这一段的过程、算占用、拉一次模型目录。
+        // 写出来，用户才知道"等"是正常的、不是卡死（读一次之后有缓存，再打开就是秒开）。
+        el('p', { class: 'ea-loading-hint ea-loading-slow', text: '第一次打开可能要几秒：需要先把主 agent 最近这一段的过程读一遍、再算上下文占用。读到之后会缓存，之后再打开就是秒开。' }))];
 }
 /**
  * /state 失败（或超时）且没有旧内容时的明确中文错误 + 重试。
@@ -124,7 +127,19 @@ function stateErrorNodes(state, plugin, failure) {
     // 标题与原因都取自 readFailure：这样「/state 整体失败」与「/state 成功但目录没读到」
     // 各自说自己那句实话，而不是笼统地都说「没读到当前状态」（F2 里后者根本不是状态的问题）。
     const info = failure || readFailure(state) || { title: '没有读到小助手的当前状态', message: state.stateError };
-    return [el('section', { class: 'ea-state-error ea-card', 'aria-label': '状态读取失败' }, el('h3', { class: 'ea-card-title', text: info.title }), el('p', { class: 'ea-state-error-reason ea-error', role: 'alert', text: info.message }), el('p', { class: 'ea-state-error-hint', text: '注意：这不是「没有内容」。模型列表、历史记录与上下文占用这次都没有取到，所以下面不显示空的列表或「还没有历史」这类结论 —— 那会把「没读到」说成「真的没有」。' }), button('重试', '重新读取小助手状态', () => { void plugin.retryState?.(state.sessionId); }, { class: 'ea-btn ea-btn-primary ea-state-retry' }))];
+    return [el('section', { class: 'ea-state-error ea-card', 'aria-label': '状态读取失败' }, el('h3', { class: 'ea-card-title', text: info.title }), el('p', { class: 'ea-state-error-reason ea-error', role: 'alert', text: info.message }), el('p', { class: 'ea-state-error-hint', text: '注意：这不是「没有内容」。模型列表、历史记录与上下文占用这次都没有取到，所以下面不显示空的列表或「还没有历史」这类结论 —— 那会把「没读到」说成「真的没有」。' }), button('重试', '重新读取小助手状态', () => {
+            if (!plugin.retryState)
+                return;
+            /**
+             * 先让界面**立刻**回到「正在重新读取」，再发请求。
+             *
+             * 旧写法只发请求、什么都不改 —— 接下来最长 15 秒里界面一动不动，
+             * 用户看到的就是「重试按了没反应」（3081 上就是这么报的）。
+             * 置 stateReady=false 会切到加载页；无论成功还是再次失败，都会有明确结局。
+             */
+            plugin.registry.update(state.sessionId, { stateReady: false, stateError: undefined });
+            void plugin.retryState(state.sessionId);
+        }, { class: 'ea-btn ea-btn-primary ea-state-retry' }))];
 }
 let previouslyFocused = null;
 function appendChildren(node, children) {

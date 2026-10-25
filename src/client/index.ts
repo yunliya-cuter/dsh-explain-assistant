@@ -306,12 +306,16 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
   const STATE_TIMEOUT_MS = typeof options.stateTimeoutMs === 'number' && Number.isFinite(options.stateTimeoutMs) && options.stateTimeoutMs > 0
     ? options.stateTimeoutMs
     : 15_000;
-  const withStateTimeout = <T>(task: Promise<T>): Promise<T> => new Promise<T>((resolve, reject) => {
+  const withStateTimeout = <T>(task: Promise<T>, onTimeout?: () => void): Promise<T> => new Promise<T>((resolve, reject) => {
     // 文案里的时长按实际粒度写：默认 15 秒就是「15 秒」，测试里压到几十毫秒时写毫秒
     // （写「等了 0 秒」会让人以为这条错误没意义）。
     const waited = STATE_TIMEOUT_MS >= 1000 ? Math.round(STATE_TIMEOUT_MS / 1000) + ' 秒' : STATE_TIMEOUT_MS + ' 毫秒';
     const timer = setTimeout(() => {
-      reject(new Error('读取小助手状态超时（等了 ' + waited + '没有回应）。'));
+      // 超时不只是"报个错"：底层那次请求也要真的掐掉。
+      // 不掐掉的话它会一直挂在浏览器里，而用户点「重试」时又来一条 —— 服务器上堆一串
+      // 谁也不等的请求（3081 上实测就是越点越慢）。
+      try { onTimeout?.() } catch { /* abort 失败不影响报错 */ }
+      reject(new Error('读取小助手状态超时（等了 ' + waited + '没有回应）。宿主可能正忙，可以点「重试」再试一次。'));
     }, STATE_TIMEOUT_MS);
     // 别让这个定时器拖住进程退出（测试里尤其重要：假 api 可能永不返回）。
     (timer as unknown as { unref?: () => void }).unref?.();
@@ -388,7 +392,8 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
   };
 
   const refreshState = (sessionId: string, options?: { keepCleared?: boolean }): Promise<void> => {
-    const task = withStateTimeout(callApi(() => api.state(sessionId))).then(result => {
+    const controller = new AbortController();
+    const task = withStateTimeout(callApi(() => api.state(sessionId, controller.signal)), () => controller.abort()).then(result => {
       if (disposed) return;
       const payload = isObject(result.payload) ? result.payload : {};
       const current = assistantRegistry.get(sessionId);
