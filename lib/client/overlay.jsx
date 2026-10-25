@@ -681,6 +681,18 @@ function renderModelList(ctx) {
     }
 }
 /**
+ * compactState 的**唯一**状态判定处。
+ *
+ * 宿主的 compactState 是落库结构：**没有 status 字段**（§9.1 只有压缩成功才落库）。
+ * 在这里补回语义：有摘要即成功，没摘要就是失败。渲染层与"这一行插在哪"都走这一个判定，
+ * 免得同一件事两处各写一遍、又漂成两套结论（历史上就出现过：摘要明明在，
+ * 界面把"压缩成功"渲染成"压缩已中断"）。
+ */
+function compactStatusOf(compact) {
+    const status = compact.status ?? (compact.summary ? 'complete' : 'error');
+    return status;
+}
+/**
  * §9.1 /compact 的结果。
  *
  * 这一段此前完全不存在：压缩摘要只落库、不进任何 UI 状态，用户按了 /compact
@@ -704,10 +716,12 @@ function renderModelList(ctx) {
  */
 function compactNodes(state, ctx) {
     const compact = state.compactState;
-    if (!compact || compact.status === 'idle')
+    if (!compact)
         return [];
     // 防线：宿主落库的 compactState 是**落库结构**，没有 status 字段（§9.1 只有成功才落库）。
-    const status = compact.status ?? (compact.summary ? 'complete' : 'error');
+    const status = compactStatusOf(compact);
+    if (status === 'idle')
+        return [];
     const running = status === 'running';
     const failed = status === 'error';
     const summary = typeof compact.summary === 'string' ? compact.summary : '';
@@ -741,8 +755,9 @@ function compactNodes(state, ctx) {
             /**
              * 展开时把这一行的头部顶到滚动区上方。
              *
-             * 它本来就长在对话末尾（贴着滚动区底部），直接展开的话新增的正文全在视口外 ——
-             * 用户看到的是"点了没反应，只多出一条线"。滚一下，正文才真的进得来。
+             * 它可能贴着滚动区底部（刚压完、就是最后一条之后的那个位置），也可能在对话中间
+             * （压缩之后又问了几轮，它就夹在那几轮上面）。不管在哪，正文都是往下长的：
+             * 不把头部顶上去，多出来的那一截就在视口外 —— 用户看到的是"点了没反应，只多出一条线"。
              */
             if (next && typeof row.getBoundingClientRect === 'function') {
                 const r = row.getBoundingClientRect();
@@ -791,6 +806,48 @@ function compactNodes(state, ctx) {
         body.push(el('div', { class: 'ea-compact-actions' }, compactAction(failed ? '重试压缩' : '继续压缩', '再尝试压缩一次小助手上下文', ctx)));
     row.appendChild(el('div', { class: 'ea-compact-body' }, ...body));
     return [row];
+}
+/** 一条记录是什么时候开始的：宿主落库写 startedAt，客户端本地刚追加的写 createdAt。 */
+function recordStartedAt(input) {
+    const record = (input || {});
+    const at = record.startedAt ?? record.createdAt;
+    return typeof at === 'string' ? at : '';
+}
+/**
+ * 「上下文已压缩」这一行该插在对话里的第几条记录之前。返回 -1 表示现在没有可画的压缩事件。
+ *
+ * ── 为什么需要这个函数 ─────────────────────────────────────────────
+ * 这一行原来固定在 `historySlot` 之后（body 的末尾），于是**永远**躺在对话最下面：
+ * 压缩完再问两轮，它就跑到那两轮下面去了，看起来像"刚刚才压缩过"，而实际压缩发生在
+ * 更早的位置。用户原话：「上下文压缩的提示总是在上下文最下方，而非在它本应在的位置」。
+ *
+ * ── 判据与宿主同源 ────────────────────────────────────────────────
+ * 宿主 host/occupancy.ts 的 carriedRecords 就是按同一条规则算「哪些记录还在上下文里」：
+ *     record.startedAt > compactState.createdAt
+ * 也就是说：压缩**之前开始的**记录已被摘要取代（在它上面），压缩**之后开始的**才是新对话
+ *（在它下面）。界面照同一条线插，两边不会各说各话。
+ *
+ * 拿不到压缩时间（老数据、或只有摘要正文）时不猜：退回末尾，按「最后发生」排。
+ */
+function compactBoundaryIndex(state, items) {
+    const compact = state.compactState;
+    if (!compact)
+        return -1;
+    const status = compactStatusOf(compact);
+    if (status === 'idle')
+        return -1;
+    // 正在压缩：这件事正在发生，此刻下面就还没有「压缩之后」的记录。
+    if (status === 'running')
+        return items.length;
+    const createdAt = typeof compact.createdAt === 'string' ? compact.createdAt : '';
+    if (!createdAt)
+        return items.length;
+    const index = items.findIndex(item => {
+        const at = recordStartedAt(item);
+        // 两个时间都是 new Date().toISOString()，定长同格式，字符串比较即时间比较。
+        return Boolean(at) && at > createdAt;
+    });
+    return index < 0 ? items.length : index;
 }
 /** 摘要的第一行，去掉 markdown 记号，用在这一行条上做省略显示（宿主的 compactionSummary 就是单行省略）。 */
 function firstLineOf(text) {
@@ -1344,8 +1401,21 @@ function historyJumpNode(ctx) {
  * 每来一个流式分片都要整块重挂一次。现在按 dsh 的做法 —— 尾部窗口 + 顶部补页 + 上限。
  */
 function historyNodes(state, plugin, ctx, win) {
+    /**
+     * 压缩那一行插在**它真正发生的位置**：第一条「晚于压缩时间」的记录之前
+     * （判据见 compactBoundaryIndex；与宿主 carriedRecords 同一条时间线）。
+     *
+     * 这个槽位是**同一个 DOM 节点**被搬来搬去（不是每帧新建一个），
+     * 所以插进去之后那一行的展开态、以及它周围用户的阅读位置都不会因重画而跳。
+     */
+    const compactAt = compactBoundaryIndex(state, win.items);
+    const compactSlot = compactAt >= 0 ? ctx.compactSlot : null;
     if (!state.records.length) {
-        return [el('p', { class: 'dsh-explain-assistant-empty ea-empty', text: '还没有小助手历史' })];
+        // 一条记录都没有时也要给它位置：刚打开就压缩、或压缩后历史又被清理过。
+        return [
+            compactSlot,
+            el('p', { class: 'dsh-explain-assistant-empty ea-empty', text: '还没有小助手历史' }),
+        ];
     }
     const hasJump = win.end < win.total;
     const children = [
@@ -1353,7 +1423,11 @@ function historyNodes(state, plugin, ctx, win) {
         historyOlderNode(state, plugin, ctx, win),
     ];
     const newestId = recordIdOf(state.records[state.records.length - 1]);
-    for (const record of win.items) {
+    for (let index = 0; index < win.items.length; index++) {
+        // 落在这一轮之前：压缩之后问的第一条，就排在压缩那一行的下面。
+        if (index === compactAt)
+            children.push(ctx.compactSlot);
+        const record = win.items[index];
         const id = recordIdOf(record);
         const nodes = historyTurnNodes(record, ctx, newestId);
         /*
@@ -1376,6 +1450,9 @@ function historyNodes(state, plugin, ctx, win) {
             'data-enter': ctx.pendingEnterId && ctx.pendingEnterId === id ? 'true' : undefined,
         }, ...nodes));
     }
+    // 压缩之后还没有新记录（刚压完），或者时间戳缺失、退回「最后发生」：落在末尾。
+    if (compactSlot && compactAt >= win.items.length)
+        children.push(ctx.compactSlot);
     if (hasJump)
         children.push(historyJumpNode(ctx));
     return [el('section', { class: 'dsh-explain-assistant-history ea-conv' + (hasJump ? ' has-jump' : ''), 'aria-label': '历史问答' }, ...children)];
@@ -1745,7 +1822,13 @@ export function renderOverlay(state, plugin, initialGeometry) {
     /** 教程页的槽位：与模型页同一套「另一页」机制（见 data-view）。 */
     const tutorialSlot = el('div', { class: 'ea-slot ea-tutorial-panel-slot' });
     const evidenceSlot = el('div', { class: 'ea-slot' });
-    const compactSlot = el('div', { class: 'ea-slot' });
+    /**
+     * 压缩那一行的槽位。它**不挂在 body 上**：历史区渲染时把这个槽位**本身**插进对话流
+     * 里「压缩发生的位置」（见 historyNodes）。槽位常驻（而不是每次重建一行）有两个理由：
+     *   · 展开态与「用户正读到哪」在两次重画之间不必重新计算；
+     *   · 历史区重画时只搬这个槽位，槽位里的那一行不会被连根拔掉。
+     */
+    const compactSlot = el('div', { class: 'ea-slot ea-compact-slot' });
     const historySlot = el('div', { class: 'ea-slot ea-conv-slot' });
     /**
      * 当前这一问：和历史是同一套对话样式（问句右气泡、回答左正文），位置在最下面、贴着输入框。
@@ -1766,11 +1849,13 @@ export function renderOverlay(state, plugin, initialGeometry) {
     // 未就绪/失败时它们是唯一有内容的东西，用户第一眼看到的就是它（不是空态列表）。
     const loadingSlot = el('div', { class: 'ea-slot ea-loading-slot' });
     const stateErrorSlot = el('div', { class: 'ea-slot ea-state-error-slot' });
-    // 顺序即阅读顺序：错误 → 压缩摘要 → 首次引导 → 历史（旧） → 当前这一问（最新） → 依据（贴着输入框）。
-    // 顺序即阅读顺序：错误 → 引导 → 历史 → **压缩事件** → 当前这一问 → 依据。
-    // 压缩这一行刻意排在历史**之后**：它是一次「刚刚发生的事」，就该出现在对话流末尾，
-    // 而不是钉在正文最上面（用户原话：「在上下文最上方，用户看不见」）。
-    body.append(stateErrorSlot, loadingSlot, catalogNoteSlot, detailSlot, errorSlot, heroSlot, quickSlot, historySlot, compactSlot, liveTurn, evidenceSlot, selectionStatus);
+    // 顺序即阅读顺序：错误 → 引导 → 历史 → 当前这一问 → 依据（贴着输入框）。
+    //
+    // **压缩那一行不在这个列表里**：它跟着对话走，由历史区插到它真正发生的位置
+    //（见 historyNodes / compactBoundaryIndex）。早先把它钉在 historySlot 之后，
+    // 结果是「不论压缩发生在哪一刻，它都躺在对话最下方」——用户原话：
+    //「上下文压缩的提示总是在上下文最下方，而非在它本应在的位置」。
+    body.append(stateErrorSlot, loadingSlot, catalogNoteSlot, detailSlot, errorSlot, heroSlot, quickSlot, historySlot, liveTurn, evidenceSlot, selectionStatus);
     const input = el('textarea', { class: 'ea-input', placeholder: '问小助手主 agent 正在做什么…', 'aria-label': '向解释小助手提问', rows: '2' });
     const send = button(isBusy(state) ? '处理中' : '发送', '发送问题', () => { form.requestSubmit(); }, { class: 'ea-btn ea-btn-primary ea-send' });
     const ringSlot = el('div', { class: 'ea-ring-slot' });
@@ -2137,6 +2222,23 @@ function animateFold(answer, toggle, expand, onDone) {
         finish();
 }
 /**
+ * 压缩那一行在历史签名里的那一份。
+ *
+ * 只放**会改变它位置或形态**的东西：状态（压缩中 → 完成/失败要换位置也换文案）、
+ * 压缩时间（决定它插在哪两条之间）、以及算出来的插入下标。
+ * 压缩过程中流式推过来的字数**刻意不算**——那是每个分片都变的量，
+ * 算进来就会让整段历史（十几轮 Markdown）跟着逐字重挂一遍。
+ */
+function compactSignatureOf(state, win) {
+    const compact = state.compactState;
+    if (!compact)
+        return '-';
+    const status = compactStatusOf(compact);
+    if (status === 'idle')
+        return '-';
+    return [status, compact.createdAt || '', compact.updatedAt || '', String(compactBoundaryIndex(state, win.items))].join(':');
+}
+/**
  * 历史区的签名：只放**会改变画面**的东西（窗口、条数、展开态、每条的状态与长度）。
  * 抽成函数是为了「就地展开/收起」之后能把缓存签名同步过去（见 toggleFold）：
  * 不同步的话，下一次任意重画都会认为展开态变了、把整段历史重挂一遍 ——
@@ -2147,6 +2249,7 @@ function historySignature(ctx, state, win) {
         win.start, win.end, win.total,
         state.hasEarlier ? 1 : 0,
         state.loadingEarlier ? 1 : 0,
+        compactSignatureOf(state, win),
         historyDetailSignature(state.historyDetail),
         [...ctx.expandedIds].sort().join('+'),
         state.records.map(record => recordIdOf(record) + ':' + String(record?.status || '') + ':' + recordAnswerText(record).length).join(','),
@@ -2367,22 +2470,30 @@ export function updateOverlay(root, state, plugin) {
     if (ctx.modelOpen)
         renderModelPanel(ctx);
     fill(ctx.evidenceSlot, evidenceNodes(state, ctx.plugin));
+    // 压缩那一行的**内容**先填；**位置**由历史区决定（historyNodes 把这个槽位本身插进对话流）。
+    // 这两句的顺序不能颠倒：renderHistory 要搬的正是这个已经填好的槽位。
     fill(ctx.compactSlot, compactNodes(state, ctx));
+    ctx.detailInline = false;
+    renderHistory(ctx, state);
     /*
      * 压缩状态一变就把那一行带进视野。
      *
      * 为什么必须做：/compact 是用户主动按的，按完那一刻他正看着面板底部；
      * 若这一行在他看不到的位置，界面就等于「没有任何反应」。
      * 只在**状态真的变了**时滚一次 —— 每次重画都滚会把正在读的历史顶走。
+     *
+     * 必须排在 renderHistory **之后**：那一行现在长在对话流里（见 historyNodes），
+     * 重画之前它可能还没被挂进文档，量到的矩形是 0，滚了等于没滚。
      */
     const compactSig = [state.compactState?.status, state.compactState?.updatedAt, state.compactState?.error].join('|');
     if (ctx.compactSig !== compactSig) {
         ctx.compactSig = compactSig;
-        const row = ctx.compactSlot.querySelector?.('.ea-compact-row');
+        const rowAt = () => ctx.compactSlot.querySelector?.('.ea-compact-row');
         // 自己算滚动量，不用 scrollIntoView：
         // 浮窗外层是 overflow:hidden，scrollIntoView 在真实页面上会把祖先链一起卷，
         // 实测这里 scrollTop 仍是 0（那一行留在视口下面，等于没滚）。按两个矩形差补 scrollTop 最确定。
         const scrollToRow = () => {
+            const row = rowAt();
             if (!row || typeof row.getBoundingClientRect !== 'function')
                 return;
             const r = row.getBoundingClientRect();
@@ -2397,14 +2508,14 @@ export function updateOverlay(root, state, plugin) {
         // 排在下一帧、并再补一次 150ms：
         // 压缩刚完成时这一行是"边渲染边被撑开"的（上面还有历史/元信息在变），
         // 当场量出来的位置很快就会过时 —— 实测只量一次时 scrollTop 差 400 多像素。
+        // 每次都现取那一行（不提前抓元素）：一次重画里历史区可能刚被整块换掉，
+        // 抓着旧元素量到的是已经脱离文档的节点，矩形恒为 0。
         if (typeof requestAnimationFrame === 'function')
             requestAnimationFrame(() => scrollToRow());
         else
             scrollToRow();
         setTimeout(scrollToRow, 150);
     }
-    ctx.detailInline = false;
-    renderHistory(ctx, state);
     // 面板平时挂在那一轮下面（见 historyNodes）；只有那一轮不在当前挂载窗口里时，
     // 才会掉到正文顶部的这个槽位——否则用户点了按钮什么都看不到。
     fill(ctx.detailSlot, ctx.detailInline ? [] : historyDetailNodes(state, ctx.plugin));

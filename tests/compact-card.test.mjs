@@ -76,20 +76,86 @@ test('展开状态跨重画保留（否则用户点开之后一个状态变化�
   } finally { dom.restore(); }
 });
 
-test('位置：必须排在历史之后、当前这一问之前（不是正文最上面）', async () => {
+/* ---------------- 位置：它必须长在「压缩发生的那一刻」，不是永远躺在最下面 ---------------- */
+/**
+ * 用户 2026-10-25 的原话：「上下文压缩的提示总是在上下文最下方，而非在它本应在的位置」。
+ *
+ * 判据与宿主 host/occupancy.ts 的 carriedRecords 同源，同一条时间线：
+ *   record.startedAt > compactState.createdAt  →  这条记录在压缩**之后**，排在它下面；
+ * 否则这条记录已被摘要取代，排在它上面。
+ *
+ * 旧实现把这一行钉在 historySlot 之后，于是压缩完再问两轮，它就滑到那两轮下面去了——
+ * 看起来像"刚刚才压缩过"，而实际压缩发生在更早的位置。这组用例盯的就是"它到底夹在哪两条之间"。
+ */
+const rec = (id, startedAt) => ({ id, question: '问：' + id, answerText: '答：' + id, status: 'complete', startedAt });
+const convChildren = root => byClass(root, 'ea-conv')?.children || [];
+const compactAtIn = root => convChildren(root).findIndex(child => child.querySelector?.('.ea-compact-row'));
+const idAt = (root, index) => convChildren(root)[index]?.getAttribute?.('data-record-id') ?? null;
+const compactWith = createdAt => ({ ...complete, createdAt });
+
+test('位置：夹在「压缩之前的那条」与「压缩之后的第一条」之间', async () => {
   const dom = fakeDom();
   try {
-    const { root } = await render({ ...base, compactState: complete });
-    const body = byClass(root, 'ea-body');
-    const names = body.children.map(child => child.className);
-    const historyAt = names.findIndex(name => /ea-conv-slot/.test(name));
-    const compactAt = names.findIndex(name => /ea-compact-row/.test(name) || (child => true));
-    // compact 那一行自己是 .ea-compact-row，但父级槽位是 .ea-slot：按"后代里有没有 .ea-compact-row"定位
-    const slotAt = body.children.findIndex(child => child.querySelector && child.querySelector('.ea-compact-row'));
-    const liveAt = names.findIndex(name => /ea-conv-live/.test(name));
-    assert.ok(slotAt > historyAt, '压缩这一行必须排在历史之后（它是一次"刚刚发生的事"），实际：' + historyAt + ' vs ' + slotAt);
-    assert.ok(slotAt < liveAt, '并且要在"当前这一问"之前，实际：' + slotAt + ' vs ' + liveAt);
-    assert.ok(compactAt >= -1);
+    const records = [rec('r1', '2026-10-24T00:00:00.000Z'), rec('r2', '2026-10-26T00:00:00.000Z'), rec('r3', '2026-10-27T00:00:00.000Z')];
+    const { root } = await render({ ...base, records, compactState: compactWith('2026-10-25T00:00:00.000Z') });
+    const at = compactAtIn(root);
+    assert.ok(at > 0, '压缩那一行必须长在对话流里（不是在 body 上另起一块）');
+    assert.equal(idAt(root, at - 1), 'r1', '它上面必须是压缩之前的那一条');
+    assert.equal(idAt(root, at + 1), 'r2', '它下面必须是压缩之后的第一条（不是最下面）');
+    assert.equal(idAt(root, at + 2), 'r3');
+  } finally { dom.restore(); }
+});
+
+test('位置：压缩之后又问了一轮，那一行不动，新的一轮长在它下面', async () => {
+  const dom = fakeDom();
+  try {
+    const records = [rec('r1', '2026-10-24T00:00:00.000Z'), rec('r2', '2026-10-26T00:00:00.000Z')];
+    const state = { ...base, records, compactState: compactWith('2026-10-25T00:00:00.000Z') };
+    const { root, overlay, plugin } = await render(state);
+    assert.equal(idAt(root, compactAtIn(root) + 1), 'r2', '初始：在 r2 之上');
+    // 又问了一轮（新记录落地）：那一行必须还在 r2 之上，而不是滑到 r3 下面
+    overlay.updateOverlay(root, { ...state, records: [...records, rec('r3', '2026-10-28T00:00:00.000Z')] }, plugin);
+    const at = compactAtIn(root);
+    assert.ok(at >= 0, '重画之后那一行还在');
+    assert.equal(idAt(root, at + 1), 'r2', '它下面永远是"压缩之后的第一条"，不是最新的那条');
+  } finally { dom.restore(); }
+});
+
+test('位置：刚压完、还没有新记录时，落在对话末尾（这一次它确实是最新发生的事）', async () => {
+  const dom = fakeDom();
+  try {
+    const records = [rec('r1', '2026-10-24T00:00:00.000Z'), rec('r2', '2026-10-24T01:00:00.000Z')];
+    const { root } = await render({ ...base, records, compactState: compactWith('2026-10-25T00:00:00.000Z') });
+    const children = convChildren(root);
+    const at = compactAtIn(root);
+    assert.equal(at, children.length - 1, '没有任何"压缩之后"的记录时，它就在末尾');
+    assert.equal(idAt(root, at - 1), 'r2');
+  } finally { dom.restore(); }
+});
+
+test('位置：压缩中算「正在发生」，即便上一次压缩记着更早的时间也放末尾', async () => {
+  const dom = fakeDom();
+  try {
+    const records = [rec('r1', '2026-10-24T00:00:00.000Z'), rec('r2', '2026-10-26T00:00:00.000Z')];
+    const { root } = await render({ ...base, records, compactState: { ...compactWith('2026-10-25T00:00:00.000Z'), status: 'running' } });
+    const children = convChildren(root);
+    assert.equal(compactAtIn(root), children.length - 1, '正在压缩就该在末尾');
+  } finally { dom.restore(); }
+});
+
+test('位置：一条历史都没有时，这一行仍然要画出来（不能因为没历史就消失）', async () => {
+  const dom = fakeDom();
+  try {
+    const { root } = await render({ ...base, records: [], compactState: complete });
+    assert.ok(byClass(root, 'ea-compact-row'), '有压缩就必须显示，哪怕历史是空的');
+  } finally { dom.restore(); }
+});
+
+test('位置：没压缩过就没有这一行（不占位、不留空槽）', async () => {
+  const dom = fakeDom();
+  try {
+    const { root } = await render({ ...base, records: [rec('r1', '2026-10-24T00:00:00.000Z')] });
+    assert.equal(byClass(root, 'ea-compact-row'), null);
   } finally { dom.restore(); }
 });
 

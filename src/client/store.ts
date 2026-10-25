@@ -47,6 +47,16 @@ export type CompactState = {
   reasoning?: string;
   updatedAt?: string;
   historyRevision?: number;
+  /**
+   * 这次压缩**是什么时候发生的**（宿主落库的 compactState.createdAt）。
+   *
+   * 界面靠它把「上下文已压缩」这一行插回它真正发生的位置：
+   * 压缩**之后**开始的记录在它下面，压缩**之前**开始的记录已被摘要取代、在它上面。
+   * 判据与宿主 occupancy.ts 的 carriedRecords 完全一致（同一条时间线、同一套字段）。
+   */
+  createdAt?: string;
+  /** 这次压缩覆盖了哪些记录（宿主落库字段；界面按时间线定位，不直接用它）。 */
+  sourceRecordIds?: string[];
   status?: 'idle' | 'running' | 'complete' | 'error' | 'interrupted';
   error?: string;
   /**
