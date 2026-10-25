@@ -613,6 +613,28 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 @keyframes ea-turn-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .ea-turn[data-enter="true"]{animation:ea-turn-in 180ms cubic-bezier(.2,.85,.25,1)}
 @media (prefers-reduced-motion: reduce){.ea-turn[data-enter="true"]{animation:none}}
+/* ---------- 「查看完整内容」面板：限高，自己滚 ---------- */
+/* 记录能有多长就有多长（整段回答 + 依据 + 工具过程）。旧样式让它按内容长，
+   于是在不高的窗口里它会一路长到输入框上沿、被那条边「切一刀」：面板没有下边框，
+   最后一行字直接贴着输入框，看起来像界面坏了（用户 2026-10-25 的截图：点开完整内容后正文被切断）。
+   现在按正文区高度封顶（--ea-body-h 由 overlay.tsx 量出来写在浮窗根元素上），
+   超出部分由面板自己滚：面板有一条完整的圆角下边框，下面还露出「历史 N 条」——
+   用户看得见这是一块能滚的记录，也看得见对话还在下面。 */
+.dsh-explain-assistant-detail{
+  max-height:calc(var(--ea-body-h, 640px) - 56px);
+  overflow:hidden;
+}
+/* 卡片内部真正的滚区：标题行留在外面，滚的只有正文。
+   最后 16px 做淡出（底部已经留了 18px 内边距，所以内容不长时淡出落在留白上，
+   不会把最后一行字淡掉）；滚到中间时下一行是「渐隐」而不是被直线切断。 */
+.ea-detail-scroll{
+  flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:thin;
+  display:flex;flex-direction:column;gap:8px;
+  padding-bottom:18px;
+  -webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 16px),transparent 100%);
+  mask-image:linear-gradient(to bottom,#000 calc(100% - 16px),transparent 100%);
+}
+
 /* 详情面板（「查看完整内容」）的正文排版：与主回答同一套规则，不再各写一份。 */
 .ea-detail-answer .ea-md-p{margin:0 0 8px}
 .ea-detail-answer .ea-md-code{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,Menlo,Consolas,monospace);font-size:.92em;padding:1px 4px;border-radius:4px;background:var(--ea-code-fill,rgba(127,127,127,.16))}

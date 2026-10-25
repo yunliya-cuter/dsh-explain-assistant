@@ -1072,14 +1072,23 @@ function historyDetailNodes(state, plugin) {
     const images = Array.isArray(record.images) ? record.images : [];
     const total = Math.max(counts.evidence || 0, counts.tools || 0, counts.images || 0);
     const rows = [el('div', { class: 'ea-card-head' }, el('h3', { class: 'ea-card-title', text: '这条记录的完整内容' }), button('收起', '收起完整内容', () => plugin.closeHistoryDetail?.(), { class: 'ea-btn ea-btn-quiet' }))];
+    /**
+     * 卡片 = 固定的标题行 + 自己滚的正文。
+     *
+     * 为什么要拆成两层：记录能很长（整段回答 + 依据 + 工具过程），旧实现整块按内容长，
+     * 在不高的窗口里会一路长到输入框上沿、被那条边切断 —— 没有下边框、最后一行字贴着输入框，
+     * 看起来就是界面坏了（用户 2026-10-25 的截图）。
+     * 现在标题行（含「收起」）不随记录滚走，正文在卡片内部滚，卡片有一条完整的圆角下边框。
+     */
+    const detailCard = (all) => el('section', { class: 'dsh-explain-assistant-detail ea-card ea-detail' }, all[0], el('div', { class: 'ea-detail-scroll' }, ...all.slice(1)));
     if (detail.status === 'loading' && !evidence.length && !tools.length && !images.length) {
         rows.push(el('p', { class: 'ea-detail-status', role: 'status', text: '正在读取这条记录的完整内容…' }));
-        return [el('section', { class: 'dsh-explain-assistant-detail ea-card ea-detail' }, ...rows)];
+        return [detailCard(rows)];
     }
     if (detail.status === 'error') {
         // §10：失败要给明确中文原因，不能显示成「这条记录没有内容」。
         rows.push(el('p', { class: 'ea-detail-error ea-error', role: 'alert', text: detail.error || '这条记录的完整内容没有取到。' }));
-        return [el('section', { class: 'dsh-explain-assistant-detail ea-card ea-detail' }, ...rows)];
+        return [detailCard(rows)];
     }
     if (record.question)
         rows.push(el('p', { class: 'ea-detail-question', text: '问题：' + String(record.question) }));
@@ -1120,7 +1129,7 @@ function historyDetailNodes(state, plugin) {
     }
     if (detail.error)
         rows.push(el('p', { class: 'ea-detail-error ea-error', role: 'alert', text: detail.error }));
-    return [el('section', { class: 'dsh-explain-assistant-detail ea-card ea-detail' }, ...rows)];
+    return [detailCard(rows)];
 }
 /**
  * §9.2 右下角的占用圆环。
@@ -1380,6 +1389,23 @@ export function renderOverlay(state, plugin, initialGeometry) {
     const main = el('div', { class: 'ea-main' });
     main.append(body, form, modelPanelSlot);
     root.append(titlebar, main, ...resizeZones.map(zone => zone.element));
+    /**
+     * 「查看完整内容」面板的高度上限要用「正文区有多高」来算（见 styles.css 的 .dsh-explain-assistant-detail）。
+     *
+     * 为什么不能在样式里直接写百分比：面板的父级是 .ea-slot，它的高度是 auto，
+     * 百分比 max-height 落在 auto 高度上按 none 处理 —— 实测写 max-height:100% 一点都没生效，
+     * 面板照样按内容长到 800 多像素，照样被输入框那条边切断。
+     * 所以这里量一次正文区高度写进 --ea-body-h；窗口被拖动改大小、切会话都由 ResizeObserver 重算。
+     */
+    const measureBodyHeight = () => {
+        const height = body.clientHeight;
+        if (height > 0)
+            root.style.setProperty('--ea-body-h', height + 'px');
+    };
+    measureBodyHeight();
+    // 测试环境的假 DOM 里没有 ResizeObserver（也不需要）：没有就只保留首帧量到的那一次。
+    const bodyObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(() => measureBodyHeight()) : undefined;
+    bodyObserver?.observe(body);
     const ctx = {
         state, plugin: like, body, phase, selectionStatus, controller: undefined, appliedGeometry: undefined,
         // 见 updateOverlay：用来判断「后面来的几何值是不是新值」。
@@ -1469,7 +1495,7 @@ export function renderOverlay(state, plugin, initialGeometry) {
         current.plugin.saveGeometry?.(current.state.sessionId, next);
     }, resizeZones);
     ctx.controller = controller;
-    root.addEventListener('dsh-explain-assistant:dispose', () => { controller.dispose(); answerView.dispose(); }, { once: true });
+    root.addEventListener('dsh-explain-assistant:dispose', () => { controller.dispose(); answerView.dispose(); bodyObserver?.disconnect(); }, { once: true });
     // preventScroll：默认的 focus() 会把浏览器滚动到输入框，于是首屏直接停在模型列表上、
     // 「使用说明 + 快捷问题」被顶到可视区外面——第一眼就看不到这窗口是干什么的。
     queueMicrotask(() => { (input || root).focus({ preventScroll: true }); body.scrollTop = 0; });
