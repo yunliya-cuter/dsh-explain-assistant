@@ -588,9 +588,29 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 .ea-turn-q{align-self:flex-end;max-width:72%;border-radius:20px;padding:9px 14px;background:var(--dsw-specific-bubble,var(--dsw-alias-bg-layer-2,rgba(127,127,127,.14)));color:var(--dsw-alias-label-primary,#111);font-size:13px;line-height:21px;white-space:pre-wrap;word-break:break-word}
 .ea-turn-meta{align-self:flex-end;margin-top:-6px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#888);white-space:nowrap}
 /* 回答：左对齐、无气泡、正文主色（灰色读起来像「次要说明」，对话里回答是主角）。 */
-.ea-turn-a{font-size:13px;line-height:22px;color:var(--dsw-alias-label-primary,#111);word-break:break-word}
-/* 折叠：默认只展开最新一轮，其余超过 10 行的收起来，末尾渐隐表示还有。 */
-.ea-turn-a[data-folded="true"]{max-height:220px;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,#000 calc(100% - 34px),transparent);mask-image:linear-gradient(180deg,#000 calc(100% - 34px),transparent)}
+.ea-turn-a{font-size:13px;line-height:22px;color:var(--dsw-alias-label-primary,#111);word-break:break-word;--ea-fold-height:220px;--ea-fold-fade:0px}
+/* ---------- 折叠 / 展开全文 ---------- */
+/* 折叠：默认只展开最新一轮，其余超过 10 行的收起来，末尾渐隐表示还有。
+   渐隐宽度走 --ea-fold-fade（下面用 @property 注册成 <length>）——
+   它可被过渡，展开时把渐隐收到 0、收起时再放回 34px，边缘就不会「啪」地一下切换。 */
+@property --ea-fold-fade{syntax:'<length>';inherits:false;initial-value:0px}
+.ea-turn-a[data-folded="true"]{
+  max-height:var(--ea-fold-height,220px);
+  overflow:hidden;
+  --ea-fold-fade:34px;
+  -webkit-mask-image:linear-gradient(180deg,#000 calc(100% - var(--ea-fold-fade)),transparent 100%);
+  mask-image:linear-gradient(180deg,#000 calc(100% - var(--ea-fold-fade)),transparent 100%);
+}
+/* 动画期间（由 overlay.tsx 打上 data-fold-anim）：
+   ① max-height 必须让位 —— 收起时高度是从整段往 220px 收，若还压着 220 的上限，画面会一动不动；
+   ② 遮罩继续在，只改 --ea-fold-fade 的宽度做过渡；过渡时长由 JS 按距离写进内联样式。 */
+.ea-turn-a[data-fold-anim]{
+  max-height:none;
+  overflow:hidden;
+  -webkit-mask-image:linear-gradient(180deg,#000 calc(100% - var(--ea-fold-fade)),transparent 100%);
+  mask-image:linear-gradient(180deg,#000 calc(100% - var(--ea-fold-fade)),transparent 100%);
+  transition:--ea-fold-fade 240ms cubic-bezier(.4,0,.2,1);
+}
 .ea-turn-a .ea-md-h1{font-size:16px}
 .ea-turn-a .ea-md-h2{font-size:14.5px}
 .ea-turn-a .ea-md-h3{font-size:13.5px}

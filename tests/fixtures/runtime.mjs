@@ -99,8 +99,23 @@ export async function clientVm() {
   context.module.exports.apply(ctx);
   return { entries, effects, context, react, cleanup() { cleanups.forEach(fn => fn()); dom.restore(); } };
 }
+/**
+ * 真实的 element.style 是 CSSStyleDeclaration：既能直接赋值（style.left=…），
+ * 也有 setProperty / removeProperty / getPropertyValue。
+ * 浮窗用 setProperty 写 CSS 变量（--ea-body-h、--ea-fold-fade），
+ * 夹具原来只有普通对象，于是这些路径在测试里直接 TypeError ——
+ * 补它是补一个**真实浏览器行为**，不是为了让断言通过而编的规则。
+ */
+function createStyle() {
+  const style = {}
+  style.setProperty = (name, value) => { style[name] = String(value) }
+  style.removeProperty = (name) => { delete style[name] }
+  style.getPropertyValue = (name) => (style[name] === undefined ? '' : String(style[name]))
+  return style
+}
+
 export class FakeElement {
-  constructor(tag = 'div') { this.tagName = tag.toUpperCase(); this.attributes = new Map(); this.listeners = new Map(); this.style = {}; this.dataset = {}; this.children = []; this.parentElement = null; this.ownText = ''; this.tabIndex = ['BUTTON','TEXTAREA','INPUT','SELECT','SUMMARY'].includes(this.tagName) ? 0 : -1;
+  constructor(tag = 'div') { this.tagName = tag.toUpperCase(); this.attributes = new Map(); this.listeners = new Map(); this.style = createStyle(); this.dataset = {}; this.children = []; this.parentElement = null; this.ownText = ''; this.tabIndex = ['BUTTON','TEXTAREA','INPUT','SELECT','SUMMARY'].includes(this.tagName) ? 0 : -1;
     // 被从父节点上摘下来过几次。真实浏览器里，一次「摘下来再挂回去」就会丢掉滚动锚点，
     // 用户看到的是跳变 —— 而这个副作用在「元素对象还是同一个」时完全看不出来。
     // 所以这里把它变成一个可数的量，让「原地不动」这条断言真的有区分力。

@@ -226,7 +226,7 @@ function el(tag: string, props: Record<string, unknown> = {}, ...children: Child
   return node
 }
 
-function button(label: string, aria: string, handler?: (event: Event) => void, options: { class?: string; disabled?: boolean; title?: string; pressed?: boolean } = {}): HTMLButtonElement {
+function button(label: string, aria: string, handler?: (event: Event) => void, options: { class?: string; disabled?: boolean; title?: string; pressed?: boolean; expanded?: boolean } = {}): HTMLButtonElement {
   return el('button', {
     type: 'button',
     class: options.class || 'ea-btn',
@@ -234,6 +234,7 @@ function button(label: string, aria: string, handler?: (event: Event) => void, o
     title: options.title,
     disabled: options.disabled,
     'aria-pressed': options.pressed === undefined ? undefined : String(options.pressed),
+    'aria-expanded': options.expanded === undefined ? undefined : String(options.expanded),
     onClick: handler,
   }, label) as HTMLButtonElement
 }
@@ -1121,8 +1122,36 @@ function historyTurnNodes(input: unknown, ctx: OverlayContext, newestId: string)
     ));
   }
   const foot: Child[] = [];
-  if (folded) foot.push(button('展开全文', '展开这条回答的全文', () => { ctx.expandedIds.add(id); ctx.rerender(); }, { class: 'ea-turn-more' }));
-  else if (expanded && longEnough) foot.push(button('收起', '收起这条回答', () => { ctx.expandedIds.delete(id); ctx.rerender(); }, { class: 'ea-turn-more' }));
+  /*
+   * 「展开全文 / 收起」：**就地**切换 + 补间，不重画整段历史。
+   *
+   * 为什么不重画：重画会把这一轮的节点整块换掉（顺带重排其它轮、重挂 Markdown 克隆），
+   * 实测点击到画出第一帧要 100ms 以上 —— 动画还没开始，用户先看到一次卡顿；
+   * 而且节点一换，浏览器就没法给同一个元素补间了，只能一帧跳到终态。
+   * 就地切换之后：同一个元素、同一帧开始、滚动锚点也不丢。
+   * 补不了间的情况（测试里的假 DOM / 不支持 WAAPI / 用户要减少动效）退回重画，落到终态。
+   */
+  const toggleFold = () => {
+    const turn = findHistoryTurn(ctx, id)
+    const answer = turn ? turn.querySelector('.ea-turn-a') as HTMLElement | null : null
+    const toggle = turn ? turn.querySelector('.ea-turn-more') as HTMLElement | null : null
+    // 方向以**画面上那一轮**为准，不看闭包里的旧值：就地切换之后按钮不重建，
+    // 写死 true/false 会让「收起」继续走展开分支（点第二下没反应）。
+    const expand = Boolean(answer && answer.getAttribute('data-folded') === 'true')
+    if (expand) ctx.expandedIds.add(id)
+    else ctx.expandedIds.delete(id)
+    if (!answer || !toggle || typeof answer.animate !== 'function' || prefersReducedMotion()) {
+      ctx.rerender()
+      return
+    }
+    // 就地切换不会重画历史：把缓存签名同步成「切换后」的样子，
+    // 否则下一次流式更新会重挂整段历史、把动画打断（见 historySignature 的说明）。
+    if (ctx.lastWin) ctx.historySig = historySignature(ctx, ctx.state, ctx.lastWin)
+    animateFold(answer, toggle, expand, () => { scheduleFoldCheck(ctx) })
+  }
+  // aria-expanded：读屏用户也要知道这一块现在是收起还是展开（键盘/读屏下没有「看到高度变了」这回事）。
+  if (folded) foot.push(button('展开全文', '展开这条回答的全文', () => { toggleFold() }, { class: 'ea-turn-more', expanded: false }));
+  else if (expanded && longEnough) foot.push(button('收起', '收起这条回答', () => { toggleFold() }, { class: 'ea-turn-more', expanded: true }));
   // 只有确实还有材料可看时才给入口；面板已经开着时更不再重复挂一个（内容就在下面）。
   const hasMaterial = recordMaterialCount(record) > 0;
   if (id && hasMaterial && ctx.state.historyDetail?.recordId !== id) {
@@ -1544,6 +1573,8 @@ type OverlayContext = {
   detailSlot: HTMLElement
   /** 上一次展开的 recordId：只有换成另一条记录时才把面板滚到可见处。 */
   detailRecordId?: string
+  /** 上一次渲染用的窗口：就地展开/收起之后要拿它重算签名（见 historySignature）。 */
+  lastWin?: HistoryWindow
   /** 这一次重画里，完整内容面板是不是已经挂在那一轮记录下面了（见 historyNodes）。 */
   detailInline?: boolean
   /** 面板内容还在路上：等它从「正在读取」变成正文后要再摆一次（那时高度才定型）。 */
@@ -1897,6 +1928,110 @@ function historyDetailSignature(detail: AssistantClientState['historyDetail']): 
   ].join(':')
 }
 
+/** 折叠态的高度（与 styles.css 的 --ea-fold-height 同源；量不到就用这个兜底）。 */
+const FOLD_HEIGHT_FALLBACK = 220
+/*
+ * 两条曲线是一对：
+ *   · 展开用 emphasized-decelerate —— 起步快、尾巴长，正文是「铺开」而不是「弹开」；
+ *   · 收起用 emphasized-accelerate —— 先慢慢起步再利落收住，读起来像把纸折回去。
+ * 都不带回弹：正文块回弹会在末尾几帧把字挤在一起，看着抖。
+ */
+const FOLD_EASE_EXPAND = 'cubic-bezier(.16,1,.3,1)'
+const FOLD_EASE_COLLAPSE = 'cubic-bezier(.4,0,.2,1)'
+
+/**
+ * 时长按「要挪多远」算：短回答 220ms 收住、不拖沓；长回答最多 640ms，不会一闪而过。
+ * 实测 220→571px 是 328ms，正是「眼睛跟得上、手指不觉得等」的区间。
+ */
+function foldDuration(distance: number): number {
+  return Math.round(Math.min(640, Math.max(220, 150 + distance * 0.42)))
+}
+
+/** 按 recordId 取回这一轮的节点：分页/重画之后节点会换，不按元素缓存。 */
+function findHistoryTurn(ctx: OverlayContext, id: string): HTMLElement | null {
+  const slot = ctx.historySlot as HTMLElement & { querySelectorAll?: (selector: string) => ArrayLike<HTMLElement> }
+  if (typeof slot.querySelectorAll !== 'function') return null
+  const turns = Array.from(slot.querySelectorAll('.ea-turn') as ArrayLike<HTMLElement>)
+  return turns.find(turn => turn.getAttribute('data-record-id') === id) || null
+}
+
+/** 折叠高度从样式里读，避免 JS 里再写死一个 220 和 CSS 打架。 */
+function foldHeightOf(node: HTMLElement): number {
+  if (typeof getComputedStyle !== 'function') return FOLD_HEIGHT_FALLBACK
+  const parsed = Number.parseFloat(getComputedStyle(node).getPropertyValue('--ea-fold-height'))
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : FOLD_HEIGHT_FALLBACK
+}
+
+/**
+ * 「展开全文 / 收起」的高度补间（就地执行，不重画）。
+ *
+ * 一次动画由三层叠出来，缺一层都会露出「状态被硬切」的痕迹：
+ *   1. 高度：from → to（曲线与时长见 FOLD_EASE_* / foldDuration）；
+ *   2. 遮罩：展开时把底部 34px 的渐隐化到 0，收起时再长回来 —— 文字是「化开/收拢」，不是被刀切；
+ *   3. 按钮：第 70ms 起淡入 2px，替换掉「展开全文 / 收起」那一下文字突变。
+ *
+ * 结束时把内联的过渡与变量全部撤掉，交还给 CSS —— 下一次折叠仍由样式说了算，不留脏状态。
+ */
+function animateFold(answer: HTMLElement, toggle: HTMLElement, expand: boolean, onDone?: () => void): void {
+  const measured = typeof answer.getBoundingClientRect === 'function' ? answer.getBoundingClientRect().height : 0
+  const from = measured > 0 ? measured : answer.clientHeight
+  // 先切状态：展开要拿掉 max-height 才量得到整段高度；收起则靠 data-fold-anim 把上限放开。
+  answer.setAttribute('data-folded', expand ? 'false' : 'true')
+  answer.setAttribute('data-fold-anim', expand ? 'expand' : 'collapse')
+  const to = expand ? answer.scrollHeight : foldHeightOf(answer)
+  const finish = () => {
+    answer.removeAttribute('data-fold-anim')
+    answer.style.removeProperty('--ea-fold-fade')
+    answer.style.removeProperty('transition')
+    onDone?.()
+  }
+  if (!from || !to || Math.abs(to - from) < 2) { finish(); return }
+  const distance = Math.abs(to - from)
+  const duration = foldDuration(distance)
+  // 展开时渐隐先退（占 60% 时长），收起时渐隐后长（占 85%）—— 收起的最后一段正需要它压住边角。
+  const fadeDuration = Math.round(expand ? duration * 0.6 : duration * 0.85)
+  answer.style.setProperty('--ea-fold-fade', expand ? '34px' : '0px')
+  answer.style.transition = '--ea-fold-fade ' + fadeDuration + 'ms cubic-bezier(.4,0,.2,1)'
+  // 下一帧再写终值：同一帧里写两次等于直接跳到终值，过渡不会发生。
+  const settleFade = () => answer.style.setProperty('--ea-fold-fade', expand ? '0px' : '34px')
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(settleFade)
+  else setTimeout(settleFade, 0)
+  // 按钮先换词，再让它淡入：换词与高度的第一帧同时发生，读起来是「同一个动作」。
+  toggle.textContent = expand ? '收起' : '展开全文'
+  toggle.setAttribute('aria-label', expand ? '收起这条回答' : '展开这条回答的全文')
+  toggle.setAttribute('aria-expanded', expand ? 'true' : 'false')
+  if (typeof toggle.animate === 'function') {
+    toggle.animate(
+      [{ opacity: 0, transform: 'translateY(-2px)' }, { opacity: 1, transform: 'none' }],
+      { duration: 200, delay: 70, easing: 'cubic-bezier(.2,.7,.3,1)' },
+    )
+  }
+  const animation = answer.animate(
+    [{ height: from + 'px' }, { height: to + 'px' }],
+    { duration, easing: expand ? FOLD_EASE_EXPAND : FOLD_EASE_COLLAPSE, fill: 'none' },
+  )
+  const done = animation && animation.finished
+  if (done && typeof done.then === 'function') done.then(finish, finish)
+  else finish()
+}
+
+/**
+ * 历史区的签名：只放**会改变画面**的东西（窗口、条数、展开态、每条的状态与长度）。
+ * 抽成函数是为了「就地展开/收起」之后能把缓存签名同步过去（见 toggleFold）：
+ * 不同步的话，下一次任意重画都会认为展开态变了、把整段历史重挂一遍 ——
+ * 正在播的折叠动画会被硬生生换掉，看起来就是「展开到一半突然跳到底」。
+ */
+function historySignature(ctx: OverlayContext, state: AssistantClientState, win: HistoryWindow): string {
+  return [
+    win.start, win.end, win.total,
+    state.hasEarlier ? 1 : 0,
+    state.loadingEarlier ? 1 : 0,
+    historyDetailSignature(state.historyDetail),
+    [...ctx.expandedIds].sort().join('+'),
+    state.records.map(record => recordIdOf(record) + ':' + String((record as { status?: unknown } | null)?.status || '') + ':' + recordAnswerText(record).length).join(','),
+  ].join('|')
+}
+
 function renderHistory(ctx: OverlayContext, state: AssistantClientState): void {
   const expand = ctx.pendingOlder || 0
   ctx.pendingOlder = 0
@@ -1912,14 +2047,8 @@ function renderHistory(ctx: OverlayContext, state: AssistantClientState): void {
   if (newestId && ctx.enteredTurnId !== undefined && newestId !== ctx.enteredTurnId) ctx.pendingEnterId = newestId
   ctx.enteredTurnId = newestId || undefined
 
-  const sig = [
-    win.start, win.end, win.total,
-    state.hasEarlier ? 1 : 0,
-    state.loadingEarlier ? 1 : 0,
-    historyDetailSignature(state.historyDetail),
-    [...ctx.expandedIds].sort().join('+'),
-    state.records.map(record => recordIdOf(record) + ':' + String((record as { status?: unknown } | null)?.status || '') + ':' + recordAnswerText(record).length).join(','),
-  ].join('|')
+  ctx.lastWin = win
+  const sig = historySignature(ctx, state, win)
   if (sig === ctx.historySig) return
   ctx.historySig = sig
   fill(ctx.historySlot, historyNodes(state, ctx.plugin, ctx, win))
