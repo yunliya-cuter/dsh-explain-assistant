@@ -16,6 +16,14 @@ type ClientPluginOptions = {
    * 到点走的是一次**失败结局**（已就绪 + 中文错误 + 重试），不是把初始空值当真实数据渲染。
    */
   stateTimeoutMs?: number;
+  /**
+   * 「更早的历史 / 展开单条记录」这两条读路径的等待上限（毫秒）。默认 10 秒。
+   *
+   * 与 stateTimeoutMs 同一个理由：把"永远转圈"这条路径压到几十毫秒，才能在单测里真触发。
+   * 它**只**决定「等多久算没回应」，到点走一次失败结局（中文原因 + 用户可以再点一次），
+   * 不会把空结果当成真实数据放行。
+   */
+  readTimeoutMs?: number;
 };
 
 type RequestKind = 'ask' | 'compact';
@@ -180,7 +188,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
         } else {
           if (answer && !current.text) current.text = answer;
         }
-        current.phase = 'complete'; current.requestId = undefined; current.unread = true;
+        current.phase = 'complete'; current.requestId = undefined; current.unread = !current.open;
       });
       appendRecord(request, 'complete', answer);
       // 请求结束后重新拉一次 state：
@@ -193,7 +201,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
       terminalEvent.set(request.sessionId, 'aborted');
       const message = typeof data.message === 'string' ? data.message : '请求已中断';
       assistantRegistry.update(request.sessionId, current => {
-        current.phase = 'interrupted'; current.requestId = undefined; current.error = message; current.unread = true;
+        current.phase = 'interrupted'; current.requestId = undefined; current.error = message; current.unread = !current.open;
         // §9.1「失败清楚提示，保留压缩前的可用状态」：只改 status，保留上一份可用摘要正文。
         if (request.kind === 'compact') current.compactState = { ...current.compactState, status: 'interrupted', error: message };
       });
@@ -204,7 +212,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
       terminalEvent.set(request.sessionId, 'error');
       const message = typeof data.message === 'string' ? data.message : '请求失败';
       assistantRegistry.update(request.sessionId, current => {
-        current.phase = 'error'; current.requestId = undefined; current.error = message; current.unread = true;
+        current.phase = 'error'; current.requestId = undefined; current.error = message; current.unread = !current.open;
         if (request.kind === 'compact') current.compactState = { ...current.compactState, status: 'error', error: message };
       });
       appendRecord(request, 'interrupted');
@@ -306,6 +314,29 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
   const STATE_TIMEOUT_MS = typeof options.stateTimeoutMs === 'number' && Number.isFinite(options.stateTimeoutMs) && options.stateTimeoutMs > 0
     ? options.stateTimeoutMs
     : 15_000;
+
+  /**
+   * 给「非 /state」的读请求也加一个终止点（默认 10 秒）。
+   *
+   * 为什么必须有：/state 早就超时化过，但「更早的历史」「展开某条记录」这两个接口
+   * 走的是另一条路 —— 没有超时。一旦请求挂住（连接半开、宿主卡住），
+   * · 「更早的 N 条」会永远写着「正在加载…」（loadingEarlier 再也回不来）；
+   * · 展开面板会永远停在「正在读取」。
+   * 失败本来就有出路（catch 里复位 + 中文错误），缺的只是"把挂住变成失败"。
+   * 超时**不**取消底层请求（没有 controller 可传），只是让界面先有一个结局 ——
+   * 用户再点一次会发新请求，旧的那次即使later回来也不会覆盖（有 recordId/cursor 守卫）。
+   */
+  const READ_TIMEOUT_MS = typeof options.readTimeoutMs === 'number' && Number.isFinite(options.readTimeoutMs) && options.readTimeoutMs > 0
+    ? options.readTimeoutMs
+    : 10_000;
+  const withReadTimeout = <T>(task: Promise<T>, what: string): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('读取' + what + '超时（等了 ' + Math.round(READ_TIMEOUT_MS / 1000) + ' 秒没有回应）。可以再点一次重试。')), READ_TIMEOUT_MS);
+      (timer as unknown as { unref?: () => void }).unref?.();
+    });
+    return Promise.race([task, timeout]).finally(() => { if (timer !== undefined) clearTimeout(timer); }) as Promise<T>;
+  };
   const withStateTimeout = <T>(task: Promise<T>, onTimeout?: () => void): Promise<T> => new Promise<T>((resolve, reject) => {
     // 文案里的时长按实际粒度写：默认 15 秒就是「15 秒」，测试里压到几十毫秒时写毫秒
     // （写「等了 0 秒」会让人以为这条错误没意义）。
@@ -676,7 +707,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
           ? undefined
           : aborted && !request.controller.signal.aborted ? errorMessage(error) : aborted ? '请求已中断' : errorMessage(error);
         assistantRegistry.update(sessionId, current => {
-          current.phase = aborted ? 'interrupted' : 'error'; current.requestId = undefined; current.unread = true;
+          current.phase = aborted ? 'interrupted' : 'error'; current.requestId = undefined; current.unread = !current.open;
           if (message !== undefined) current.error = message;
           if (request.kind === 'compact') current.compactState = { ...current.compactState, status: aborted ? 'interrupted' : 'error', ...(message !== undefined ? { error: message } : {}) };
         });
@@ -712,7 +743,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
     try {
       // §5.1/§8：带上游标才能真的往上翻页；旧实现不带游标，每次都只能拿回同一批。
       const cursor = assistantRegistry.get(current.id).historyCursor;
-      const result = await api.history(current.id, cursor);
+      const result = await withReadTimeout(callApi(() => api.history(current.id, cursor)), '更早的历史');
       if (disposed) return;
       const payload = isObject(result.payload) ? result.payload : {};
       const older: any[] = Array.isArray(payload.records) ? payload.records as never[] : [];
@@ -765,7 +796,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
     // 先置 loading：用户点了要有反应，不能让按钮看起来没生效。
     assistantRegistry.update(id, { historyDetail: { recordId, status: 'loading', hasEarlier: false, loadingMore: false } });
     try {
-      const result = await api.historyResult(id, recordId);
+      const result = await withReadTimeout(callApi(() => api.historyResult(id, recordId)), '这条记录的完整内容');
       if (disposed) return;
       // 用户在等待期间又点了另一条：这份迟到的回包属于上一条记录，不能覆盖当前展开的那条。
       if (assistantRegistry.get(id).historyDetail?.recordId !== recordId) return;
@@ -807,7 +838,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
     const cursor = detail.cursor;
     assistantRegistry.update(id, { historyDetail: { ...detail, loadingMore: true, error: undefined } });
     try {
-      const result = await api.historyResult(id, detail.recordId, cursor ?? undefined);
+      const result = await withReadTimeout(callApi(() => api.historyResult(id, detail.recordId, cursor ?? undefined)), '这条记录的下一页');
       if (disposed) return;
       const payload = isObject(result.payload) ? result.payload : {};
       const record = isObject(payload.record) ? payload.record : {};
@@ -892,6 +923,21 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
     appendRecord(request, 'interrupted');
   };
 
+  /**
+   * 关闭浮窗（用户按 × 或 Esc）。
+   *
+   * 与 registry.close 的区别只有一件事：**把「已读」补落到宿主**。
+   * 回答是在浮窗开着的时候完成的 —— 那一刻不该点亮未读（见 applyEvent 的 complete 分支），
+   * 但宿主仍会 markUnread；关窗时补一次 markRead，下次整页重载才不会凭空冒出一个小圆点。
+   * 失败静默：关窗不能因为一次网络失败而卡住。
+   */
+  const close = () => {
+    const current = session();
+    if (!current) return;
+    assistantRegistry.close(current.id);
+    void callApi(() => api.markRead(current.id)).catch(() => undefined);
+  };
+
   const dispose = () => {
     if (disposed) return;
     disposed = true;
@@ -941,5 +987,5 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
     selectedSession = id ? { id, cwd } : undefined;
     assistantRegistry.setCurrent(id);
   };
-  return { api, registry: assistantRegistry, open, submit, loadEarlier, cancel, dispose, setSession, openHistoryDetail, loadMoreHistoryDetail, closeHistoryDetail, forget, primeUnread, saveGeometry, retryState, ensureState };
+  return { api, registry: assistantRegistry, open, close, submit, loadEarlier, cancel, dispose, setSession, openHistoryDetail, loadMoreHistoryDetail, closeHistoryDetail, forget, primeUnread, saveGeometry, retryState, ensureState };
 }

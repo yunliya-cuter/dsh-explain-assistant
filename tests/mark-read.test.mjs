@@ -284,7 +284,15 @@ test('清除未读 接线: 宿主注册 mark-read 路由，客户端在 open() �
   assert.equal(typeof markRead.fetch, 'function', '注册项必须带可调用的 fetch');
   const indexSource = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
   const clientSource = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8');
-  assert.match(indexSource, /markRead: async \(id: string\)[^\n]*isForgotten/, '宿主 markRead 必须用 isForgotten 把关（防重建已删文件）');
+  /**
+   * 2026-10-31：markRead 的读改写搬进了 store（store.markRead）——
+   * 既不为"点开看一眼"的会话新建空文件，也不在队列里多插两次读（那会让并发的刷新读到旧值）。
+   * 两道防线都必须在：插件层先查内存墓碑，存储层再拒绝新建/写入已归档会话。
+   */
+  assert.match(indexSource, /markRead: async \(id: string\)[\s\S]{0,300}forgotten\.has\(id\)/, '宿主 markRead 必须先用内存墓碑把关（已归档清理过的会话不读不写）');
+  const persistenceSource = readFileSync(new URL('../src/host/persistence.ts', import.meta.url), 'utf8');
+  assert.match(persistenceSource, /async markRead\(sessionId: string\)[\s\S]{0,400}if \(loaded\.created\) return;/, 'store.markRead 必须拒绝为不存在的会话新建文件');
+  assert.match(persistenceSource, /async markRead\(sessionId: string\)[\s\S]{0,400}if \(loaded\.state\.archived\) return;/, 'store.markRead 必须拒绝写入已归档会话');
   assert.match(clientSource, /api\.markRead\(sessionId\)/, '客户端 open() 必须真的调用 markRead');
   // 顺序：先 markRead，再 refreshState
   const markAt = clientSource.indexOf('api.markRead(sessionId)');

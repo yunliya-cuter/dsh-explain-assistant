@@ -307,12 +307,20 @@ test('真数据回放: loadState 的 totalRecords 与 records 切片自洽', { s
       const { status, body } = await host.state(session.id);
       if (status !== 200) continue;   // 个别真实文件可能被 guard 拒（例如奇怪 id），跳过而非误判
       const payload = body.payload;
-      assert.equal(payload.totalRecords, session.records.length,
-        session.id + ' 的 totalRecords 必须等于磁盘真实条数');
-      const expectedSlice = session.records.slice(Math.max(0, session.records.length - 20));
+      /**
+       * 2026-10-31 契约变更：读接口**只下发问答记录**。
+       * `/compact` 会往磁盘写一条 kind:'compact' 的记录（answerText = 整份摘要），
+       * 它由界面上的「上下文已压缩」那一行表达；再当历史下发就是同一份摘要重复出现，
+       * 并且是一条没有问句的回答。所以这里的"真实条数"按同一口径算 —— 仍然拿磁盘真字段算，
+       * 只是把压缩日志排除在外（判定与生产代码共用 shared/record-kind.ts 的规则）。
+       */
+      const realRecords = session.records.filter(record => record && record.kind !== 'compact');
+      assert.equal(payload.totalRecords, realRecords.length,
+        session.id + ' 的 totalRecords 必须等于磁盘上的问答记录条数（压缩日志不计）');
+      const expectedSlice = realRecords.slice(Math.max(0, realRecords.length - 20));
       assert.deepEqual(payload.records.map(r => r.id), expectedSlice.map(r => r.id),
-        session.id + ' 的 records 必须是磁盘上**最近一页**的真实切片');
-      assert.equal(payload.hasEarlier, session.records.length > 20, session.id + ' 的 hasEarlier 必须与磁盘条数一致');
+        session.id + ' 的 records 必须是磁盘上**最近一页**的真实问答记录');
+      assert.equal(payload.hasEarlier, realRecords.length > 20, session.id + ' 的 hasEarlier 必须与磁盘问答记录条数一致');
     }
   } finally { host.restore(); }
 });
@@ -325,8 +333,10 @@ test('真数据回放: loadHistory 按游标翻页，与磁盘 id 集合**不重
   const host = await startReplayHost();
   try {
     for (const session of REAL) {
-      if (!session.records.length) continue;
-      const diskIds = session.records.map(r => r.id);
+      // 与 loadState 同一口径：只有问答记录会进历史（压缩日志由压缩那一行表达）。
+      const realRecords = session.records.filter(record => record && record.kind !== 'compact');
+      if (!realRecords.length) continue;
+      const diskIds = realRecords.map(r => r.id);
       const seen = [];
       let cursor;
       for (let guard = 0; guard < 200; guard++) {

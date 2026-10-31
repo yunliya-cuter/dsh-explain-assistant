@@ -125,7 +125,29 @@ export function apply(ctx: any): void {
     const OverlayBridge = () => {
       const hostRef = React.useRef(null);
       const [, bump] = React.useReducer((value: number) => value + 1, 0);
-      React.useEffect(() => registry.subscribe(() => bump()), []);
+      /**
+       * 把「状态变了就重画」**按帧合并**（用户 2026-10-31：「跟随还是不丝滑」）。
+       *
+       * 宿主一次回答会推几百个分片，每个分片都会 update 一次 registry；
+       * 原来每来一个分片就 bump 一次（React 渲染一次 + updateOverlay 一次）。
+       * 分片比帧还密的时候，这些重画会在同一帧里排好几次队，帧时间被拉长 ——
+       * 表现出来就是"字一格一格地蹦、跟随一顿一顿"。
+       *
+       * 合并到 requestAnimationFrame 之后，一帧最多重画一次，且用的永远是**最新**状态。
+       * 没有 rAF 的环境（测试里的假 DOM）保持同步，行为不变。
+       */
+      React.useEffect(() => {
+        let pending: number | undefined;
+        const unsubscribe = registry.subscribe(() => {
+          if (typeof requestAnimationFrame !== 'function') { bump(); return; }
+          if (pending !== undefined) return;
+          pending = requestAnimationFrame(() => { pending = undefined; bump(); });
+        });
+        return () => {
+          unsubscribe();
+          if (pending !== undefined && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(pending);
+        };
+      }, []);
       React.useEffect(() => {
         const onSelected = (event: Event) => {
           const detail = (event as CustomEvent).detail || {};

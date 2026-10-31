@@ -31,6 +31,13 @@ type OccupancyRecord = {
     answerText?: string;
     /** 客户端本地追加的记录用的字段名（宿主落库记录没有它），保留以兼容既有形状。 */
     answer?: string;
+    /**
+     * 记录种类：'ask' 问答 / 'compact' 压缩日志。
+     *
+     * 压缩日志的 answerText 就是**整份摘要**，而摘要已经通过 compactSummary 单独计过一次；
+     * 把它当问答再算一遍，占用会凭空多出「一份摘要」的量（压缩越多、误差越大）。
+     */
+    kind?: string;
 };
 /**
  * 取一条记录的**回答正文**。字段名只能在这一处判定，不许两处各写一遍。

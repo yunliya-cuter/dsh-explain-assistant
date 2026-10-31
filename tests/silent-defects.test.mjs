@@ -599,7 +599,13 @@ test('S4 修复: 刷新页面后未读徽标必须恢复', async () => {
     await first.api.selectModel('s4', { provider: 'p', model: 'm' });
     await first.submit('它在干什么');
     await waitSettled(first.registry, 's4');
-    assert.equal(first.registry.get('s4').unread, true, '问答结束后本地标未读');
+    /**
+     * 2026-10-31（B6）：这条回答是在浮窗**开着**的时候完成的 —— 用户正看着它流出来，
+     * 把入口点亮成「有新内容」等于告诉他"你刚看的那条是新的"。
+     * 所以本地不再置未读；宿主那一侧仍然会 markUnread（它不知道浮窗开没开），
+     * 由关窗时的 markRead 收尾（见下面第三段与本文件新增的关窗用例）。
+     */
+    assert.equal(first.registry.get('s4').unread, false, '浮窗开着时完成的回答不应点亮本地未读');
   } finally { first.dispose(); first.registry.remove('s4'); }
 
   const persisted = (await host.get('/api/explain-assistant/state?sessionId=s4')).payload;

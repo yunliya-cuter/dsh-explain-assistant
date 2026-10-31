@@ -27,6 +27,17 @@ interface StateStore {
   remove(sessionId: string): Promise<void>;
   /** 枚举本插件存储目录里的会话标识（F6 归档周期检查用）。 */
   listSessionIds(): Promise<string[]>;
+  /**
+   * 标记已读：**一次**串行的读改写，且只在真的需要时写盘。
+   *
+   * 为什么单独开一个方法、而不是让调用方自己 update(mutator)：
+   * update 对**不存在的文件**会 load→save 新建一份，于是"只是点开看一眼"的会话
+   * 也会在磁盘上留下一个空文件（实测已有 session-ba15016d… 这种 0 条记录的文件）。
+   * 而"先 load 判断再 update"会在队列里插进两次读，中间给并发的 GET 留出窗口 ——
+   * 实测让「打开浮窗 → 宿主已读」这条链在测试里输给了紧随其后的刷新。
+   * 放在同一个队列里做，既不多建文件，也不多一次往返。
+   */
+  markRead(sessionId: string): Promise<void>;
   pathFor(sessionId: string): string;
   imageDirFor(sessionId: string): string;
   close(): Promise<void>;
@@ -151,6 +162,26 @@ export class JsonSessionStore implements StateStore {
     } catch {
       return [];
     }
+  }
+
+  async markRead(sessionId: string): Promise<void> {
+    this.ensureOpen();
+    const id = safeSessionId(sessionId);
+    await this.enqueue(id, async () => {
+      const loaded = await this.loadUnlocked(id);
+      // 文件不存在 → 不新建（「点开看一眼」不该在磁盘上留下东西）
+      if (loaded.created) return;
+      // 未来版本的记录是只读的，不改它
+      if (loaded.readOnlyFutureVersion !== undefined) return;
+      // 已归档 / 本来就是已读 → 一次盘都不用写
+      if (loaded.state.archived) return;
+      if (!loaded.state.unread) return;
+      const next = structuredClone(loaded.state) as AssistantState;
+      next.unread = false;
+      next.updatedAt = this.now().toISOString();
+      next.historyRevision = Math.max(0, next.historyRevision) + 1;
+      await this.writeAtomic(next);
+    });
   }
 
   async remove(sessionId: string): Promise<void> {

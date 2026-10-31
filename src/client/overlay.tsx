@@ -6,6 +6,8 @@ import { mountMarkdown, cachedMarkdownNodes, type MarkdownView } from './markdow
 import type { createClientPlugin } from './index.js'
 // §10/D1：记录为什么没完成的中文文案与宿主**共用同一份**（src/shared/）。刻意不复制第二份。
 import { recordReasonText, RECORD_REASON_PREFIX, RECORD_INCOMPLETE_TEXT } from '../shared/record-reason.js'
+// §9.1：压缩日志不是一轮对话 —— 判定只此一处，宿主与客户端共用（见 shared/record-kind.ts）。
+import { isAskRecord } from '../shared/record-kind.js'
 // 历史区的分页窗口（纯函数，可单测）：默认只挂最近几条，往上补，同时挂载量有上限。
 import { HISTORY_BATCH, resolveHistoryWindow, type HistoryWindow, type HistoryWindowState } from './history-window.js'
 
@@ -16,6 +18,8 @@ type PluginLike = OverlayProps['plugin'] & {
     selectModel?: (sessionId: string, model: unknown, signal?: AbortSignal) => Promise<unknown>
   }
   cancel?: () => void
+  /** 关窗（含把「已读」补落到宿主）。旧宿主没有这个方法时退回 registry.close。 */
+  close?: () => void
   /** §5.1/§11.6：展开某条历史记录的完整内容，并继续读下一页。 */
   openHistoryDetail?: (recordId: string) => void | Promise<void>
   loadMoreHistoryDetail?: () => void | Promise<void>
@@ -148,7 +152,15 @@ export function canSubmit(state: AssistantClientState): boolean {
 export function sendLabel(state: AssistantClientState, gate: SurfaceGate): string {
   if (gate === 'loading') return '读取中…'
   if (gate === 'failed') return '暂时不可用'
-  return isBusy(state) ? '处理中' : '发送'
+  /**
+   * 忙的时候这颗按钮变成「停止」（用户 2026-10-31 的决定：
+   * 「U6我认为点击按钮即可停止的设计不错」）。
+   *
+   * 为什么不再显示「处理中」：那是**状态描述**，不是**可执行动作**。
+   * 用户在等一条跑飞的回答时，唯一想做的就是让它停下；把唯一一颗他手已经放上去的按钮
+   * 写成「处理中」并置灰，等于把出口藏起来。同一颗按钮原地换成动作，最符合直觉。
+   */
+  return isBusy(state) ? '停止' : '发送'
 }
 
 function surfaceGate(state: AssistantClientState): SurfaceGate {
@@ -576,7 +588,14 @@ function buildModelPanel(getCtx: () => OverlayContext | undefined): ModelPanel {
     const ctx = getCtx()
     if (!ctx || !ctx.plugin.api?.models) return
     refresh.disabled = true
-    void ctx.plugin.api.models().then(result => {
+    /**
+     * 「刷新」是用户亲手点的一下：失败、挂起都必须有结局。
+     * 没有超时的话，一次卡住的请求会让这颗按钮**永远灰着** —— 看起来像"刷新坏了"。
+     */
+    const timeout = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('读取模型目录超时（等了 10 秒没有回应）。可以再点一次刷新。')), 10_000)
+    })
+    void Promise.race([ctx.plugin.api.models(), timeout]).then(result => {
       const payload = (result.payload || {}) as Record<string, unknown>
       ctx.plugin.registry.update(ctx.state.sessionId, { catalog: payload as never })
     }).catch(error => ctx.plugin.registry.update(ctx.state.sessionId, {
@@ -1495,6 +1514,34 @@ function historyTurnNodes(input: unknown, ctx: OverlayContext, newestId: string)
       el('div', { class: 'ea-disclosure-body ea-md-scope' }, ...cachedMarkdownNodes(id || 'turn-reasoning#' + contentKey(reasoning), reasoning)),
     ));
   }
+  /**
+   * 工具过程必须**持久显示**（用户 2026-10-31：「工具调用要持久显示，不删去」）。
+   *
+   * 旧行为：工具只在"当前这一问"的活体块里画（currentDetailNodes）。回答一落地，
+   * 活体块收起、历史这一轮只画问答正文 —— 那几轮工具调用就凭空消失了，
+   * 用户看到的是「生成完后工具步骤被删掉，内容突然上移一截」。
+   *
+   * 现在按记录里落库的 tools 原样补进历史：默认折叠成一行，不占版面，也不丢。
+   */
+  const tools = Array.isArray((record as { tools?: unknown }).tools) ? (record as { tools: Array<Record<string, unknown>> }).tools : [];
+  if (tools.length) {
+    const failedCount = tools.filter(tool => tool?.status === 'error').length;
+    nodes.push(el('details', { class: 'ea-turn-tools ea-disclosure' },
+      el('summary', {}, '工具过程 · ' + tools.length + ' 步' + (failedCount ? '（' + failedCount + ' 个失败）' : '')),
+      el('div', { class: 'ea-disclosure-body ea-tool-list' },
+        ...tools.map(tool => {
+          const status = tool?.status === 'running' ? '进行中' : tool?.status === 'error' ? '失败' : '完成';
+          const name = String(tool?.label || tool?.name || '工具');
+          const detail = typeof tool?.detail === 'string' ? tool.detail : '';
+          return el('div', { class: 'ea-tool-row', 'data-status': tool?.status === 'error' ? 'error' : 'ok' },
+            el('span', { class: 'ea-tool-row-name', text: name }),
+            el('span', { class: 'ea-tool-row-status', text: status }),
+            detail ? el('p', { class: 'ea-tool-detail', text: detail }) : null,
+          );
+        }),
+      ),
+    ));
+  }
   const foot: Child[] = [];
   /*
    * 「展开全文 / 收起」：**就地**切换 + 补间，不重画整段历史。
@@ -1658,11 +1705,12 @@ function historyNodes(state: AssistantClientState, plugin: PluginLike, ctx: Over
   const children: Child[] = [
     el('div', { class: 'ea-conv-head' },
       el('span', { class: 'ea-conv-title', text: '历史' }),
-      el('span', { class: 'ea-conv-count', text: state.records.length + ' 条' }),
+      el('span', { class: 'ea-conv-count', text: win.total + ' 条' }),
     ),
     historyOlderNode(state, plugin, ctx, win),
   ];
-  const newestId = recordIdOf(state.records[state.records.length - 1]);
+  // 只按问答记录判「最新一轮」：压缩日志不画成一轮，指向它会让"最新一条自动展开"落空。
+  const newestId = recordIdOf(win.items[win.items.length - 1]);
   for (let index = 0; index < win.items.length; index++) {
     // 落在这一轮之前：压缩之后问的第一条，就排在压缩那一行的下面。
     if (index === compactAt) children.push(ctx.compactSlot);
@@ -1904,6 +1952,12 @@ type OverlayContext = {
   selectBarCount: HTMLElement
   selectBarDone: HTMLButtonElement
   errorSlot: HTMLElement
+  /** 属于「当前这一问」的错误条（贴在那—问下面，见 renderOverlay 里的说明）。 */
+  errorTailSlot: HTMLElement
+  /** 上一次渲染过的错误文案：判断这次是不是"新出现"（决定要不要播进场动画）。 */
+  lastErrorText?: string
+  /** 上一次重画压缩那一行用的签名：流式期间没变就不重画（省下整份摘要的 Markdown 重建）。 */
+  compactRenderSig?: string
   currentSlot: HTMLElement
   /**
    * 回答正文槽：**增量渲染器的容器**，每次重画只换尾部节点。
@@ -1964,6 +2018,25 @@ type OverlayContext = {
   autoScrolled?: boolean
   /** 首开「滚到最新一轮」的重试次数（首帧还没挂进文档时量不到布局）。 */
   autoScrollTries?: number
+  /**
+   * 流式回答的「跟随」开关（用户 2026-10-31 的决定：贴底时自动跟随，
+   * 「当用户发出的消息到达顶端时停止自动跟随，避免模型输出太快导致用户读不完」）。
+   *
+   * 两种停法共用这一个布尔，因为对界面来说是同一件事：**不再自动把视野往下拽**。
+   *   · 用户自己往上滚 → 他正在读上面的内容，不能抢他的滚动条；
+   *   · 用户这一问的气泡顶到正文区顶端 → 再跟下去，正文会以人读不过来的速度往上跑，
+   *     此后一律不动，让他按自己的速度往下读。
+   * 只在「原本就贴着底」时才跟随：用户明确滚上去之后还把他拽回来，是最招人烦的一种"聪明"。
+   */
+  followPaused?: boolean
+  /** 缓动跟随的 rAF 句柄（见 startFollowLoop）。 */
+  followRaf?: number
+  /** 跟随用的**浮点**滚动位置：浏览器读回的 scrollTop 可能是整数，只靠它累加会丢小数（台阶来源）。 */
+  followPos?: number
+  /** 上一次由**程序**写 scrollTop 的时刻：用来把"自己滚的"从"用户滚的"里排除掉。 */
+  programmaticScrollAt?: number
+  /** 这一问的标识（问句文本）：换了一问就从头开始跟随。 */
+  followTurnKey?: string
   /** 用户手动展开过的记录 id（默认只有最新一条展开）。 */
   expandedIds: Set<string>
   /** 本次要播「刚落地」动画的那条记录。 */
@@ -2032,7 +2105,11 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   const titlebar = el('header', { class: 'dsh-explain-assistant-titlebar ea-header', 'data-drag-handle': 'true', tabindex: '0', 'aria-label': '拖动解释小助手窗口；使用方向键移动' })
   const phase = el('span', { class: 'dsh-explain-assistant-status ea-phase', 'aria-live': 'polite' })
   const close = button('×', '关闭解释小助手', () => {
-    contexts.get(root)?.plugin.registry.close(state.sessionId)
+    // 优先走 plugin.close()：它除了关窗，还会把「已读」补落到宿主（见 createClientPlugin 的说明）。
+    // 没有这个方法时（旧宿主 / 测试替身）退回单纯关窗，行为不退化。
+    const current = contexts.get(root)
+    if (current?.plugin.close) current.plugin.close()
+    else current?.plugin.registry.close(state.sessionId)
     previouslyFocused?.focus()
     previouslyFocused = null
   }, { class: 'dsh-explain-assistant-close ea-close', title: '关闭（Esc）' })
@@ -2161,7 +2238,38 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     selectBarDone,
   )
   const body = el('div', { class: 'dsh-explain-assistant-content ea-body' })
+  /**
+   * 用户自己滚动时更新「跟随」开关（见 OverlayContext.followPaused）。
+   *
+   * 只在**滚动事件**里判：程序自己把 scrollTop 设到底，落点永远满足"贴底"，
+   * 所以这条监听不会把自动跟随自己关掉。24px 是容差 —— 缩放/高分屏下一两像素的
+   * 误差不该被读成"用户滚上去了"。
+   */
+  body.addEventListener('scroll', () => {
+    const current = contexts.get(root)
+    if (!current) return
+    const node = current.body as HTMLElement & { scrollHeight?: number; clientHeight?: number; scrollTop?: number }
+    const max = (node.scrollHeight ?? 0) - (node.clientHeight ?? 0)
+    if (!(max > 0)) return
+    // 程序自己写的 scrollTop 不算"用户滚动"：缓动跟随每帧都会触发一次 scroll 事件，
+    // 不排除的话，跟随的第一帧就会把自己判成"用户往上滚了"，然后立刻停手（实测就是这个症状）。
+    if (current.programmaticScrollAt && Date.now() - current.programmaticScrollAt < 160) return
+    // 用户自己动了滚动条：内部浮点位置作废，下次重新对齐到真实位置。
+    current.followPos = undefined
+    if ((node.scrollTop ?? 0) >= max - FOLLOW_NEAR_BOTTOM) { current.followPaused = false; return }
+    // 只有"正在流式输出"时才把它当成"用户想看上面"：其它时候的滚动与跟随无关。
+    if (isBusy(current.state) && current.state.text) current.followPaused = true
+  })
   const errorSlot = el('div', { class: 'ea-slot' })
+  /**
+   * 贴在这一问下面的错误条（与顶部的 errorSlot 分工）。
+   *
+   * 为什么需要第二个位置：正文顺序是「错误 → 引导 → 历史 → 当前这一问 → 依据」，
+   * 而用户提问时眼睛在**底部**。一次提问失败，真正的原因（请求失败/超时）原先只出现在
+   * 顶部那条里 —— 长历史时它在几十屏之上，用户看到的是底部一句笼统的「这一条没有跑完」。
+   * 所以：**属于当前这一问**的错误走这个槽位（就在那一问下面），其余的仍走顶部。
+   */
+  const errorTailSlot = el('div', { class: 'ea-slot ea-error-tail-slot' })
   const currentSlot = el('div', { class: 'ea-slot' })
   // 正文的容器用 <article>：它是「小助手回答」这一块，读屏需要这个语义标签。
   // 增量渲染器只在这个容器**内部**增删尾部节点，容器本身不重建。
@@ -2209,10 +2317,22 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   //（见 historyNodes / compactBoundaryIndex）。早先把它钉在 historySlot 之后，
   // 结果是「不论压缩发生在哪一刻，它都躺在对话最下方」——用户原话：
   //「上下文压缩的提示总是在上下文最下方，而非在它本应在的位置」。
-  body.append(stateErrorSlot, loadingSlot, catalogNoteSlot, detailSlot, errorSlot, heroSlot, quickSlot, historySlot, liveTurn, evidenceSlot, selectionStatus)
+  body.append(stateErrorSlot, loadingSlot, catalogNoteSlot, detailSlot, errorSlot, heroSlot, quickSlot, historySlot, liveTurn, errorTailSlot, evidenceSlot, selectionStatus)
 
   const input = el('textarea', { class: 'ea-input', placeholder: '问小助手主 agent 正在做什么…', 'aria-label': '向解释小助手提问', rows: '2' }) as HTMLTextAreaElement
-  const send = button(isBusy(state) ? '处理中' : '发送', '发送问题', () => { form.requestSubmit() }, { class: 'ea-btn ea-btn-primary ea-send' })
+  /**
+   * 发送 / 停止是**同一颗按钮**（用户 2026-10-31 的决定：「点击按钮即可停止的设计不错」）。
+   *
+   * 忙的时候它不再是"描述状态"的标签（旧文案「处理中」），而是唯一能中止这次回答的出口：
+   * 用户的手本来就停在这颗按钮上，原地换词比让他再去别处找一个「停止」更快。
+   * 发送的闸门仍在 form 的 submit 监听里（加载 / 失败 / 忙 一律不许发），这里只负责分发。
+   */
+  const send = button(sendLabel(state, 'ready'), isBusy(state) ? '停止本次解释' : '发送问题', () => {
+    const current = contexts.get(root)
+    if (current && isBusy(current.state)) { current.plugin.cancel?.(); return }
+    form.requestSubmit()
+  }, { class: 'ea-btn ea-btn-primary ea-send' })
+  send.setAttribute('data-stop', isBusy(state) ? 'true' : 'false')
   const ringSlot = el('div', { class: 'ea-ring-slot' })
   /**
    * §5.2「小助手显示正在围绕哪条内容提问」。
@@ -2264,9 +2384,19 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
    * 面板照样按内容长到 800 多像素，照样被输入框那条边切断。
    * 所以这里量一次正文区高度写进 --ea-body-h；窗口被拖动改大小、切会话都由 ResizeObserver 重算。
    */
+  /**
+   * 正文区高度 → CSS 变量（只给"完整内容"面板的 max-height 用）。
+   *
+   * 加一道"变化超过 4px 才写"的守卫：ResizeObserver 在流式期间会跟着内容高度频繁触发，
+   * 每次都 setProperty 会让整棵浮窗做一次样式重算 —— 那也是"跟随不丝滑"的一部分来源。
+   */
+  let lastBodyHeight = 0
   const measureBodyHeight = () => {
     const height = body.clientHeight
-    if (height > 0) root.style.setProperty('--ea-body-h', height + 'px')
+    if (height > 0 && Math.abs(height - lastBodyHeight) > 4) {
+      lastBodyHeight = height
+      root.style.setProperty('--ea-body-h', height + 'px')
+    }
   }
   measureBodyHeight()
   // 测试环境的假 DOM 里没有 ResizeObserver（也不需要）：没有就只保留首帧量到的那一次。
@@ -2277,7 +2407,7 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     state, plugin: like, body, phase, selectionStatus, controller: undefined as unknown as WindowController, appliedGeometry: undefined,
     // 见 updateOverlay：用来判断「后面来的几何值是不是新值」。
     // 不这样做的话，每次重画都会把用户刚拖好的位置按旧值拽回去。
-    errorSlot, currentSlot, answerSlot, answerView, heroSlot, quickSlot, evidenceSlot, compactSlot, historySlot, detailSlot, ringSlot, targetBar, catalogNoteSlot, modelPanelSlot, modelTrigger,
+    errorSlot, errorTailSlot, currentSlot, answerSlot, answerView, heroSlot, quickSlot, evidenceSlot, compactSlot, historySlot, detailSlot, ringSlot, targetBar, catalogNoteSlot, modelPanelSlot, modelTrigger,
     selectBar, selectBarCount, selectBarDone, compactBtn, tutorialBtn, tutorialSlot, tutorialOpen: false, tutorialCloseToken: 0,
     liveTurn, liveQuestion, expandedIds: new Set<string>(), sessionId: state.sessionId,
     loadingSlot, stateErrorSlot, root,
@@ -2390,6 +2520,8 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   }, resizeZones)
   ctx.controller = controller
   root.addEventListener('dsh-explain-assistant:dispose', () => {
+    // 关窗/卸载时把跟随循环停掉：它每帧都在读已脱离文档的节点，不停就是一条永久的 rAF 泄漏。
+    stopFollowLoop(ctx)
     controller.dispose()
     answerView.dispose()
     bodyObserver?.disconnect()
@@ -2584,14 +2716,24 @@ function historySignature(ctx: OverlayContext, state: AssistantClientState, win:
     compactSignatureOf(state, win),
     historyDetailSignature(state.historyDetail),
     [...ctx.expandedIds].sort().join('+'),
-    state.records.map(record => recordIdOf(record) + ':' + String((record as { status?: unknown } | null)?.status || '') + ':' + recordAnswerText(record).length).join(','),
+    // 只算问答记录：压缩日志不进历史（见 renderHistory 的说明），它的变化不该触发整段重挂。
+    state.records.filter(isAskRecord).map(record => recordIdOf(record) + ':' + String((record as { status?: unknown } | null)?.status || '') + ':' + recordAnswerText(record).length).join(','),
   ].join('|')
 }
 
 function renderHistory(ctx: OverlayContext, state: AssistantClientState): void {
   const expand = ctx.pendingOlder || 0
   ctx.pendingOlder = 0
-  const win = resolveHistoryWindow(state.records, ctx.historyWindow, expand)
+  /**
+   * 只把**问答**记录画进对话流（见 shared/record-kind.ts）。
+   *
+   * 压缩日志（kind:'compact'，question 为空、answerText 是整份摘要）已经由
+   * 「上下文已压缩」那一行表达过了；再画一遍 = 同一份摘要在对话里出现两次，
+   * 而且是一条**没有问句的回答**（用户 3081 真实数据里就有 3 条这样的记录）。
+   * 计数与窗口都按同一份列表算，否则「历史 N 条」与实际能看到的对不上。
+   */
+  const records = state.records.filter(isAskRecord)
+  const win = resolveHistoryWindow(records, ctx.historyWindow, expand)
   if (win.total) {
     const firstId = recordIdOf(win.items[0])
     ctx.historyWindow = { ...(firstId ? { firstId } : {}), count: Math.max(1, win.end - win.start), atTail: win.atTail }
@@ -2599,8 +2741,16 @@ function renderHistory(ctx: OverlayContext, state: AssistantClientState): void {
     ctx.historyWindow = undefined
   }
 
-  const newestId = recordIdOf(state.records[state.records.length - 1])
-  if (newestId && ctx.enteredTurnId !== undefined && newestId !== ctx.enteredTurnId) ctx.pendingEnterId = newestId
+  const newestId = recordIdOf(records[records.length - 1])
+  /**
+   * 刚落地的这一条**不播进场动画**（用户 2026-10-31：「内容生成完后会闪一下」）。
+   *
+   * 它上一帧还以"当前这一问"的形态完整显示在屏幕上；再播一次 180ms 的
+   * "淡入 + 上移 6px"，中间会出现一帧透明 —— 看起来就是闪一下。
+   * 只有那些**不是从活体块变来的**记录（刷新后出现、别的会话切过来）才需要进场动画。
+   */
+  const justLanded = Boolean(state.liveRecordId) && state.liveRecordId === newestId
+  if (!justLanded && newestId && ctx.enteredTurnId !== undefined && newestId !== ctx.enteredTurnId) ctx.pendingEnterId = newestId
   ctx.enteredTurnId = newestId || undefined
 
   ctx.lastWin = win
@@ -2614,7 +2764,14 @@ function renderHistory(ctx: OverlayContext, state: AssistantClientState): void {
 
 /** 第一次就绪时停在最新一轮（对话的习惯是打开就看见最后一条，而不是最顶上那条）。 */
 function scrollToNewestOnOpen(ctx: OverlayContext, state: AssistantClientState): void {
-  if (ctx.autoScrolled || !state.records.length) return
+  if (ctx.autoScrolled) return
+  /**
+   * 这一开就是空的（新会话）：没有「最新一轮」可停，当场把这件事记下来。
+   *
+   * 不这么做的话，第一条回答**落地的那一刻** records 才第一次变成非空，这段"首开定位"
+   * 会在那时执行 —— 表现就是用户报的「内容生成完后，会自动跳转到最下面」。
+   */
+  if (!state.records.length) { ctx.autoScrolled = true; return }
   // 教程页/模型页开着时正文被整页盖住：这时候滚，用户看不见，回到对话只表现为「跳了一下」。
   if (ctx.tutorialOpen || ctx.modelOpen) return
   const body = ctx.body as HTMLElement & { getBoundingClientRect?: () => DOMRect }
@@ -2656,12 +2813,172 @@ function scrollToNewestOnOpen(ctx: OverlayContext, state: AssistantClientState):
   }, 0)
 }
 
+/**
+ * 流式回答的自动跟随（用户 2026-10-31 的判据）。
+ *
+ *   ① **只有原本贴着底**（或这一问刚开始）时才跟 —— 用户滚上去之后还把他拽回来，
+ *      是最招人烦的一种"聪明"；
+ *   ② 用户自己往上滚 → 立刻停（由 body 的 scroll 监听置 followPaused）；
+ *   ③ 用户这一问的**气泡顶到正文区顶端** → 停。用户原话：「当用户发出的消息到达顶端时
+ *      停止自动跟随，避免模型输出太快导致用户读不完」。也就是说：一条回答超过一屏之后，
+ *      再跟着走就只有"字在飞"、没有人能读；从这一刻起把滚动权交还给他。
+ */
+function followStreaming(ctx: OverlayContext, state: AssistantClientState, wasAtBottom: boolean): void {
+  const body = ctx.body as HTMLElement & { scrollHeight?: number; scrollTop?: number; getBoundingClientRect?: () => DOMRect }
+  if (!(isBusy(state) && state.text)) {
+    // 一次回答结束（或还没开始吐字）：下一次提问从头开始跟随。
+    ctx.followPaused = false
+    ctx.followTurnKey = undefined
+    stopFollowLoop(ctx)
+    return
+  }
+  const key = state.question || state.liveRecordId || ''
+  if (ctx.followTurnKey !== key) {
+    // 换了一问：先把这一问带进视野（否则问完看不到自己刚问的那句话），再从"贴底"开始跟。
+    ctx.followTurnKey = key
+    ctx.followPaused = false
+    wasAtBottom = true
+  }
+  if (ctx.followPaused) return
+  const question = ctx.liveQuestion as HTMLElement & { getBoundingClientRect?: () => DOMRect }
+  if (typeof question.getBoundingClientRect === 'function' && typeof body.getBoundingClientRect === 'function') {
+    const qr = question.getBoundingClientRect()
+    const br = body.getBoundingClientRect()
+    // 问句整块滑到正文区顶端之上（或刚好贴住）→ 停止跟随，把阅读速度交给用户。
+    if (qr.height > 0 && br.height > 0 && qr.top <= br.top + 4) { ctx.followPaused = true; return }
+  }
+  if (!wasAtBottom) return
+  /**
+   * 跟随要**丝滑**（用户原话：「自动跟随应更加丝滑」）。
+   *
+   * 旧写法每个分片直接 `scrollTop = scrollHeight` —— 一帧跳几十到几百像素，
+   * 看起来就是"画面一段段往上顶"。改成缓动：每帧只走剩余距离的一部分，
+   * 新分片来了就重新定目标，于是画面是连续地滑到底，而不是一跳一跳。
+   */
+  startFollowLoop(ctx)
+}
+
+/** 「接近最下面」的容差：约三行文字。用户只要在这个范围内，就认为他想跟着看。 */
+const FOLLOW_NEAR_BOTTOM = 120
+
+/**
+ * 缓动跟随：每帧把剩余距离吃掉一部分，直到贴底。
+ *
+ * 为什么用 rAF 而不是 CSS scroll-behavior:smooth：
+ * smooth 是"一次滚到底"的动画，流式内容每几十毫秒就变长一次，会把动画不断打断、变成抖动。
+ * 这里的循环是**持续追一个会移动的目标**：delta 每帧重算，内容长了就继续追，停了就自然停下。
+ */
+function stopFollowLoop(ctx: OverlayContext): void {
+  if (ctx.followRaf !== undefined && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(ctx.followRaf)
+  ctx.followRaf = undefined
+  ctx.followPos = undefined
+}
+
+function startFollowLoop(ctx: OverlayContext): void {
+  const bodyForFallback = ctx.body as HTMLElement & { scrollHeight?: number; scrollTop?: number }
+  if (typeof requestAnimationFrame !== 'function') {
+    // 没有 rAF 的环境（测试里的假 DOM）：退化成"一次性贴底"。
+    // 真实浏览器永远走下面的缓动路径；这里只是让同一条判据在单测里可断言。
+    const height = (bodyForFallback.scrollHeight ?? 0) - (bodyForFallback.clientHeight ?? 0)
+    if (Number.isFinite(height) && height >= 0) bodyForFallback.scrollTop = height
+    return
+  }
+  if (ctx.followRaf !== undefined) return
+  /**
+   * 跟随循环**一直跑**，直到「不流式了」或「用户接管」为止（用户 2026-10-31：「还是不丝滑」）。
+   *
+   * 上一版是"每来一个分片才跑一小段、追平就退出"。问题在于：分片之间的间隔并不均匀
+   *（有时几十毫秒、有时一帧来好几个），于是画面是"停一下、蹭一下"——
+   * 每一段都是一次新的启动，看起来就是一顿一顿的。
+   *
+   * 现在改成**常驻**：只要还在流式，就每帧往底部挪一点；内容没变就原地不动（不写 scrollTop），
+   * 内容长了自己就跟上。每帧位移有上限（42px ≈ 2500px/s），
+   * 所以一次灌进来一大块（比如整段代码块）也不会"一帧跨过去半屏"。
+   */
+  /**
+   * 每帧只做一件事：把 scrollTop 朝「内容底部」推进一小段。
+   *
+   * 这一版按用户实机反馈（「A. 一顿一顿」）重写了三处，都是**量化台阶**的来源：
+   *
+   * 1. **不再有整数下限**。上一版写的是 Math.max(2, delta * 0.5) ——
+   *    剩余量小于 2px 时也硬走 2px，于是产生 2/2/2 的规律小跳（正是"一顿一顿"）。
+   *    现在小剩余量走亚像素步长，肉眼是连续滑动。
+   * 2. **用 dt 做时间积分**，不用"每帧固定比例"。帧率掉到 30fps 时步长自动变大、
+   *    60fps 时变小 —— 否则一卡帧，画面就会"停两帧再补一大步"。
+   * 3. **自己记一个浮点位置**（ctx.followPos）。浏览器把 scrollTop 读回来可能是整数，
+   *    只靠读回的整数累加，小数部分每帧丢失 → 又变成台阶。写出去用浮点，下一帧从浮点继续。
+   */
+  let lastTs = 0
+  const step = (ts?: number) => {
+    ctx.followRaf = undefined
+    const streaming = isBusy(ctx.state) && Boolean(ctx.state.text)
+    if (!streaming || ctx.followPaused) { ctx.followPos = undefined; return }
+    const body = ctx.body as HTMLElement & { scrollHeight?: number; scrollTop?: number }
+    const now = typeof ts === 'number' ? ts : (typeof performance === 'object' && performance && typeof performance.now === 'function' ? performance.now() : Date.now())
+    const dt = lastTs ? Math.min(0.05, Math.max(0.001, (now - lastTs) / 1000)) : 0.016
+    lastTs = now
+    // 目标是**最大可滚动位置**，不是内容总高：写 scrollHeight 会被浏览器钳到底部，
+    // 而我们的浮点位置却记住了那个越界值 —— 下一帧 delta 变负数，就再也追不动了。
+    const target = (body.scrollHeight ?? 0) - (body.clientHeight ?? 0)
+    if (!Number.isFinite(target) || target < 0) { ctx.followRaf = requestAnimationFrame(step); return }
+    if (ctx.followPos === undefined) ctx.followPos = body.scrollTop ?? 0
+    const delta = target - ctx.followPos
+    if (delta > 0.05) {
+      // 指数趋近：时间常数 100ms（与帧率无关）；再按最大速度 3200px/s 截断。
+      // +0.05 只是保证极小的剩余量也能推进，不会"永远差几像素"。
+      const alpha = 1 - Math.exp(-dt / 0.10)
+      const move = Math.min(delta, Math.min(delta * alpha + 0.05, 3200 * dt))
+      ctx.followPos += move
+      ctx.programmaticScrollAt = Date.now()
+      body.scrollTop = ctx.followPos
+    } else if (delta < -1) {
+      // 内容变短（例如折叠）：把内部位置拉回真实值，别把"超出底部"的状态一路带着。
+      ctx.followPos = target
+    }
+    // 无条件续帧：追平了也继续等，下一块内容长出来时同一帧就跟上。
+    ctx.followRaf = requestAnimationFrame(step)
+  }
+  ctx.followRaf = requestAnimationFrame(step)
+}
+
 /** 状态变化时原地重画各区块。骨架、输入框、滚动位置都不动。 */
 export function updateOverlay(root: HTMLElement, state: AssistantClientState, plugin: OverlayProps['plugin']): void {
   const ctx = contexts.get(root)
   if (!ctx) return
   ctx.state = state
   ctx.plugin = plugin as PluginLike
+
+  /**
+   * 「这一帧之前」是不是贴着底 —— 必须在**改任何 DOM 之前**量。
+   * 内容一改，scrollHeight 就变了，这个判断再也回不到原样。
+   */
+  const bodyForScroll = ctx.body as HTMLElement & { scrollHeight?: number; clientHeight?: number; scrollTop?: number }
+  const bodyMax = (bodyForScroll.scrollHeight ?? 0) - (bodyForScroll.clientHeight ?? 0)
+  // 「接近最下面」也算贴底（用户 2026-10-31：只有在最下面或接近最下面时才自动跟随）。
+  const wasAtBottom = bodyMax > 0 && (bodyForScroll.scrollTop ?? 0) >= bodyMax - FOLLOW_NEAR_BOTTOM
+
+  /**
+   * 「回答落地」这一帧的位置保护（用户 2026-10-31 报的真缺陷：
+   * 「当内容生成完后，会自动跳转到最下面」）。
+   *
+   * 完成的那一刻 DOM 会换一次形态：当前这一问的活体块（liveTurn）被隐藏，同一条回答
+   * 作为一条历史记录重新挂进历史区。两个块一换，浏览器重新计算滚动位置 ——
+   * 只要新内容比原先矮一点，scrollTop 就被钳到新的底部，用户看到的就是"一生成完就跳到最后"。
+   *
+   * 所以：**用户没在贴底**时，改动前先记下这一轮在屏幕上的位置，改完按位移把它补回去。
+   * 按元素记、不按 scrollHeight 差值算：浏览器自己也可能已经锚定过一次，差值法会双倍偏移
+   *（与 historyOlderNode 的 ctx.anchor 同一套理由，见那里的注释）。
+   */
+  const handoffAnchor = (() => {
+    if (wasAtBottom) return undefined
+    const id = state.liveRecordId
+    if (!id) return undefined
+    const live = ctx.liveTurn as HTMLElement & { getBoundingClientRect?: () => DOMRect; hidden?: boolean }
+    if (!live || live.hidden) return undefined
+    if (typeof live.getBoundingClientRect !== 'function') return undefined
+    const rect = live.getBoundingClientRect()
+    return rect && rect.height > 0 ? { id, top: rect.top } : undefined
+  })()
 
   // §9（用户实测：滚轮一滚就抽搐）：**这里刻意不再读 scrollTop**。
   //
@@ -2706,6 +3023,10 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     ctx.autoScrollTries = 0
     // 换了会话就是「第一次看到」：新会话若已有压缩记录，不该把视野拽到那一行。
     ctx.compactSig = undefined
+    // 跟随状态属于上一个会话的某一问，不能带过来（循环也要停：它读的是上一个会话的 DOM）。
+    ctx.followPaused = false
+    ctx.followTurnKey = undefined
+    stopFollowLoop(ctx)
   }
 
   ctx.phase.textContent = phaseLabel(state)
@@ -2719,6 +3040,7 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   if (gate === 'loading') {
     // 正文/当前请求等槽位一律清空：加载期不许残留任何会被当成结论的内容。
     ctx.errorSlot.replaceChildren()
+    ctx.errorTailSlot.replaceChildren()
     ctx.currentSlot.replaceChildren()
     ctx.answerSlot.hidden = true
     ctx.answerView.update('', false)
@@ -2746,6 +3068,8 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     // 真正的拦截在 form 的 submit 监听里（见 canSubmit）。
     ctx.send.textContent = sendLabel(state, 'loading')
     ctx.send.disabled = true
+    ctx.send.setAttribute('data-stop', 'false')
+    ctx.send.setAttribute('aria-label', '发送问题')
     ctx.compactBtn.disabled = true
     fill(ctx.loadingSlot, loadingNodes())
     // 选择痕迹一并收掉：加载页上不该出现上一档的任何「已选」标签。
@@ -2755,9 +3079,27 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   fill(ctx.loadingSlot, [])
 
   ctx.errorSlot.replaceChildren()
+  ctx.errorTailSlot.replaceChildren()
   // 失败但有旧内容时：错误原因显示在顶部，旧内容照常留在下面（契约允许的另一条出路）。
-  if (state.stateError && gate === 'ready') ctx.errorSlot.appendChild(el('div', { class: 'dsh-explain-assistant-error ea-error', role: 'alert', text: state.stateError }))
-  else if (state.error) ctx.errorSlot.appendChild(el('div', { class: 'dsh-explain-assistant-error ea-error', role: 'alert', text: state.error }))
+  //
+  // 例外：**这一次提问失败**（phase=error/interrupted）时原因要贴到当前这一问下面。
+  // 用户提问时眼睛在底部，而顶部那条在长历史里是几十屏之外 —— 他看到的只是"进度条没了"。
+  /**
+   * 错误条的进场动画只播一次（用户 2026-10-31：「点击停止后…突然闪出」）。
+   *
+   * 判据是"这句话和上一帧不一样"：同一句错误在后续每次重画里都不再重播，
+   * 否则流式期间每来一个分片就重画一次，错误条会一直闪。
+   */
+  const currentErrorText = state.stateError && gate === 'ready' ? state.stateError : (state.error || '')
+  const errorEntering = Boolean(currentErrorText) && ctx.lastErrorText !== currentErrorText
+  const errorClass = 'dsh-explain-assistant-error ea-error' + (errorEntering ? ' ea-error-enter' : '')
+  ctx.lastErrorText = currentErrorText || undefined
+  const turnError = state.error && (state.phase === 'error' || state.phase === 'interrupted')
+    ? el('div', { class: errorClass, role: 'alert', text: state.error })
+    : null
+  if (state.stateError && gate === 'ready') ctx.errorSlot.appendChild(el('div', { class: errorClass, role: 'alert', text: state.stateError }))
+  else if (state.error && !turnError) ctx.errorSlot.appendChild(el('div', { class: errorClass, role: 'alert', text: state.error }))
+  if (turnError) ctx.errorTailSlot.appendChild(turnError)
 
   // 失败且没有任何旧内容：整块内容区交给明确的中文错误 + 重试，
   // **不再**渲染模型/历史/占用那些区块 —— 否则它们会显示空态文案，用户读成「真的没有」。
@@ -2783,6 +3125,8 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     // A3：失败页同样不许提交（数据没读到，提问没有可用上下文）。
     ctx.send.textContent = sendLabel(state, 'failed')
     ctx.send.disabled = true
+    ctx.send.setAttribute('data-stop', 'false')
+    ctx.send.setAttribute('aria-label', '发送问题')
     ctx.compactBtn.disabled = true
     fill(ctx.stateErrorSlot, stateErrorNodes(state, ctx.plugin, readFailure(state)))
     resetPickRow(ctx)
@@ -2824,9 +3168,35 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   fill(ctx.evidenceSlot, evidenceNodes(state, ctx.plugin))
   // 压缩那一行的**内容**先填；**位置**由历史区决定（historyNodes 把这个槽位本身插进对话流）。
   // 这两句的顺序不能颠倒：renderHistory 要搬的正是这个已经填好的槽位。
-  fill(ctx.compactSlot, compactNodes(state, ctx))
+  /**
+   * 压缩那一行**不要每个分片都重建**（用户 2026-10-31：「跟随还是不丝滑」）。
+   *
+   * 这段代码每次 updateOverlay 都会跑，流式期间一秒能跑几十次；展开状态下里面是整份摘要的
+   * Markdown（几十个节点），每帧重建一次就是白送卡顿。只有真正会改变它的东西变了才重画。
+   */
+  const compactRenderSig = [
+    compactStatusOf(state.compactState || { status: 'idle' }),
+    ctx.compactOpen === true ? 1 : 0,
+    state.compactState?.updatedAt || '',
+    state.compactState?.error || '',
+    typeof state.occupancy === 'number' ? Math.round(state.occupancy) : '',
+    state.compactState?.status === 'running' ? Math.floor(state.text.length / 40) : '',
+  ].join('|')
+  if (compactRenderSig !== ctx.compactRenderSig) {
+    ctx.compactRenderSig = compactRenderSig
+    fill(ctx.compactSlot, compactNodes(state, ctx))
+  }
   ctx.detailInline = false
   renderHistory(ctx, state)
+  // 落地后把这一轮按"屏幕上原来的位置"摆回去（见 handoffAnchor）。
+  if (handoffAnchor) {
+    const turns = Array.from(ctx.historySlot.querySelectorAll('.ea-turn') as ArrayLike<HTMLElement>)
+    const node = turns.find(turn => turn.getAttribute('data-record-id') === handoffAnchor.id)
+    if (node && typeof node.getBoundingClientRect === 'function') {
+      const delta = node.getBoundingClientRect().top - handoffAnchor.top
+      if (Number.isFinite(delta) && Math.abs(delta) > 1) ctx.body.scrollTop += delta
+    }
+  }
   /*
    * 压缩状态一变就把那一行带进视野。
    *
@@ -2896,8 +3266,15 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   if (ctx.input.value !== state.draft) ctx.input.value = state.draft
   // 走到这里必然是 ready 档：文案与可用性都由 canSubmit 统一决定 ——
   // 这样「加载/失败时禁用、回到 ready 后恢复」只有一处真相，不会两边漂移。
+  /**
+   * 忙 → 这颗按钮是「停止」，而且**必须可点**：它现在是用户唯一的出口。
+   * 不忙 → 回到「发送」，可用性照旧由 canSubmit 决定（加载 / 失败两档在更早的分支里已经返回）。
+   */
+  const stopping = isBusy(state)
   ctx.send.textContent = sendLabel(state, 'ready')
-  ctx.send.disabled = !canSubmit(state)
+  ctx.send.disabled = stopping ? false : !canSubmit(state)
+  ctx.send.setAttribute('data-stop', stopping ? 'true' : 'false')
+  ctx.send.setAttribute('aria-label', stopping ? '停止本次解释' : '发送问题')
   // /compact 同理：忙碌时再点只是静默返回，按钮看起来可点却毫无反应（旧版的真问题）。
   ctx.compactBtn.disabled = !canSubmit(state)
   ctx.compactBtn.setAttribute('title', canSubmit(state) ? '整理小助手自己的上下文；不影响主对话' : '正在处理中，等这一次结束再压缩')
@@ -2920,5 +3297,7 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
     if (typeof height === 'number' && Number.isFinite(height)) ctx.body.scrollTop = height
   }
   scrollToNewestOnOpen(ctx, state)
+  // 流式跟随排在最后：它读的是这一帧重画后的真实高度，并自己决定要不要动滚动。
+  followStreaming(ctx, state, wasAtBottom)
   // 注意：这里**不再回写 scrollTop**。见函数开头说明。
 }

@@ -153,6 +153,11 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
   min-height:0;overflow-y:auto;overflow-x:hidden;
   padding:14px;
   scrollbar-width:thin;
+  /* 跟随期间**关掉浏览器的滚动锚定**（用户 2026-10-31：「A. 一顿一顿」）。
+     锚定会在内容变化时自己改 scrollTop，与我们每帧的写操作抢同一个值 ——
+     两边各推一次，看起来就是规律性的顿挫。位置补偿我们自己做了
+     （翻页用 ctx.anchor、落地用 handoffAnchor），不需要浏览器再插一手。 */
+  overflow-anchor:none;
 }
 .ea-slot{display:flex;flex-direction:column;gap:12px}
 .ea-slot:empty{display:none}
@@ -1291,3 +1296,25 @@ html[data-ea-selecting] [data-tool]:hover{
 .ea-tut-ask{margin-bottom:8px}
 .ea-tut-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:4px}
 .ea-hero-tutorial{align-self:flex-start;margin-top:2px}
+
+
+/* ---------- 工具过程（历史里的持久显示） ---------- */
+/* 用户 2026-10-31：「工具调用要持久显示，不删去」。
+   回答落地后，这一轮把落库的 tools 折叠显示在这里；默认收起，只露一行步数。 */
+.ea-turn-tools{margin-top:-2px}
+.ea-tool-list{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.ea-tool-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;font-size:12px;line-height:18px}
+.ea-tool-row-name{color:var(--dsw-alias-label-primary,#111)}
+.ea-tool-row-status{font-size:11px;color:var(--dsw-alias-label-tertiary,#888)}
+.ea-tool-row[data-status=error] .ea-tool-row-status{color:var(--dsw-alias-state-error-primary,#b42318)}
+.ea-tool-row .ea-tool-detail{flex-basis:100%;margin:0;font-size:11.5px;line-height:17px;color:var(--dsw-alias-label-secondary,#555);white-space:pre-wrap;word-break:break-word}
+
+/* ---------- 错误条进场 ---------- */
+/* 用户 2026-10-31：「点击停止后没有丝滑的动画，是突然闪出『已按你的要求停止本次解释』」。
+   原来它是"啪"地出现（零过渡），看起来像界面被打断。现在给它一条很短的淡入 + 4px 上移，
+   与「刚落地的那一条」同一族曲线、更快更小：它只是提示，不该抢注意力。
+   只在**文字变了**的时候挂 .ea-error-enter（见 updateOverlay）——否则每次重画都会重播一次，反而闪。 */
+@keyframes ea-error-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.ea-error-enter{animation:ea-error-in 220ms cubic-bezier(.2,.85,.25,1) both}
+@media (prefers-reduced-motion: reduce){.ea-error-enter{animation:none}}
+

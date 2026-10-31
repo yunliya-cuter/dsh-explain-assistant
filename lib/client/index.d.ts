@@ -19,11 +19,20 @@ type ClientPluginOptions = {
      * 到点走的是一次**失败结局**（已就绪 + 中文错误 + 重试），不是把初始空值当真实数据渲染。
      */
     stateTimeoutMs?: number;
+    /**
+     * 「更早的历史 / 展开单条记录」这两条读路径的等待上限（毫秒）。默认 10 秒。
+     *
+     * 与 stateTimeoutMs 同一个理由：把"永远转圈"这条路径压到几十毫秒，才能在单测里真触发。
+     * 它**只**决定「等多久算没回应」，到点走一次失败结局（中文原因 + 用户可以再点一次），
+     * 不会把空结果当成真实数据放行。
+     */
+    readTimeoutMs?: number;
 };
 export declare function createClientPlugin(options?: ClientPluginOptions): {
     api: AssistantApi;
     registry: import("./store.js").AssistantRegistry;
     open: () => void;
+    close: () => void;
     submit: (question: string) => Promise<void>;
     loadEarlier: () => Promise<void>;
     cancel: () => void;

@@ -211,7 +211,9 @@ test('t11 A3: canSubmit 与 sendLabel 逐档对应（纯函数，防两处真相
   assert.equal(overlay.sendLabel(loadingState(), 'loading'), '读取中…');
   assert.equal(overlay.sendLabel(loadingState(), 'failed'), '暂时不可用');
   assert.equal(overlay.sendLabel(readyState(), 'ready'), '发送');
-  assert.equal(overlay.sendLabel(readyState({ phase: 'running' }), 'ready'), '处理中');
+  // 2026-10-31（用户决定：「点击按钮即可停止的设计不错」）：忙的时候这颗按钮不再是
+  // 描述状态的「处理中」，而是唯一能中止这次回答的动作「停止」——同一颗按钮原地换语义。
+  assert.equal(overlay.sendLabel(readyState({ phase: 'running' }), 'ready'), '停止');
 });
 
 /* ================================================================== *

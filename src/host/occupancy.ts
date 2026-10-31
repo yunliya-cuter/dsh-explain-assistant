@@ -42,6 +42,13 @@ type OccupancyRecord = {
   answerText?: string;
   /** 客户端本地追加的记录用的字段名（宿主落库记录没有它），保留以兼容既有形状。 */
   answer?: string;
+  /**
+   * 记录种类：'ask' 问答 / 'compact' 压缩日志。
+   *
+   * 压缩日志的 answerText 就是**整份摘要**，而摘要已经通过 compactSummary 单独计过一次；
+   * 把它当问答再算一遍，占用会凭空多出「一份摘要」的量（压缩越多、误差越大）。
+   */
+  kind?: string;
 };
 
 /**
@@ -152,7 +159,8 @@ export function carriedRecords(
   records: readonly (OccupancyRecord & { startedAt?: string; createdAt?: string })[] | undefined,
   compactCreatedAt?: string,
 ): OccupancyRecord[] {
-  const list = records ?? [];
+  // 压缩日志不是对话内容：它的正文就是摘要本身，已由 compactSummary 计入（见 OccupancyRecord.kind）。
+  const list = (records ?? []).filter(record => record.kind !== 'compact');
   // 回答正文一律走 answerTextOf（**唯一判定处**）：落库字段是 answerText，
   // 而客户端本地记录用 answer。两处各写一遍就会再次出现「少算正文」那类缺陷。
   const carry = (record: OccupancyRecord & { startedAt?: string; createdAt?: string }): OccupancyRecord =>
