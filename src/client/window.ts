@@ -234,6 +234,25 @@ export function attachWindowInteractions(
     onChange({ ...geometry });
   };
 
+  /**
+   * 浏览器窗口变小 / 换到小屏之后，把浮窗拉回可视区。
+   *
+   * 审计 2026-10-31：以前只在创建、拖拽结束、宿主给几何值时 clamp，window 本身没有
+   * resize 监听 —— 把浏览器从 1920 缩到 1280，浮窗还挂在 1600px 的位置，整个跑到屏幕外，
+   * 连标题栏和关闭按钮都点不到。
+   */
+  const onViewportResize = (): void => {
+    if (disposed || mode) return;   // 正在拖/正在改大小的时候别抢用户的手
+    const next = clampGeometry(geometry);
+    if (next.x === geometry.x && next.y === geometry.y && next.width === geometry.width && next.height === geometry.height) return;
+    geometry = { ...next };
+    startGeometry = { ...next };
+    applyGeometry(root, geometry);
+    onChange({ ...geometry });
+  };
+  // 假 DOM 环境里没有 window：不要因为加了个 resize 兜底就把构造过程搞崩。
+  const viewport = typeof window === 'undefined' ? undefined : window;
+  viewport?.addEventListener?.('resize', onViewportResize);
   handle.addEventListener('pointerdown', onDragStart);
   // 每条边/每个角各自一个监听，方向在闭包里固定 —— 这样「拖哪条边就改哪条边」。
   const zoneHandlers: Array<{ element: HTMLElement; handler: (event: PointerEvent) => void }> = [];
@@ -266,6 +285,7 @@ export function attachWindowInteractions(
       root.removeEventListener('pointerup', onEnd);
       root.removeEventListener('pointercancel', onCancel);
       handle.removeEventListener('keydown', onKeyDown);
+      viewport?.removeEventListener?.('resize', onViewportResize);
     }
   };
 }

@@ -136,7 +136,8 @@ test('B6: 没有选中依据时不留空条', async () => {
 
 test('B6: 标识挂在 composer 内（输入框附近），不是只在正文末尾', async () => {
   const source = await readSource('src/client/overlay.tsx');
-  assert.match(source, /form\.append\(targetBar, input/, 'targetBar 必须挂在输入框前面');
+  // 输入框现在包在 .ea-field 里（平滑光标/选区那层），挂在输入框前面的判据跟着改到它的容器上
+  assert.match(source, /form\.append\(targetBar, (input|field\.root)/, 'targetBar 必须挂在输入框前面');
   assert.match(source, /targetBar/, '必须有 targetBar 元素');
 });
 

@@ -25,6 +25,14 @@ type ClientPluginOptions = {
    */
   occupancyRetryDelayMs?: number;
   /**
+   * 「占用待补」最多自动补几次（默认 2 = 首补 + 一次重试）。
+   *
+   * 审计 2026-10-31：这里一直写着「只补一次」，实现却是每 3 秒无限轮询 ——
+   * 而宿主对**空会话**（还没有主 agent 消息）同样返回 occupancyPending=true，
+   * 于是新建一个空对话、打开浮窗，/state 会被无限每 3 秒打一次。加硬上限。
+   */
+  occupancyRetryMax?: number;
+  /**
    * 「更早的历史 / 展开单条记录」这两条读路径的等待上限（毫秒）。默认 10 秒。
    *
    * 与 stateTimeoutMs 同一个理由：把"永远转圈"这条路径压到几十毫秒，才能在单测里真触发。
@@ -126,6 +134,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
     if (!parts || !isCurrent(request)) return;
     if (parts.sessionId && parts.sessionId !== request.sessionId) return;
     const state = assistantRegistry.get(request.sessionId);
+    if (state.archived === true) return;   // 归档是终态：迟到的 SSE 事件不许把记录写回来
     if (parts.requestId && state.requestId && parts.requestId !== state.requestId) return;
     const data = parts.payload;
     if (event.type === 'start') {
@@ -437,8 +446,13 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
    * 三个守卫缺一不可 —— 已卸载 / 浮窗已经关了 / 其实已经有占用（别的路径补上了），都不该再打请求。
    */
   const occupancyRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** 每个会话已经自动补过几次（见 ClientPluginOptions.occupancyRetryMax）。 */
+  const occupancyRefreshAttempts = new Map<string, number>();
   const scheduleOccupancyRefresh = (sessionId: string): void => {
     if (disposed || occupancyRefreshTimers.has(sessionId)) return;
+    const used = occupancyRefreshAttempts.get(sessionId) ?? 0;
+    if (used >= (options.occupancyRetryMax ?? 2)) return;
+    occupancyRefreshAttempts.set(sessionId, used + 1);
     const timer = setTimeout(() => {
       occupancyRefreshTimers.delete(sessionId);
       const state = assistantRegistry.get(sessionId);
@@ -452,6 +466,8 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
     const controller = new AbortController();
     const task = withStateTimeout(callApi(() => api.state(sessionId, controller.signal)), () => controller.abort()).then(result => {
       if (disposed) return;
+      // 归档是终态：在途的 /state 回来时不许把 records 写回来（否则「已经删掉的会话」会复活）。
+      if (assistantRegistry.get(sessionId).archived === true) return;
       const payload = isObject(result.payload) ? result.payload : {};
       const current = assistantRegistry.get(sessionId);
       const catalog = isObject(payload.catalog) ? payload.catalog : undefined;
@@ -507,6 +523,8 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
         records: mergedRecords as never[],
         hasEarlier: stillHasEarlier,
         historyCursor: nextCursor,
+        // H-7：记录文件损坏被宿主隔离过 —— 原样带到界面（见 overlay 的说明条）。
+        recoveredCorrupt: payload.recoveredCorrupt === true,
         // ── 「宿主响应不得覆盖更新的本地状态」同类排查（本次）────────────────
         // 下面两个字段原先都是**无条件覆盖**，实测有两种「倒退」：
         //
@@ -684,6 +702,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
     if (!current) return;
     const sessionId = current.id;
     lastOpenedSeq.set(sessionId, ++everOpenedSeq);       // 记下打开序号：丢弃此前发起的过期预取响应
+    occupancyRefreshAttempts.delete(sessionId);          // 每次重新打开，补取次数重新计
     assistantRegistry.open(sessionId, current.cwd);      // 本地立即清除未读（不等网络）
     void clearUnreadOnHost(sessionId);                   // 再把清除落到宿主，然后刷新
   };
@@ -799,6 +818,8 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
           ? (typeof payload.cursor === 'string' ? payload.cursor : undefined)
           : (() => { const rem = Math.max(0, (totalRecordsFor(payload) as number) - loadedFromHost); return rem > 0 ? String(rem) : undefined; })(),
         loadingEarlier: false,
+        // 错误属于上一次操作：这一次成功了就必须清掉，否则顶部会一直挂着「读取失败」。
+        error: undefined,
       });
     } catch (error) {
       if (!disposed) assistantRegistry.update(current.id, { loadingEarlier: false, error: errorMessage(error) });
@@ -925,10 +946,17 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
   const forget = async (sessionId: string): Promise<void> => {
     if (disposed) return;
     if (!sessionId) return;
+    // 归档是终态：先把在途请求掐掉并移出 active，否则迟到的 complete/error 还会写记录。
+    const running = active.get(sessionId);
+    if (running) {
+      running.stoppedByUser = true;
+      running.controller.abort();
+      active.delete(sessionId);
+    }
     try {
       await api.forget(sessionId);
       // 本地也立刻收起来：归档的会话不该继续显示在浮窗里。
-      assistantRegistry.update(sessionId, { records: [], compactState: undefined, unread: false, archived: true, question: undefined, liveRecordId: undefined, text: '', reasoning: '', tools: [] });
+      assistantRegistry.update(sessionId, { records: [], compactState: undefined, unread: false, archived: true, question: undefined, liveRecordId: undefined, text: '', reasoning: '', tools: [], evidence: [], historyDetail: undefined, error: undefined });
     } catch (error) {
       // 记日志但不抛：拿不到宿主就保留数据，交给周期检查兜底。
       console.error('[dsh-explain-assistant] 归档清理请求失败（' + sessionId + '）：', errorMessage(error));
@@ -981,6 +1009,7 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
     for (const sessionId of [...pendingGeometry.keys()]) flushGeometry(sessionId);
     for (const timer of occupancyRefreshTimers.values()) clearTimeout(timer);
     occupancyRefreshTimers.clear();
+    occupancyRefreshAttempts.clear();
     assistantRegistry.sessions().forEach(state => { if (state.open) assistantRegistry.close(state.sessionId); });
     assistantRegistry.setCurrent(undefined);
   };
@@ -1014,8 +1043,25 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
   };
 
   const setSession = (id?: string, cwd?: string) => {
+    const previous = selectedSession?.id;
     selectedSession = id ? { id, cwd } : undefined;
     assistantRegistry.setCurrent(id);
+    /**
+     * 切换主对话时，把「浮窗开着」这件事带过去。
+     *
+     * 审计 2026-10-31：以前只换 selectedSession，而 open 是**每个会话各自**的字段 ——
+     * 从 A 切到 B，B 的 open 默认 false，浮窗直接消失；再切回 A，A 的 open 还是 true，
+     * 浮窗又自己冒出来。用户看到的就是「切走就没了、切回来它自己又回来了」。
+     * 现在按「一个浮窗跟着当前会话走」的语义迁移：切走时关掉上一个，切到新会话时接着开。
+     */
+    if (!previous || previous === id) return;
+    const before = assistantRegistry.get(previous);
+    if (before.open !== true) return;
+    assistantRegistry.update(previous, { open: false });
+    if (!id) return;
+    // 不在这里预取 /state：浮窗挂载时 entry.ts 会走 ensureState（那里有 in-flight 去重），
+    // 预取会让「切到一个没读过的会话」直接跳过加载页，先显示一帧空内容。
+    assistantRegistry.update(id, { open: true });
   };
   return { api, registry: assistantRegistry, open, close, submit, loadEarlier, cancel, dispose, setSession, openHistoryDetail, loadMoreHistoryDetail, closeHistoryDetail, forget, primeUnread, saveGeometry, retryState, ensureState };
 }

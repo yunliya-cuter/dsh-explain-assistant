@@ -10,6 +10,8 @@ import { recordReasonText, RECORD_REASON_PREFIX, RECORD_INCOMPLETE_TEXT } from '
 import { isAskRecord } from '../shared/record-kind.js'
 // 历史区的分页窗口（纯函数，可单测）：默认只挂最近几条，往上补，同时挂载量有上限。
 import { HISTORY_BATCH, resolveHistoryWindow, type HistoryWindow, type HistoryWindowState } from './history-window.js'
+import { mountTextField, type TextFieldHandle } from './text-field.js'
+import { mountPageSelection } from './page-selection.js'
 
 type OverlayProps = { state: AssistantClientState; plugin: ReturnType<typeof createClientPlugin>; onClose?: () => void }
 type PluginLike = OverlayProps['plugin'] & {
@@ -662,6 +664,9 @@ function prefersReducedMotion(): boolean {
 }
 
 function openModelPanel(ctx: OverlayContext): void {
+  // 两个整页面板互斥：教程页开着时点「模型」，先把教程收掉。
+  // 否则两层 z-index:3 的面板会同时挂在 DOM 上，关掉上面那个还会留下 modelOpen=true 的幽灵状态。
+  if (ctx.tutorialOpen) closeTutorial(ctx, { focus: false })
   // 上一次关闭的「延迟摘除」还没执行就又打开了：取消它，复用同一个节点。
   ctx.modelCloseToken++
   const panel = ensureModelPanel(ctx)
@@ -692,8 +697,9 @@ function closeModelPanel(ctx: OverlayContext, options: { focus?: boolean; animat
   const panel = ctx.modelPanel
   ctx.modelOpen = false
   ctx.modelTrigger.root.setAttribute('aria-expanded', 'false')
-  // data-view 立刻切回 chat：这一帧开始「对话页回来」的动画，而模型页还在上面播退场。
-  ctx.root.setAttribute('data-view', 'chat')
+  // data-view 立刻切回来：这一帧开始「对话页回来」的动画，而模型页还在上面播退场。
+  // 教程页还开着就回到教程页，不能无条件写 chat（那会让 tutorialOpen 与 data-view 打架）。
+  ctx.root.setAttribute('data-view', ctx.tutorialOpen ? 'tutorial' : 'chat')
 
   const animate = options.animate !== false && Boolean(panel) && wasOpen && !prefersReducedMotion()
   if (animate && panel) {
@@ -751,9 +757,19 @@ function selectModelFromPanel(ctx: OverlayContext, provider: string, id: string)
  * 它只在真的有失败时出现，不占常驻位置。
  */
 function catalogNoticeNodes(ctx: OverlayContext): Child[] {
+  // H-7：记录文件损坏被隔离时，必须明说一句。
+  // 不说的后果：/state 返回 records=[]，界面显示「还没有小助手历史」，用户以为记录从来没存在过，
+  // 而磁盘上其实还躺着 .corrupt.<时间戳> 的备份。
+  const recovered = ctx.state.recoveredCorrupt === true
+    ? [el('div', { class: 'ea-catalog-note', role: 'status' },
+      el('span', { class: 'ea-catalog-note-icon', 'aria-hidden': 'true', text: '⚠' }),
+      el('div', { class: 'ea-catalog-note-text' },
+        el('small', { class: 'ea-model-failure', text: '这条对话的小助手记录文件损坏了：已把它改名备份到同目录（.corrupt.*），并从这里重新开始记录。备份文件还在，可以找回来。' }),
+      ))]
+    : []
   const failures = (ctx.state.catalog?.failures || []).filter(failure => failure?.message)
-  if (!failures.length) return []
-  return [el('div', { class: 'ea-catalog-note', role: 'status' },
+  if (!failures.length) return recovered
+  return [...recovered, el('div', { class: 'ea-catalog-note', role: 'status' },
     el('span', { class: 'ea-catalog-note-icon', 'aria-hidden': 'true', text: '⚠' }),
     el('div', { class: 'ea-catalog-note-text' },
       ...failures.map(failure => el('small', { class: 'ea-model-failure', text: String(failure.message) })),
@@ -1194,6 +1210,8 @@ function renderTutorial(ctx: OverlayContext): void {
 }
 
 function openTutorial(ctx: OverlayContext): void {
+  // 与 openModelPanel 对称：模型页开着时点教程，先把模型页收掉。
+  if (ctx.modelOpen) closeModelPanel(ctx, { focus: false, animate: false })
   ctx.tutorialCloseToken++
   const panel = ensureTutorialPanel(ctx)
   if (panel.root.hasAttribute('data-closing')) {
@@ -1213,7 +1231,7 @@ function closeTutorial(ctx: OverlayContext, options: { focus?: boolean } = {}): 
   const wasOpen = ctx.tutorialOpen
   ctx.tutorialOpen = false
   ctx.tutorialBtn.setAttribute('aria-expanded', 'false')
-  ctx.root.setAttribute('data-view', 'chat')
+  ctx.root.setAttribute('data-view', ctx.modelOpen ? 'model' : 'chat')
   const panel = ctx.tutorialPanel
   if (wasOpen && panel && !prefersReducedMotion()) {
     panel.root.setAttribute('data-closing', 'true')
@@ -2033,8 +2051,10 @@ type OverlayContext = {
   followRaf?: number
   /** 跟随用的**浮点**滚动位置：浏览器读回的 scrollTop 可能是整数，只靠它累加会丢小数（台阶来源）。 */
   followPos?: number
-  /** 上一次由**程序**写 scrollTop 的时刻：用来把"自己滚的"从"用户滚的"里排除掉。 */
-  programmaticScrollAt?: number
+  /** 上一次由**程序**写出去的 scrollTop 位置：scroll 事件用它判断这次是不是自己滚的。
+   *  以前存的是「时刻 + 160ms 窗口」，而跟随循环每帧都在写 —— 窗口永远不空，
+   *  用户的上滚事件被无限吞掉（实测：滚到 100px 后下一帧被写回 797px）。 */
+  programmaticTop?: number
   /** 这一问的标识（问句文本）：换了一问就从头开始跟随。 */
   followTurnKey?: string
   /** 用户手动展开过的记录 id（默认只有最新一条展开）。 */
@@ -2070,6 +2090,8 @@ type OverlayContext = {
   targetBar: HTMLElement
   form: HTMLFormElement
   input: HTMLTextAreaElement
+  /** 输入框的平滑光标句柄（text-field.ts）：程序改 value 之后要手动刷一次镜面。 */
+  field: TextFieldHandle
   send: HTMLButtonElement
   modelOpen: boolean
   /** 原地重画自己：用于只影响本浮窗、不改 registry 的交互（例如展开模型列表）。 */
@@ -2101,6 +2123,11 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'dsh-explain-assistant-title',
   })
   root.tabIndex = -1
+  /**
+   * 正文选区的动画高亮（见 page-selection.ts）。
+   * 必须**先建**：它要插在 root 的第一个子节点上，靠 z-index:-1 待在内容之下。
+   */
+  mountPageSelection(root)
 
   const titlebar = el('header', { class: 'dsh-explain-assistant-titlebar ea-header', 'data-drag-handle': 'true', tabindex: '0', 'aria-label': '拖动解释小助手窗口；使用方向键移动' })
   const phase = el('span', { class: 'dsh-explain-assistant-status ea-phase', 'aria-live': 'polite' })
@@ -2253,7 +2280,9 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     if (!(max > 0)) return
     // 程序自己写的 scrollTop 不算"用户滚动"：缓动跟随每帧都会触发一次 scroll 事件，
     // 不排除的话，跟随的第一帧就会把自己判成"用户往上滚了"，然后立刻停手（实测就是这个症状）。
-    if (current.programmaticScrollAt && Date.now() - current.programmaticScrollAt < 160) return
+    // 判据是**位置**不是时间窗：跟随循环每帧都写 scrollTop，时间窗永远不空，
+    // 用户的上滚会被整段吞掉、followPaused 永远置不上（实机症状：上滚一帧后又被拽回底部）。
+    if (current.programmaticTop !== undefined && Math.abs((node.scrollTop ?? 0) - current.programmaticTop) <= 2) return
     // 用户自己动了滚动条：内部浮点位置作废，下次重新对齐到真实位置。
     current.followPos = undefined
     if ((node.scrollTop ?? 0) >= max - FOLLOW_NEAR_BOTTOM) { current.followPaused = false; return }
@@ -2321,6 +2350,12 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
 
   const input = el('textarea', { class: 'ea-input', placeholder: '问小助手主 agent 正在做什么…', 'aria-label': '向解释小助手提问', rows: '2' }) as HTMLTextAreaElement
   /**
+   * 平滑光标 + 蓝色选区（移植自 More 设置向导 2026-10-25 版，见 text-field.ts）。
+   * 只包一层 .ea-field「白底板」，输入框本身、上面的所有监听器、表单提交路径一概不动。
+   * reduced-motion 下 mountTextField 自己会退回原生光标与选区。
+   */
+  const field = mountTextField(input)
+  /**
    * 发送 / 停止是**同一颗按钮**（用户 2026-10-31 的决定：「点击按钮即可停止的设计不错」）。
    *
    * 忙的时候它不再是"描述状态"的标签（旧文案「处理中」），而是唯一能中止这次回答的出口：
@@ -2343,7 +2378,7 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
    */
   const targetBar = el('div', { class: 'ea-target-bar', role: 'status', 'aria-live': 'polite' })
   const form = el('form', { class: 'dsh-explain-assistant-form ea-composer' }) as HTMLFormElement
-  form.append(targetBar, input, el('div', { class: 'ea-composer-actions' }, ringSlot, send))
+  form.append(targetBar, field.root, el('div', { class: 'ea-composer-actions' }, ringSlot, send))
 
   /**
    * 改大小的入口：**像普通窗口一样拖边、拖角**。
@@ -2413,7 +2448,7 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     loadingSlot, stateErrorSlot, root,
     // 默认折叠模型列表：一开就摊开 33 个模型会把「使用说明 + 快捷问题」顶出可视区。
     // 未选模型时由摘要行 + 醒目的提示承担「先选一个」的引导（§7/§11.8）。
-    form, input, send, modelOpen: false, modelQuery: '', modelCloseToken: 0,
+    form, input, field, send, modelOpen: false, modelQuery: '', modelCloseToken: 0,
     rerender: () => updateOverlay(root, ctx.state, ctx.plugin),
   }
   contexts.set(root, ctx)
@@ -2491,6 +2526,10 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   }
   const keydown = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {
+      // 中文输入法组字时那一下 Esc 是「取消候选词」，不是「关窗」。
+      // 输入区的 Enter 分支早就判了 isComposing，Esc 这里漏了同样的判据。
+      const legacyIme = (event as KeyboardEvent & { keyCode?: number }).keyCode === 229
+      if (composing || event.isComposing || legacyIme) return
       event.preventDefault()
       // 选择页开着时 Esc 先关选择页（用户想退出的是这一页），再按一次才关窗。
       const current = contexts.get(root)
@@ -2929,7 +2968,7 @@ function startFollowLoop(ctx: OverlayContext): void {
       const alpha = 1 - Math.exp(-dt / 0.10)
       const move = Math.min(delta, Math.min(delta * alpha + 0.05, 3200 * dt))
       ctx.followPos += move
-      ctx.programmaticScrollAt = Date.now()
+      ctx.programmaticTop = ctx.followPos
       body.scrollTop = ctx.followPos
     } else if (delta < -1) {
       // 内容变短（例如折叠）：把内部位置拉回真实值，别把"超出底部"的状态一路带着。
@@ -3263,7 +3302,11 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   syncSelectBar(ctx, state)
 
   // 只在草稿真的被外部改写（例如提交后清空）时回写输入框，避免打字时被顶掉光标。
-  if (ctx.input.value !== state.draft) ctx.input.value = state.draft
+  if (ctx.input.value !== state.draft) {
+    ctx.input.value = state.draft
+    // 程序改 value 不会派发 input 事件，镜面还停在旧文本上 —— 光标会停在旧位置（发送清空、恢复草稿都走这条）。
+    ctx.field?.refresh()
+  }
   // 走到这里必然是 ready 档：文案与可用性都由 canSubmit 统一决定 ——
   // 这样「加载/失败时禁用、回到 ready 后恢复」只有一处真相，不会两边漂移。
   /**

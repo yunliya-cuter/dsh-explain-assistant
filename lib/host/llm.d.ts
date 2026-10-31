@@ -38,7 +38,8 @@ interface LlmResult {
     usage?: unknown;
     toolTrace: unknown[];
     complete: boolean; /** true 表示因超时停止（§10/§11.9），上层要给出明确中文提示。 */
-    timeout?: boolean; /** 非空表示模型调用本身失败，上层必须当错误处理，绝不能说成成功。 */
+    timeout?: boolean; /** true 表示模型输出撞到上限被截断（finish reason=max-tokens）：不算正常完成。 */
+    limit?: boolean; /** 非空表示模型调用本身失败，上层必须当错误处理，绝不能说成成功。 */
     failure?: LlmFailureInfo;
 }
 /**

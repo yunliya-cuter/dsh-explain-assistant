@@ -5,7 +5,7 @@ import { catalogContains, catalogReadFailure, discoverCatalog, resolveSelection,
 import { buildMessages, SYSTEM_PROMPT } from './host/prompts.js';
 import { carriedRecords, measureAssistantOccupancy } from './host/occupancy.js';
 import { readMainlineContext } from './host/session-context.js';
-import { withDeadline } from './host/deadline.js';
+import { withDeadline, withDeadlineSentinel } from './host/deadline.js';
 import { ExplainAssistantError, type HistoryResultPayload } from './host/contracts.js';
 import { createArchiveSweeper } from './host/archive.js';
 // §9.1：压缩日志（kind:'compact'）不是一轮对话，读接口一律不把它当成历史记录下发。
@@ -232,7 +232,14 @@ export function apply(ctx: any): void {
     },
     // 只删本插件自己的东西：store.remove 只删 <rootDir>/sessions/<id>.json 与该会话的图片目录，
     // 不碰工作区文件，也不碰 DSH 共享附件。
-    removeSession: (id: string) => store.remove(id),
+    // H-4：周期检查删文件前先立墓碑，并掐掉在途请求 ——
+    // 与 forget 走同一条保护，否则删除之后晚到的 saveRecord 会把文件重建出来，归档白做。
+    removeSession: (id: string) => {
+      forgotten.add(id);
+      const running = active.get(id);
+      if (running) { running.controller.abort(); active.delete(id); }
+      return store.remove(id);
+    },
     logger: (message: string) => console.error('[dsh-explain-assistant]', message),
   }) : undefined;
   archiveSweeper?.start();
@@ -275,8 +282,19 @@ export function apply(ctx: any): void {
        * 目录要打一次网络，冷 0.5 秒），串起来就是"第一次打开要等很久"——
        * 用户这一轮问的正是这件事。并行之后总耗时≈最慢的那一项，而不是四项相加。
        */
-      const stateTask = store ? store.load(id).then(loaded => loaded.state) : Promise.resolve({ sessionId: id, records: [], unread: false, archived: false });
+      // H-7：记录文件损坏时 load 会把它隔离并返回空状态 + recoveredCorrupt，这个事实必须传到界面，
+      // 否则用户看到的是「还没有历史」，以为记录从来没存在过。
+      let recoveredCorrupt = false;
+      const stateTask = store
+        ? store.load(id).then(loaded => { recoveredCorrupt = Boolean(loaded.recoveredCorrupt); return loaded.state; })
+        : Promise.resolve({ sessionId: id, records: [], unread: false, archived: false });
       const mainlineTask = readMainlineCached(id);
+      // H-2：目录读取与本地 state / 主 agent 彼此独立，**现在就发起**。
+      // 旧写法把它写在 await Promise.all 之后，等于先等最多 500ms 再开始拉目录，
+      // 与注释「四步并行、总耗时≈最慢一项」不符；目录一卡 /state 就永远不返回（浮窗打不开）。
+      const CATALOG_DEADLINE_MS = 8000;
+      const catalogTask = withDeadline(loadCatalog(signal).catch(error => catalogReadFailure(error)), CATALOG_DEADLINE_MS)
+        .then(result => result ?? catalogReadFailure(new Error('模型目录读取超时（等了 ' + CATALOG_DEADLINE_MS + ' 毫秒没有回应）')));
       /**
        * 主 agent 上下文最多等 500ms。
        *
@@ -284,15 +302,19 @@ export function apply(ctx: any): void {
        * 「占用」那个圆环。等它 = 用户点完入口按钮之后几秒到十几秒什么都没有。
        * 超时就先不给占用（occupancyPending=true，客户端稍后自动再取一次，那时缓存已经热了）。
        */
-      const [state, mainline] = await Promise.all([
+      // H-1：用哨兵区分「超时」和「这个会话本来就没有主 agent 内容」。
+      // 两者都返回 undefined 时，空会话会被永久判成 occupancyPending，客户端每 3 秒重取一次。
+      const MAINLINE_TIMEOUT = Symbol('mainline-timeout');
+      const [state, mainlineOrTimeout] = await Promise.all([
         stateTask,
-        withDeadline(mainlineTask.catch(() => undefined), MAINLINE_DEADLINE_MS),
-      ]) as [any, Awaited<ReturnType<typeof readMainlineCached>> | undefined];
+        withDeadlineSentinel(mainlineTask.catch(() => undefined), MAINLINE_DEADLINE_MS, MAINLINE_TIMEOUT),
+      ]) as [any, Awaited<ReturnType<typeof readMainlineCached>> | undefined | typeof MAINLINE_TIMEOUT];
+      const mainlineTimedOut = mainlineOrTimeout === MAINLINE_TIMEOUT;
+      const mainline = mainlineTimedOut ? undefined : mainlineOrTimeout as Awaited<ReturnType<typeof readMainlineCached>> | undefined;
       const explicit = state.explicitModel as { provider?: string; model?: string } | undefined;
       // 0.2：主 agent 上下文同时驱动两件事——占用数字（圆环）与悬停显示的构成。
       // 没赶上截止时间就**整块不给**：只算小助手自己那部分会得到一个偏小的错值（会跳变）。
       const occupancyTask = mainline === undefined ? Promise.resolve(undefined) : readOccupancy(ctx, state, mainline);
-      const catalogTask = loadCatalog(signal).catch(error => catalogReadFailure(error));
       const [occupancy, catalog] = await Promise.all([occupancyTask, catalogTask]);
       // 目录读取失败**不得**被吞成「空目录」（t6 评审的 F2）：
       // 旧写法 .catch(() => ({ groups: [], failures: [] })) 让「没读到」与「真的没有」
@@ -329,7 +351,7 @@ export function apply(ctx: any): void {
         ...(occupancy === undefined ? {} : { occupancy: occupancy.percent }),
         occupancyKnown: occupancy !== undefined,
         // 主 agent 上下文没赶上截止时间 → 这次没算占用。客户端据此再做一次刷新（自动，不需要用户点）。
-        occupancyPending: mainline === undefined,
+        occupancyPending: mainlineTimedOut,
         occupancyEstimated: occupancy?.estimated === true,
         // 0.2：这份上下文由哪两块构成（圆环的悬停提示据此显示，不再只给一个总数）。
         // 两块之和 === 本次实际注入的量（主 agent 段超上限时按**丢完之后**的实际值记，
@@ -344,6 +366,8 @@ export function apply(ctx: any): void {
           },
         }),
         catalog,
+        // H-7：记录文件损坏被隔离过 —— 界面要如实说一句，别让用户以为记录从来没存在过。
+        ...(recoveredCorrupt ? { recoveredCorrupt: true } : {}),
       };
     },
     /**
@@ -557,6 +581,9 @@ export function apply(ctx: any): void {
      */
     forget: async (id: string) => {
       if (!store) return { removed: false };
+      // H-4：归档是终态，先掐掉在途的 ask/compact —— 否则模型还在跑、SSE 还在推，
+      // 且晚到的 complete 会把记录写回一个已经删掉的会话。
+      { const running = active.get(id); if (running) { running.controller.abort(); active.delete(id); } }
       // 顺序很重要，不能反：
       // 1) 先**标记** archived 并清空内容 —— 这样即使删除失败，读侧（isArchived）也已拒绝，
       //    且磁盘上不留用户内容；规范 §8 要的就是「标记 → 短暂等待 → 删除」。

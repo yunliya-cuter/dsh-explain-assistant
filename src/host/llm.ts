@@ -9,7 +9,7 @@ export interface AssistantMessage { role:'system'|'user'|'assistant'|'tool'; con
 interface LlmContext { llm?:any; tokenMeter?:any; model:AssistantModel; tools?:ToolContext; signal?:AbortSignal; maxRounds?:number; maxTools?:number; maxToolBytes?:number; totalTimeoutMs?:number; idleTimeoutMs?:number; onEvent?:(event:Record<string,unknown>)=>Promise<void>|void; }
 /** 模型调用失败的原因（§10：不能静默失败，也不能把失败说成成功）。 */
 interface LlmFailureInfo { code:string; message:string; }
-interface LlmResult { text:string; reasoning:string; usage?:unknown; toolTrace:unknown[]; complete:boolean; /** true 表示因超时停止（§10/§11.9），上层要给出明确中文提示。 */ timeout?:boolean; /** 非空表示模型调用本身失败，上层必须当错误处理，绝不能说成成功。 */ failure?:LlmFailureInfo; }
+interface LlmResult { text:string; reasoning:string; usage?:unknown; toolTrace:unknown[]; complete:boolean; /** true 表示因超时停止（§10/§11.9），上层要给出明确中文提示。 */ timeout?:boolean; /** true 表示模型输出撞到上限被截断（finish reason=max-tokens）：不算正常完成。 */ limit?:boolean; /** 非空表示模型调用本身失败，上层必须当错误处理，绝不能说成成功。 */ failure?:LlmFailureInfo; }
 const DEFAULTS={maxRounds:8,maxTools:32,maxToolBytes:512*1024,totalTimeoutMs:300_000,idleTimeoutMs:120_000};
 /**
  * §10 / §11.9「出现慢、失败或费用不可控信号时…不无限调用追求效果」。
@@ -32,6 +32,8 @@ type ParsedChunk = {
   done?: boolean;
   /** §10：适配器把故障归一化成 finish(reason.kind='error')，必须当失败处理。 */
   failure?: LlmFailureInfo;
+  /** 输出撞到上限（finish reason=max-tokens）：被截断，不是正常结束。 */
+  limit?: boolean;
 };
 
 /**
@@ -58,6 +60,10 @@ function parseChunk(chunk:any):ParsedChunk{
     const kind=chunk.reason?.kind;
     if(kind==='error')return {done:true,failure:{code:String(chunk.reason?.failure?.code??'LLM_FAILED'),message:String(chunk.reason?.failure?.message??'模型调用失败')}};
     if(kind==='aborted')return {done:true,failure:{code:'ABORTED',message:String(chunk.reason?.failure?.message??'模型调用已中断')}};
+    // 审计 2026-10-31：max-tokens 是「输出被截断」，不是「正常结束」。
+    // 以前它落到下面这条 return {done:true} → complete:true → 记录写 complete，
+    // 用户把半截回答当成完整答案，界面上也没有任何「触及上限」的提示。
+    if(kind==='max-tokens')return {done:true,limit:true};
     return {done:true};
   }
   if(type==='text-delta')return {text:typeof chunk.text==='string'?chunk.text:undefined};
@@ -154,7 +160,7 @@ async function runAssistantInner(ctx:LlmContext,messages:AssistantMessage[],idle
  // 没有 provider/model 就不可能选到适配器路由，与其静默返回空回答让用户以为"助手没反应"，
  // 不如显式标记失败，由上层给出中文原因。
  if(!ctx.model?.provider || !ctx.model?.model) return {text:'',reasoning:'',toolTrace:[],complete:false,failure:{code:'MODEL_UNAVAILABLE',message:'这个主对话还没有选择模型，无法生成解释。'}};
- const maxRounds=ctx.maxRounds??DEFAULTS.maxRounds,maxTools=ctx.maxTools??DEFAULTS.maxTools,maxBytes=ctx.maxToolBytes??DEFAULTS.maxToolBytes; let text='',reasoning='',usage:any,toolCount=0,toolBytes=0; const trace:any[]=[]; let history=[...messages];
+ const maxRounds=ctx.maxRounds??DEFAULTS.maxRounds,maxTools=ctx.maxTools??DEFAULTS.maxTools,maxBytes=ctx.maxToolBytes??DEFAULTS.maxToolBytes; let text='',reasoning='',usage:any,toolCount=0,toolBytes=0,hitLimit=false; const trace:any[]=[]; let history=[...messages];
  for(let round=0;round<maxRounds;round++){
   // dsh-llm 的 stream 需要**顶层** provider 与 model 两个字段来选适配器路由：
   // 只传 { model: {...} } 会让 registration(options.provider) 拿不到 provider，
@@ -169,6 +175,7 @@ async function runAssistantInner(ctx:LlmContext,messages:AssistantMessage[],idle
     ctx.signal?.throwIfAborted(); resetIdle();
     const c=parseChunk(raw);
     if(c.failure){failure=c.failure;break;}
+    if((c as {limit?:boolean}).limit)hitLimit=true;
     if(c.text){text+=c.text;await emit(ctx,{type:'text',delta:c.text});}
     if(c.reasoning){reasoning+=c.reasoning;await emit(ctx,{type:'reasoning',delta:c.reasoning});}
     if(c.usage){usage=c.usage;await emit(ctx,{type:'usage',usage});}
@@ -192,6 +199,8 @@ async function runAssistantInner(ctx:LlmContext,messages:AssistantMessage[],idle
    }
   }finally{clearTimeout(idleTimer);}
   if(failure)return {text,reasoning,usage,toolTrace:trace,complete:false,failure};
+  // 撞到输出上限：complete 必须是 false，否则上层会写一条 status=complete 的记录。
+  if(hitLimit)return {text,reasoning,usage,toolTrace:trace,complete:false,limit:true};
   // §10：适配器故障被归一化成 finish(error) 时，绝不能当作「正常结束、只是没说话」。
   const normalized=calls.map(call=>({id:call.id,name:call.name,arguments:toolArguments(call.arguments??call.raw)}));
   if(!normalized.length) return {text,reasoning,usage,toolTrace:trace,complete:true};

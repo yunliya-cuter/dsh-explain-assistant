@@ -2,6 +2,7 @@ import { ExplainAssistantError, SCHEMA_VERSION, toErrorBody, validateEnvelope, t
 import { runAssistant, compactAssistant, type AssistantMessage, type AssistantModel } from './llm.js';
 import type { ToolContext } from './tools.js';
 import { buildRecordContent } from './record.js';
+import { withAbort } from './deadline.js';
 // §10/D1：原因码与中文文案放在 **src/shared/** —— 宿主（落库 + SSE 事件）与客户端（记录重建）
 // 都要用同一份文案。本项目吃过「同一件事两处文案不一致」的亏，所以不做第二份拷贝，
 // 而是让两边 import 同一个模块（该模块是纯数据+纯函数，无 node 依赖，浏览器端可安全打包）。
@@ -137,7 +138,7 @@ export function createExplainAssistantRoutes(options: RouteOptions): Map<string,
       const parsed = await body(request); validateEnvelope(parsed, op); id = parsed.sessionId;
       await guard(id, request.signal); if (active.has(id)) throw new ExplainAssistantError('REQUEST_IN_FLIGHT', '已经有一个解释请求在处理中，请等它结束再试。');
       const controller = new AbortController(); const signal = AbortSignal.any([request.signal, controller.signal]); active.set(id, { requestId, controller });
-      const encoder = new TextEncoder(); const serviceContext = service.toolContext ? await service.toolContext(id, signal) : undefined;
+      const encoder = new TextEncoder();
       const send = (type: SseEvent['type'], payload?: unknown) => { if (payload && typeof payload === 'object' && 'sessionId' in payload && (payload as any).sessionId !== id) throw new ExplainAssistantError('SESSION_FORBIDDEN', '拒绝了一条属于其他会话的事件，已拦截。'); return encoder.encode(eventText({ schemaVersion: SCHEMA_VERSION, sessionId: id!, requestId, operation: op as 'ask' | 'compact', type, ...(payload === undefined ? {} : { payload }) })); };
       const streamBody = new ReadableStream<Uint8Array>({ start(controllerStream) {
         const run = async () => {
@@ -148,6 +149,9 @@ export function createExplainAssistantRoutes(options: RouteOptions): Map<string,
           // 异常/取消时，用户可能**已经看到了一部分回答**（例如模型吐了一半就断了）。
           // 那条记录若写空正文，重载后与用户当时的所见不符 —— 所以把已产出的文本累积下来一并落库。
           let partialText = '';
+          // H-6：回答是否**已经落库**。落库之后的收尾（压缩落库 / 标记未读）失败，
+          // 绝不能再走 catch 里那条"补写一条 interrupted 记录"的路径 —— 那会写出两条同 id 的记录。
+          let recorded = false;
           try {
             controllerStream.enqueue(send('start', { requestId }));
             const payload = (parsed.payload && typeof parsed.payload === 'object' ? parsed.payload : {}) as Record<string, unknown>; question = typeof payload.question === 'string' ? payload.question.trim() : ''; if (op === 'ask' && !question) throw new ExplainAssistantError('INVALID_REQUEST', '请先输入要问的问题。');
@@ -156,8 +160,12 @@ export function createExplainAssistantRoutes(options: RouteOptions): Map<string,
             // op 在这里只可能是 'ask' 或 'compact'：stream 处理器只挂在两条 SSE 路由上
             // （operation() 对其它路径返回别的名字，但那些走的是 plain 处理器）。
             const mode = op === 'compact' ? 'compact' as const : 'ask' as const;
-            const messages = service.buildMessages ? await service.buildMessages(id!, question, payload, signal, mode) : [{ role: 'user', content: question } as AssistantMessage];
-            const model = service.resolveModel ? (await service.resolveModel(id!, signal)).selection : { provider: 'default', model: 'default' };
+            // H-3：工具上下文 / 建消息 / 选模型这几步都不接受 signal，必须和 signal 赛跑，
+            // 否则用户点了「停止」，active 还挂着，再发一条就是 409（实测要等十几秒）。
+            // 放在流里面做也保住了「父信号已中止 → 仍然发 aborted 事件」这条既有契约。
+            const serviceContext = service.toolContext ? await withAbort(service.toolContext(id!, signal), signal) : undefined;
+            const messages = service.buildMessages ? await withAbort(service.buildMessages(id!, question, payload, signal, mode), signal) : [{ role: 'user', content: question } as AssistantMessage];
+            const model = service.resolveModel ? (await withAbort(service.resolveModel(id!, signal), signal)).selection : { provider: 'default', model: 'default' };
             const context = { llm: service.llm, tokenMeter: service.tokenMeter, model, tools: serviceContext, signal, ...(service.llmTimeouts ?? {}), onEvent: (item: Record<string, unknown>) => { const type = item.type as SseEvent['type']; if (type === 'text' && typeof item.delta === 'string') partialText += item.delta; controllerStream.enqueue(send(type, item)); } };
             const result = op === 'compact' ? await compactAssistant(context, messages) : await runAssistant(context, messages);
             // §11.6「依据可展开核查」/ §6.3「依据分级」/ §8：落库必须带上**可核查材料**。
@@ -194,6 +202,7 @@ export function createExplainAssistantRoutes(options: RouteOptions): Map<string,
               startedAt: now, updatedAt: now,
               ...(recordReason ? { [RECORD_REASON_FIELD]: recordReason } : {}),
             });
+            recorded = true;
             // §9.1：只有压缩**成功**才落库。失败或未跑完时必须保留此前可用的 compactState，
             // 否则一次失败的压缩会把用户原有的可用摘要清掉。
             // §9.1：失败/超时不落库；而且失败必须让界面知道（不能留下一个「正在压缩」的假状态）。
@@ -234,6 +243,13 @@ export function createExplainAssistantRoutes(options: RouteOptions): Map<string,
             //
             // 判据与客户端一致：**用户主动停止不是失败**，给的是不同的话（stopped）。
             const reason = deriveErrorReason(error);
+            if (recorded) {
+              // 回答已经完整落库：收尾失败只记日志，不改写记录、也不再补发一条 error
+              // （否则界面上是 complete 之后又冒出一个错误，重载后同 id 出现两条记录）。
+              console.error('[dsh-explain-assistant] 收尾失败（回答已落库，不改写记录）：', error instanceof Error ? error.message : String(error));
+              controllerStream.close();
+              return;
+            }
             try {
               await service.saveRecord?.(id!, {
                 id: requestId, kind: op, status: 'interrupted', complete: false, question,

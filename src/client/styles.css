@@ -25,6 +25,9 @@
   position:fixed;z-index:30;
   display:flex;flex-direction:column;box-sizing:border-box;
   min-width:360px;min-height:420px;
+  /* 审计 2026-10-31：窄屏（<392px）时上面那两个最小值会把浮窗顶出视口 ——
+     这两条在支持的引擎里覆盖它；不支持 min() 的引擎仍用上面的兜底值。 */
+  min-width:min(360px,calc(100vw - 16px));min-height:min(420px,calc(100vh - 16px));
   /* 浅色：接近 setup 的白玻璃（62% 白 + 强白边）。 */
   --ea-glass-fill:rgba(248,249,251,.62);
   --ea-glass-sheen:linear-gradient(155deg,rgba(255,255,255,.5) 0%,rgba(255,255,255,.14) 26%,rgba(255,255,255,0) 52%,rgba(255,255,255,.28) 100%);
@@ -40,7 +43,15 @@
      改成「比玻璃略深一点的凹槽」+ 一圈细边，既有输入区的边界，又不把玻璃挖掉一块。 */
   --ea-field-fill:rgba(255,255,255,.55);
   --ea-field-border:rgba(0,0,0,.12);
-  --ea-field-focus:rgba(0,0,0,.18);
+  /* 审计 2026-10-31：宿主的 warn/tertiary/error 是按大面积色块设计的，压在这层玻璃上不够读。
+     实测（WCAG 2.x，背景取合成后的 #fbfbfd / #fafafc）：
+       warn #f59e0b 2.06:1、tertiary #81858c 3.59:1、error #ec1313 4.35:1 —— 都是 11~12.5px 小字，阈值 4.5。
+     这里换成算过的深色版（warn #a15c00 5.09:1、tertiary #6b7075 4.9:1、error #c4161c 5.96:1），
+     只改插件自己的变量，不动宿主 token。 */
+  --ea-warn:#a15c00;
+  --ea-warn-border:rgba(161,92,0,.45);
+  --ea-danger:#c4161c;
+  --ea-text-tertiary:#6b7075;
   /* 行内代码不再用宿主那块 markdown 代码底色：深色主题下它是不透明的深灰，
      贴在玻璃上就是一个个「黑框」（用户截图里圈出来的就是这些）。改成很淡的一层亮底。 */
   --ea-code-fill:rgba(127,127,127,.14);
@@ -77,7 +88,12 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
   --ea-band-fill:rgba(255,255,255,.06);
   --ea-field-fill:rgba(0,0,0,.20);
   --ea-field-border:rgba(255,255,255,.14);
-  --ea-field-focus:rgba(255,255,255,.22);
+  /* 深色下 tertiary 本来就够（#adb2b8 对 #32343a 是 5.83:1），只有错误红偏暗（3.78:1），
+     提亮成 #ff8a8a（5.38:1）；警告用 #f0b429（7.1:1）。 */
+  --ea-warn:#f0b429;
+  --ea-warn-border:rgba(240,180,41,.5);
+  --ea-danger:#ff8a8a;
+  --ea-text-tertiary:#b3b8be;
   --ea-code-fill:rgba(255,255,255,.075);
   --ea-code-block-fill:rgba(255,255,255,.05);
   --ea-glass-pane:rgba(60,65,73,.70);
@@ -102,7 +118,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
   background:var(--ea-band-fill,rgba(127,127,127,.06));
 }
 .dsh-explain-assistant-titlebar .ea-title{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:600;letter-spacing:.02em}
-.dsh-explain-assistant-status{flex:1 1 auto;min-width:0;font-size:12px;color:var(--dsw-alias-label-tertiary,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dsh-explain-assistant-status{flex:1 1 auto;min-width:0;font-size:12px;color:var(--ea-text-tertiary,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ea-header-actions{
   display:flex;align-items:center;gap:6px;flex:0 1 auto;min-width:0;
   /* 必须压在八个 resize 热区（z-index:3）之上 —— 热区是绝对定位、DOM 里排在标题栏后面，
@@ -184,7 +200,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
   display:inline-block;min-width:18px;text-align:center;
   font-size:11px;line-height:16px;padding:0 5px;border-radius:9px;
   background:var(--dsw-alias-bg-layer-3,rgba(127,127,127,.16));
-  color:var(--dsw-alias-label-tertiary,#666);
+  color:var(--ea-text-tertiary,#666);
 }
 .ea-count-inline{margin-left:auto}
 
@@ -279,7 +295,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 .ea-answer .ea-md-th[data-align=center],.ea-answer .ea-md-td[data-align=center]{text-align:center}
 .ea-answer .ea-md-th[data-align=right],.ea-answer .ea-md-td[data-align=right]{text-align:right}
 .ea-answer .ea-md-image{max-width:100%;height:auto;border-radius:6px}
-.ea-answer .ea-md-image-alt{color:var(--dsw-alias-label-tertiary,#777);font-style:italic}
+.ea-answer .ea-md-image-alt{color:var(--ea-text-tertiary,#777);font-style:italic}
 /* ---------- 加载页（未就绪）----------
    未就绪期间界面上只有这一段，所以它必须**一眼被读成「正在加载」**：
    有转圈、有明确的进行中文案，并且额外写清「这里现在什么都没有，是因为还没读到，
@@ -288,7 +304,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 .ea-loading{padding:18px 4px;display:flex;flex-direction:column;gap:9px}
 .ea-loading-row{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--dsw-alias-label-secondary,#555)}
 .ea-loading-text{font-weight:600}
-.ea-loading-hint{margin:0;font-size:12px;line-height:1.6;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-loading-hint{margin:0;font-size:12px;line-height:1.6;color:var(--ea-text-tertiary,#777)}
 
 /* ---------- 从不可见到可见的那一次（t4）----------
  * 浮窗现在等 /state 有结局才挂载，所以它**第一次出现在页面上时就已经是最终形态**：
@@ -328,7 +344,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 /* 「状态没读到」的错误页：与加载页互斥，是失败结局的出路（含重试）。 */
 .ea-state-error{display:flex;flex-direction:column;gap:9px;align-items:flex-start}
 .ea-state-error-reason{margin:0}
-.ea-state-error-hint{margin:0;font-size:12px;line-height:1.6;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-state-error-hint{margin:0;font-size:12px;line-height:1.6;color:var(--ea-text-tertiary,#777)}
 .ea-state-retry{align-self:flex-start}
 .ea-running{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--dsw-alias-label-secondary,#555)}
 .ea-spinner{
@@ -355,9 +371,9 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
 
 /* ---------- 错误 ---------- */
 .dsh-explain-assistant-error,.ea-error{
-  color:var(--dsw-alias-state-error-primary,#b42318);
+  color:var(--ea-danger,#b42318);
   background:var(--dsw-alias-bg-layer-1,rgba(180,35,24,.08));
-  border:1px solid var(--dsw-alias-state-error-primary,rgba(180,35,24,.3));
+  border:1px solid var(--ea-danger,rgba(180,35,24,.3));
   padding:9px 11px;border-radius:9px;font-size:12.5px;
   white-space:pre-wrap;word-break:break-word;
 }
@@ -388,12 +404,12 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
 }
 /* 未就绪/没读到时不出现（见 overlay.tsx 的三档界面）。作者样式会盖掉 UA 的 [hidden] */
 .ea-model-trigger[hidden]{display:none}
-.ea-model-trigger-prefix{flex:0 0 auto;font-size:11px;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-model-trigger-prefix{flex:0 0 auto;font-size:11px;color:var(--ea-text-tertiary,#777)}
 .ea-model-trigger-prefix[hidden]{display:none}
 .ea-model-trigger-label{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ea-model-trigger-caret{flex:0 0 auto;font-size:9px;line-height:1;opacity:.65;transition:transform var(--ea-page-in-dur,220ms) var(--ea-page-ease,cubic-bezier(.2,.85,.25,1))}
 .ea-model-trigger[aria-expanded=true] .ea-model-trigger-caret{transform:rotate(180deg)}
-.ea-model-trigger-warn{flex:0 0 auto;font-size:11px;color:var(--dsw-alias-state-warn-primary,#b45309)}
+.ea-model-trigger-warn{flex:0 0 auto;font-size:11px;color:var(--ea-warn,#b45309)}
 .ea-model-trigger-warn[hidden]{display:none}
 /* 未选模型：这不是「设置入口」，而是一件必须先做的事 —— 做成实心主色，一眼能看到。 */
 .ea-model-trigger[data-unselected=true]{
@@ -404,7 +420,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
 }
 .ea-model-trigger[data-unselected=true]:hover{background:var(--dsw-alias-button-primary-hover,#245bdd)}
 /* 有提供方读取失败：不打开选择页也要看得出「这里有东西没读到」。 */
-.ea-model-trigger[data-warn=true]{border-color:var(--dsw-alias-state-warn-primary,#b45309)}
+.ea-model-trigger[data-warn=true]{border-color:var(--ea-warn,#b45309)}
 /* 选择页开着时按钮是「还按着」的状态（写在最后一条，靠后者生效）。 */
 .ea-model-trigger[aria-expanded=true]{background:var(--dsw-alias-bg-layer-3,rgba(127,127,127,.16))}
 /* 关掉选择页会把焦点还给它（键盘用户需要）。但**鼠标**用户不该看到一个焦点框：
@@ -445,10 +461,10 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
 .ea-catalog-note{
   display:flex;align-items:flex-start;gap:8px;
   padding:8px 10px;border-radius:9px;
-  border:1px solid var(--dsw-alias-state-warn-primary,rgba(180,83,9,.35));
+  border:1px solid var(--ea-warn,rgba(180,83,9,.35));
   background:rgba(180,83,9,.07);
 }
-.ea-catalog-note-icon{flex:0 0 auto;font-size:12px;line-height:1.5;color:var(--dsw-alias-state-warn-primary,#b45309)}
+.ea-catalog-note-icon{flex:0 0 auto;font-size:12px;line-height:1.5;color:var(--ea-warn,#b45309)}
 .ea-catalog-note-text{display:flex;flex:1 1 auto;flex-direction:column;gap:2px;min-width:0}
 .ea-catalog-note-open{flex:0 0 auto;align-self:flex-start}
 .ea-catalog-note-slot:empty{display:none}
@@ -554,7 +570,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
   color:var(--dsw-alias-label-secondary,#555);
 }
 /* 未选模型：这句话是**结论性提示**，不能只是灰字。 */
-.ea-model-panel-current[data-unselected=true]{color:var(--dsw-alias-state-warn-primary,#b45309);font-weight:600}
+.ea-model-panel-current[data-unselected=true]{color:var(--ea-warn,#b45309);font-weight:600}
 .ea-model-panel-filter{padding:9px 12px;flex:0 0 auto}
 .ea-model-search{
   width:100%;box-sizing:border-box;font:inherit;font-size:12.5px;padding:7px 10px;border-radius:8px;
@@ -572,7 +588,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
   display:flex;align-items:center;gap:7px;
   position:sticky;top:0;padding:6px 2px;
   font-size:11.5px;font-weight:600;letter-spacing:.02em;
-  color:var(--dsw-alias-label-tertiary,#666);
+  color:var(--ea-text-tertiary,#666);
   background:var(--ea-glass-pane,var(--dsw-alias-bg-base,#fff));-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)
 }
 .ea-model-options{display:flex;flex-direction:column;gap:2px}
@@ -586,7 +602,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
 .ea-model-option-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ea-model-option-id{
   flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  font-size:11px;color:var(--dsw-alias-label-tertiary,#777);
+  font-size:11px;color:var(--ea-text-tertiary,#777);
 }
 .ea-model-option-check{flex:0 0 auto;width:1em;font-size:12px;color:transparent}
 .ea-model-option[aria-pressed=true]{
@@ -602,23 +618,23 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
   border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1));
 }
 .ea-model-panel-failures[hidden]{display:none}
-.ea-model-failure{display:block;font-size:11.5px;color:var(--dsw-alias-state-warn-primary,#a15c00);line-height:1.5}
+.ea-model-failure{display:block;font-size:11.5px;color:var(--ea-warn,#a15c00);line-height:1.5}
 
 /* ---------- 依据 ---------- */
 .ea-evidence-row{display:flex;flex-direction:column;gap:4px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.1))}
 .ea-evidence-row:first-of-type{border-top:0;padding-top:0}
 .ea-row-head{display:flex;align-items:baseline;gap:8px;justify-content:space-between}
 .ea-evidence-title{font-size:12.5px;word-break:break-all}
-.ea-meta{font-size:11px;color:var(--dsw-alias-label-tertiary,#777);white-space:nowrap;flex:0 0 auto}
+.ea-meta{font-size:11px;color:var(--ea-text-tertiary,#777);white-space:nowrap;flex:0 0 auto}
 .ea-evidence-summary{margin:2px 0 0;font-size:12.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary,#444)}
 /* 明细默认收起：输入框上方那排标签已经回答了「选了哪几条」，
    想看原文/分级再展开 —— 上一版这张卡是常驻的，4000 字原文把答案顶出可视区。 */
 .ea-evidence-details{padding:0}
 .ea-evidence-fold{display:flex;align-items:center;gap:8px;padding:10px 12px;cursor:pointer;list-style:none}
 .ea-evidence-fold::-webkit-details-marker{display:none}
-.ea-evidence-fold::before{content:'▸';font-size:10px;color:var(--dsw-alias-label-tertiary,#777);transition:transform 160ms cubic-bezier(.2,.85,.25,1)}
+.ea-evidence-fold::before{content:'▸';font-size:10px;color:var(--ea-text-tertiary,#777);transition:transform 160ms cubic-bezier(.2,.85,.25,1)}
 .ea-evidence-details[open] .ea-evidence-fold::before{transform:rotate(90deg)}
-.ea-evidence-fold-hint{margin-left:auto;font-size:11px;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-evidence-fold-hint{margin-left:auto;font-size:11px;color:var(--ea-text-tertiary,#777)}
 .ea-evidence-details[open] .ea-evidence-fold-hint{display:none}
 .ea-evidence-details .ea-evidence-row{padding:0 12px 10px}
 
@@ -629,7 +645,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
 .ea-conv{display:flex;flex-direction:column;gap:18px}
 /* 有「回到最近」时给底部留出它占的高度：按钮是 sticky 的，不预留就会压住最后一行字。 */
 .ea-conv.has-jump{padding-bottom:44px}
-.ea-conv-head{display:flex;align-items:center;gap:8px;margin-bottom:-6px;font-size:11.5px;line-height:16px;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-conv-head{display:flex;align-items:center;gap:8px;margin-bottom:-6px;font-size:11.5px;line-height:16px;color:var(--ea-text-tertiary,#777)}
 .ea-conv-head::after{content:'';flex:1 1 auto;height:1px;background:var(--dsw-alias-border-l2,rgba(0,0,0,.08))}
 .ea-conv-title{font-weight:600;color:var(--dsw-alias-label-secondary,#555)}
 .ea-conv-older{display:flex;justify-content:center}
@@ -639,7 +655,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
 .ea-turn{display:flex;flex-direction:column;gap:10px;min-width:0}
 /* 问句：右对齐、20px 圆角、气泡底色跟着宿主主题走（浅色 #fdf4e7 / 深色 #272727）。 */
 .ea-turn-q{align-self:flex-end;max-width:72%;border-radius:20px;padding:9px 14px;background:var(--dsw-specific-bubble,var(--dsw-alias-bg-layer-2,rgba(127,127,127,.14)));color:var(--dsw-alias-label-primary,#111);font-size:13px;line-height:21px;white-space:pre-wrap;word-break:break-word}
-.ea-turn-meta{align-self:flex-end;margin-top:-6px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#888);white-space:nowrap}
+.ea-turn-meta{align-self:flex-end;margin-top:-6px;font-size:11px;line-height:16px;color:var(--ea-text-tertiary,#888);white-space:nowrap}
 /* 回答：左对齐、无气泡、正文主色（灰色读起来像「次要说明」，对话里回答是主角）。 */
 .ea-turn-a{font-size:13px;line-height:22px;color:var(--dsw-alias-label-primary,#111);word-break:break-word;--ea-fold-height:220px;--ea-fold-fade:0px}
 /* ---------- 折叠 / 展开全文 ---------- */
@@ -668,7 +684,7 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
 .ea-turn-a .ea-md-h2{font-size:14.5px}
 .ea-turn-a .ea-md-h3{font-size:13.5px}
 .ea-turn-reason{margin-top:-2px}
-.ea-turn-foot{display:flex;align-items:center;gap:12px;margin-top:-4px;font-size:11.5px;line-height:16px;color:var(--dsw-alias-label-tertiary,#888);flex-wrap:wrap}
+.ea-turn-foot{display:flex;align-items:center;gap:12px;margin-top:-4px;font-size:11.5px;line-height:16px;color:var(--ea-text-tertiary,#888);flex-wrap:wrap}
 .ea-turn-foot button{border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer}
 .ea-turn-foot button:hover{color:var(--dsw-alias-label-secondary,#555)}
 .ea-turn-foot .ea-warn{font-size:11.5px}
@@ -720,8 +736,8 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
 .ea-detail-answer .ea-md-h2{font-size:15.5px}
 .ea-detail-answer .ea-md-h3{font-size:14.5px}
 .ea-detail-answer .ea-md-h4,.ea-detail-answer .ea-md-h5,.ea-detail-answer .ea-md-h6{font-size:13.5px}
-.ea-warn{font-size:11.5px;color:var(--dsw-alias-state-warn-primary,#a15c00)}
-.ea-empty{color:var(--dsw-alias-label-tertiary,#777);font-size:12.5px;margin:0}
+.ea-warn{font-size:11.5px;color:var(--ea-warn,#a15c00)}
+.ea-empty{color:var(--ea-text-tertiary,#777);font-size:12.5px;margin:0}
 /* ---------- 折叠块 ---------- */
 .ea-disclosure>summary,.ea-tool>summary{
   cursor:pointer;font-size:12.5px;
@@ -757,20 +773,90 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
   border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.12));
   background:var(--ea-band-fill,rgba(127,127,127,.05));
 }
+/* ---------- 输入框：白底板 + 平滑光标 + 蓝色选区 ----------
+   移植自 More 设置向导 2026-10-25 版（见 text-field.ts）。
+   底板（底色、圆角、内阴影）从输入框挪到外层 .ea-field：
+   这样蓝色选区可以垫在底板之上、文字之下 —— 字本身一个像素都不会被染色。
+   输入框自身透明、无阴影，只负责接收输入与原生选区。 */
+.ea-field{
+  position:relative;display:block;
+  border-radius:12px;
+  background:var(--ea-field-fill,rgba(255,255,255,.55));
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.16);
+  /* 圆角裁切：选区与光标不会溢出圆角 */
+  overflow:hidden;
+}
+.ea-field-mirror{
+  position:absolute;left:0;top:0;box-sizing:border-box;
+  margin:0;border:0;visibility:hidden;pointer-events:none;z-index:0;
+}
+.ea-field-selection{position:absolute;inset:0;pointer-events:none;z-index:1}
+.ea-field-sel-box{
+  position:absolute;left:0;top:0;width:0;height:0;border-radius:4px;
+  background:var(--ea-selection,rgba(47,107,255,.28));
+  opacity:0;transition:opacity .12s ease-out;
+}
+.ea-field-caret{
+  position:absolute;left:0;top:0;width:2px;height:18px;border-radius:2px;
+  background:var(--ea-caret,var(--dsw-alias-button-primary-fill,#2f6bff));
+  pointer-events:none;z-index:3;opacity:0;
+  transition:opacity .36s ease-in-out;
+}
+.ea-field-caret.is-blinking{animation:ea-caret-blink 1.2s ease-in-out infinite}
+@keyframes ea-caret-blink{0%{opacity:1}30%{opacity:0}70%{opacity:0}100%{opacity:1}}
+/* 原生光标让位给自绘光标；原生选中色让位给自绘蓝色矩形。
+   只关背景不关文字色：选中时字仍然是原色，不会变成白字。 */
+.ea-field[data-smooth="on"] .ea-input{caret-color:transparent}
+.ea-field[data-smooth="on"] .ea-input::selection{background:transparent;color:inherit}
+.ea-field[data-smooth="on"] .ea-input::-moz-selection{background:transparent;color:inherit}
+@media (prefers-reduced-motion: reduce){
+  .ea-field-caret{display:none}
+  .ea-page-sel{display:none}
+}
+
+/* ---------- 正文选区的动画高亮（见 page-selection.ts） ----------
+   z-index:-1 + 浮窗自身的层叠上下文：高亮排在浮窗背景之上、所有内容之下，
+   于是它只染色底板，不覆盖任何字形（盖住字会让选中的字看起来变粗）。
+   整层 pointer-events:none，拖选/双击/Ctrl+A/复制一概不受影响。 */
+.ea-page-sel-layer{
+  position:absolute;inset:0;z-index:-1;
+  pointer-events:none;overflow:hidden;
+  border-radius:inherit;
+  contain:layout paint;
+}
+.ea-page-sel{
+  position:absolute;left:0;top:0;width:0;height:0;
+  border-radius:4px;
+  background:var(--ea-selection,rgba(47,107,255,.28));
+  opacity:0;
+  will-change:left,width,opacity;
+}
+/* 自绘高亮在场时，把原生选中底色关掉（只关底色，字色保持原样，不会变成白字） */
+.dsh-explain-assistant-overlay[data-page-selection="on"] ::selection{background:transparent;color:inherit}
+
+/* 输入框本体：一个**真正的壳**。
+   这里的每一条都是为了让可见边界只剩外层 .ea-field 那一条：
+   display:block —— textarea 默认是 inline-block，会坐在基线上，
+                   于是它比外层底板矮 4px，底下漏出一条底板的边，看起来就是「两层」；
+   box-sizing    —— 不写的话 width:100% 会再把 padding 加一遍，横向胀出一圈；
+   border-radius:0 / box-shadow:none / outline:none —— 圆角、阴影、焦点环统一交给底板。 */
 .ea-input{
+  position:relative;z-index:2;
+  display:block;box-sizing:border-box;
   width:100%;min-height:52px;max-height:150px;
-  resize:vertical;
+  /* 审计 2026-10-31：这里原本是 resize:vertical，右下角因此长出一条斜纹拖拽柄，
+     还被 12px 圆角切掉一半；而窗口本身已经能拖边改大小，这条柄只会让人误以为在拖输入框。 */
+  resize:none;
   padding:9px 11px;
   font:inherit;line-height:1.55;
   color:var(--dsw-alias-label-primary,#111);
-  background:var(--ea-field-fill,rgba(255,255,255,.55));
-  /* 不再画边框：边框在半透明玻璃上会变成「一个框」，比底色本身更扎眼。
-     改成一点点内阴影，读起来是「凹进去的一块」，而不是「嵌了个黑盒子」。 */
+  background:transparent;
   border:0;
-  border-radius:12px;
-  box-shadow:inset 0 1px 2px rgba(0,0,0,.16);
+  border-radius:0;
+  box-shadow:none;
+  outline:none;
 }
-.ea-input::placeholder{color:var(--dsw-alias-label-tertiary,#888)}
+.ea-input::placeholder{color:var(--ea-text-tertiary,#888)}
 /* 右侧留出 18px：让「发送」按钮的命中区与右下角的热区**不相交**（原来重叠约 5×6px，
    发送按钮的右下角压在 ◢ 的左上角上）。13(表单右内边距)+18 = 31px，已让开 12px 的角热区。 */
 .ea-composer-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-right:18px}
@@ -891,7 +977,7 @@ body[data-ds-dark-theme] .ea-send{
 .ea-ring-slot{display:flex;align-items:center;min-width:0}
 
 /* ---------- 选中模式提示 ---------- */
-.ea-selection-status{font-size:12px;color:var(--dsw-alias-label-tertiary,#666);line-height:1.5;min-height:0}
+.ea-selection-status{font-size:12px;color:var(--ea-text-tertiary,#666);line-height:1.5;min-height:0}
 .ea-selection-status:empty{display:none}
 /* ---------- 选择模式：浮窗让开，把主对话让出来 ----------
  * 用户原话：「进入选择模式后，解释小助手暂时不显示，方便用户选择」。
@@ -954,7 +1040,7 @@ body[data-ds-dark-theme] .ea-select-bar{
 }
 @keyframes ea-select-dot{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1)}}
 .ea-select-bar-count{font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}
-.ea-select-bar-hint{color:var(--dsw-alias-label-tertiary,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ea-select-bar-hint{color:var(--ea-text-tertiary,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ea-select-bar .ea-btn{height:26px;min-width:0;padding:0 12px;border-radius:999px;font-size:12px;line-height:1;white-space:nowrap}
 .ea-select-bar-done{
   border:0;
@@ -970,15 +1056,15 @@ body[data-ds-dark-theme] .ea-select-bar{
 /* ---------- 占用圆环（§9.2） ---------- */
 .dsh-explain-assistant-ring{
   display:flex;align-items:center;gap:7px;
-  font-size:11px;color:var(--dsw-alias-label-tertiary,#666);
+  font-size:11px;color:var(--ea-text-tertiary,#666);
 }
 .dsh-explain-assistant-ring svg{display:block;flex:0 0 auto}
 .dsh-explain-assistant-ring-track{stroke:var(--dsw-alias-border-l3,rgba(0,0,0,.18))}
 .dsh-explain-assistant-ring-arc{stroke:var(--dsw-alias-button-primary-fill,#2f6bff)}
-.dsh-explain-assistant-ring[data-estimated=true] .dsh-explain-assistant-ring-arc{stroke:var(--dsw-alias-state-warn-primary,#f59e0b)}
+.dsh-explain-assistant-ring[data-estimated=true] .dsh-explain-assistant-ring-arc{stroke:var(--ea-warn,#f59e0b)}
 .dsh-explain-assistant-ring[data-unknown=true] .dsh-explain-assistant-ring-track{stroke-dasharray:2 3}
 .dsh-explain-assistant-ring-label{white-space:nowrap}
-.dsh-explain-assistant-ring-estimated{color:var(--dsw-alias-state-warn-primary,#f59e0b);font-size:10px}
+.dsh-explain-assistant-ring-estimated{color:var(--ea-warn,#f59e0b);font-size:10px}
 
 /* ---------- /compact 的结果：对话流里的一行「压缩事件」 ----------
  * 参考宿主（@deepseek-ai/dsh-client-ui-chat 的 compactionRow）：一行 24px 高的安静长条
@@ -998,13 +1084,13 @@ body[data-ds-dark-theme] .ea-select-bar{
   transition:background-color .1s,color .1s;
 }
 .ea-compact-head:not([disabled]):hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12));color:var(--dsw-alias-label-primary,#111)}
-.ea-compact-head[disabled]{cursor:default;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-compact-head[disabled]{cursor:default;color:var(--ea-text-tertiary,#777)}
 .ea-compact-chevron{flex:none;width:14px;font-size:9px;line-height:1;opacity:.7;transition:transform 160ms cubic-bezier(.2,.85,.25,1)}
 .ea-compact-row[data-open=true] .ea-compact-chevron{transform:rotate(90deg)}
 .ea-compact-title{flex:none;font-size:12.5px;line-height:1.4}
 .ea-compact-sep{flex:none;width:2px;height:2px;border-radius:1px;background:var(--dsw-alias-label-caption,#9aa0a6);margin:0 8px}
-.ea-compact-line{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--dsw-alias-label-tertiary,#777)}
-.ea-compact-row[data-status=error] .ea-compact-line{color:var(--dsw-alias-state-error-primary,#dc2626)}
+.ea-compact-line{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--ea-text-tertiary,#777)}
+.ea-compact-row[data-status=error] .ea-compact-line{color:var(--ea-danger,#dc2626)}
 .ea-compact-body{display:none;padding:2px 0 6px 22px}
 .ea-compact-row[data-open=true] .ea-compact-body{display:block}
 /* 展开长摘要时头部固定在滚动区顶部：滚到一半也能知道"上面这一坨是什么"（宿主同做法）。 */
@@ -1069,10 +1155,18 @@ body[data-ds-dark-theme] .ea-select-bar{
    输入框在打开浮窗时会被自动聚焦，于是一进来就是一个「黑底 + 白框」的方盒子，正是用户说丑的那个。
    输入框改成本身已经凹进去的一块，焦点提示也改成**内侧一圈很淡的亮边**，不再套外框；
    caret 与占位文字已经足够说明「这里可以打字」，键盘用户仍能看到焦点位置的细微变化。 */
-.dsh-explain-assistant-overlay .ea-input:focus-visible,
+/* 焦点环画在**底板**上：输入框已经是透明的壳，再在它身上画一圈内阴影，
+   就会和底板的边贴成两条并排的线（用户看到的就是「两层」）。 */
+.dsh-explain-assistant-overlay .ea-field:has(.ea-input:focus-visible){
+  /* 审计 2026-10-31：原来那圈 rgba(0,0,0,.18) 实测只有 1.53:1（深色 2.05:1），
+     键盘 Tab 到这里基本看不出焦点在哪。改用品牌色 2px 内环（浅色 4.4:1 / 深色 3.4:1）。 */
+  box-shadow:
+    inset 0 1px 2px rgba(0,0,0,.16),
+    inset 0 0 0 2px var(--dsw-alias-button-primary-fill,#2f6bff);
+}
 .dsh-explain-assistant-overlay .ea-model-search:focus-visible{
   outline:none;
-  box-shadow:inset 0 1px 2px rgba(0,0,0,.18),inset 0 0 0 1px var(--ea-field-focus,rgba(255,255,255,.22));
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.18),inset 0 0 0 2px var(--dsw-alias-button-primary-fill,#2f6bff);
 }
 .dsh-explain-assistant-overlay button:focus-visible,
 .dsh-explain-assistant-overlay textarea:focus-visible,
@@ -1080,6 +1174,16 @@ body[data-ds-dark-theme] .ea-select-bar{
 .dsh-explain-assistant-overlay [tabindex]:focus-visible{
   outline:2px solid var(--dsw-alias-button-primary-fill,#2f6bff);
   outline-offset:1px;
+}
+/* 上面那条全局规则会给 textarea 套一圈 2px 蓝框。输入框包进 .ea-field 之后，
+   这圈框会落在底板里面，和底板的边贴成「两条线」——正是用户说的「两层」。
+   输入框的焦点提示改由底板的 :has() 规则给（见文件上方 .ea-field:has(...)）。
+   审计 2026-10-31：这条 outline:none 必须包在 @supports 里 —— 不支持 :has() 的引擎
+   会同时丢掉 :has 那条规则和这条 outline，输入框直接没有任何焦点提示。 */
+@supports selector(:has(*)) {
+  .dsh-explain-assistant-overlay .ea-field .ea-input:focus-visible{
+    outline:none;
+  }
 }
 /* ---------- §5.2 「这一问围绕哪几条」（输入框上方常驻） ----------
    上一版这里只有一句话：「正在围绕这条内容提问：assistant-step  取消」。
@@ -1095,7 +1199,9 @@ body[data-ds-dark-theme] .ea-select-bar{
   border-left:3px solid var(--dsw-alias-button-primary-fill,#2f6bff);
   border-radius:0 7px 7px 0;
   /* 只过渡 max-height（有界值）：过渡 height:auto 浏览器做不到，而逐帧量高度会让整列重排 */
-  max-height:120px;overflow:hidden;
+  /* 审计 2026-10-31：原来 max-height:120px + overflow:hidden，第 4 行之后的标签直接看不见，
+     而"取消这一条"的唯一入口就在标签的 × 上 —— 选多了就再也撤不回来。改成可滚动。 */
+  max-height:120px;overflow-y:auto;overflow-x:hidden;
   transition:max-height var(--ea-pick-in-dur,180ms) var(--ea-page-ease,cubic-bezier(.2,.85,.25,1)),
              opacity var(--ea-pick-in-dur,180ms) var(--ea-page-ease,cubic-bezier(.2,.85,.25,1)),
              padding var(--ea-pick-in-dur,180ms) var(--ea-page-ease,cubic-bezier(.2,.85,.25,1)),
@@ -1119,10 +1225,10 @@ body[data-ds-dark-theme] .ea-select-bar{
 /* 分级（§6.3）：这个小圆点说明「这条是实际结果还是主 agent 的说法」，颜色与正文折叠区一致 */
 .ea-pick-chip::before{
   content:'';flex:0 0 auto;width:7px;height:7px;border-radius:50%;
-  background:var(--dsw-alias-label-tertiary,#8a8f98);
+  background:var(--ea-text-tertiary,#8a8f98);
 }
 .ea-pick-chip[data-tier=observed]::before{background:var(--dsw-alias-state-success-primary,#15803d)}
-.ea-pick-chip[data-tier=reported]::before{background:var(--dsw-alias-state-warn-primary,#b45309)}
+.ea-pick-chip[data-tier=reported]::before{background:var(--ea-warn,#b45309)}
 .ea-pick-index{
   flex:0 0 auto;min-width:16px;height:16px;padding:0 3px;border-radius:999px;
   display:inline-flex;align-items:center;justify-content:center;
@@ -1134,7 +1240,7 @@ body[data-ds-dark-theme] .ea-select-bar{
 .ea-pick-snippet{flex:1 1 auto;min-width:0;color:var(--dsw-alias-label-secondary,#555);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ea-pick-remove{
   flex:0 0 auto;width:18px;height:18px;padding:0;border:0;border-radius:50%;
-  background:transparent;color:var(--dsw-alias-label-tertiary,#666);
+  background:transparent;color:var(--ea-text-tertiary,#666);
   font-size:13px;line-height:1;cursor:pointer;
 }
 .ea-pick-remove:hover{background:rgba(127,127,127,.16);color:var(--dsw-alias-label-primary,#111)}
@@ -1209,13 +1315,13 @@ html[data-ea-selecting] [data-tool]:hover{
 .ea-offline-list{margin:6px 0 0;padding-left:18px}
 .ea-offline-evidence{font-size:12.5px;line-height:1.6;color:var(--dsw-alias-label-primary,#111);word-break:break-word}
 .ea-offline-line{margin:4px 0;font-size:12.5px;line-height:1.65;color:var(--dsw-alias-label-primary,#111)}
-.ea-offline-note{margin:8px 0 0;font-size:11.5px;line-height:1.6;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-offline-note{margin:8px 0 0;font-size:11.5px;line-height:1.6;color:var(--ea-text-tertiary,#777)}
 /* ---------- §6.3 依据分级徽标 ---------- */
 .ea-evidence-tier{font-size:11px;line-height:1.5;padding:1px 6px;border-radius:999px;white-space:nowrap;border:1px solid transparent}
 .ea-tier-observed{color:var(--dsw-alias-state-success-primary,#15803d);background:rgba(21,128,61,.1);border-color:rgba(21,128,61,.3)}
-.ea-tier-reported{color:var(--dsw-alias-state-warn-primary,#b45309);background:rgba(180,83,9,.1);border-color:rgba(180,83,9,.3)}
-.ea-tier-unavailable,.ea-tier-unknown{color:var(--dsw-alias-label-tertiary,#666);background:rgba(127,127,127,.1);border-color:rgba(127,127,127,.3)}
-.ea-evidence-tier-hint{display:block;margin-top:3px;font-size:11px;line-height:1.55;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-tier-reported{color:var(--ea-warn,#b45309);background:rgba(180,83,9,.1);border-color:rgba(180,83,9,.3)}
+.ea-tier-unavailable,.ea-tier-unknown{color:var(--ea-text-tertiary,#666);background:rgba(127,127,127,.1);border-color:rgba(127,127,127,.3)}
+.ea-evidence-tier-hint{display:block;margin-top:3px;font-size:11px;line-height:1.55;color:var(--ea-text-tertiary,#777)}
 
 /* ---------- 使用教程页 ----------
  * 与模型选择页共用同一套"翻页"语言（data-view 一改，两页互相推拉），
@@ -1272,7 +1378,7 @@ html[data-ea-selecting] [data-tool]:hover{
 .ea-tut-tiers{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:12.5px;line-height:1.7}
 .ea-tut-tiers li{display:flex;gap:7px;align-items:flex-start}
 .ea-tut-tiers .ea-evidence-tier{flex:0 0 auto;margin-top:2px}
-.ea-tut-note{margin:0;font-size:11.5px;line-height:1.65;color:var(--dsw-alias-label-tertiary,#777)}
+.ea-tut-note{margin:0;font-size:11.5px;line-height:1.65;color:var(--ea-text-tertiary,#777)}
 .ea-tut-keys{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 10px;font-size:12.5px;line-height:1.7}
 .ea-tut-keys dt{margin:0;white-space:nowrap;font-weight:600;color:var(--dsw-alias-label-primary,#111)}
 .ea-tut-keys dd{margin:0;color:var(--dsw-alias-label-secondary,#555)}
@@ -1290,7 +1396,7 @@ html[data-ea-selecting] [data-tool]:hover{
 .ea-tut-q{border-radius:9px;background:var(--ea-band-fill,rgba(127,127,127,.08));padding:2px 10px}
 .ea-tut-q summary{cursor:pointer;padding:6px 0;font-size:12.5px;line-height:1.6;font-weight:600;list-style:none}
 .ea-tut-q summary::-webkit-details-marker{display:none}
-.ea-tut-q summary::after{content:'+';float:right;color:var(--dsw-alias-label-tertiary,#777);font-weight:700}
+.ea-tut-q summary::after{content:'+';float:right;color:var(--ea-text-tertiary,#777);font-weight:700}
 .ea-tut-q[open] summary::after{content:'–'}
 .ea-tut-a{margin:0 0 6px;font-size:12.5px;line-height:1.7;color:var(--dsw-alias-label-secondary,#555)}
 .ea-tut-ask{margin-bottom:8px}
@@ -1305,8 +1411,8 @@ html[data-ea-selecting] [data-tool]:hover{
 .ea-tool-list{display:flex;flex-direction:column;gap:6px;margin-top:4px}
 .ea-tool-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;font-size:12px;line-height:18px}
 .ea-tool-row-name{color:var(--dsw-alias-label-primary,#111)}
-.ea-tool-row-status{font-size:11px;color:var(--dsw-alias-label-tertiary,#888)}
-.ea-tool-row[data-status=error] .ea-tool-row-status{color:var(--dsw-alias-state-error-primary,#b42318)}
+.ea-tool-row-status{font-size:11px;color:var(--ea-text-tertiary,#888)}
+.ea-tool-row[data-status=error] .ea-tool-row-status{color:var(--ea-danger,#b42318)}
 .ea-tool-row .ea-tool-detail{flex-basis:100%;margin:0;font-size:11.5px;line-height:17px;color:var(--dsw-alias-label-secondary,#555);white-space:pre-wrap;word-break:break-word}
 
 /* ---------- 错误条进场 ---------- */

@@ -142,6 +142,11 @@ export type AssistantClientState = {
     hasEarlier: boolean;
     historyCursor?: string;
     loadingEarlier: boolean;
+    /**
+     * 宿主把这条对话的记录文件判定为损坏、已经隔离并重新开始时为 true。
+     * 界面必须如实说一句，否则用户只看到「还没有历史」，以为记录从来没存在过。
+     */
+    recoveredCorrupt?: boolean;
     evidence: EvidenceItem[];
     geometry?: Geometry;
     occupancy?: number;

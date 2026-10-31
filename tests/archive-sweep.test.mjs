@@ -293,7 +293,9 @@ test('接线: index.ts 启动周期检查、停止时清定时器、复用 store
   assert.match(source, /createArchiveSweeper/, '必须真的构造周期检查');
   assert.match(source, /archiveSweeper\?\.start\(\)/, '必须启动它');
   assert.match(source, /archiveSweeper\?\.stop\(\)/, '插件停止时必须清掉定时器');
-  assert.match(source, /removeSession: \(id: string\) => store\.remove\(id\)/, '删除必须走已有的 store.remove（复用 retryPendingDeletes 机制）');
+  // 2026-10-31 审计 H-4：删文件之前必须先立墓碑（forgotten.add），否则删除之后晚到的 saveRecord
+  // 会走 load→save 把文件重新创建出来，归档白做。
+  assert.match(source, /removeSession: \(id: string\) => \{[\s\S]{0,400}?forgotten\.add\(id\)[\s\S]{0,400}?store\.remove\(id\)/, '删除必须走已有的 store.remove，且先立墓碑');
   assert.match(source, /store\.listSessionIds\(\)/, '枚举必须来自我们自己的存储目录');
   // 不硬造归档事件监听
   assert.equal(/ctx\.on\(['"]archive/.test(source), false, '不得硬造不存在的归档事件监听');

@@ -28,6 +28,14 @@ type ClientPluginOptions = {
      */
     occupancyRetryDelayMs?: number;
     /**
+     * 「占用待补」最多自动补几次（默认 2 = 首补 + 一次重试）。
+     *
+     * 审计 2026-10-31：这里一直写着「只补一次」，实现却是每 3 秒无限轮询 ——
+     * 而宿主对**空会话**（还没有主 agent 消息）同样返回 occupancyPending=true，
+     * 于是新建一个空对话、打开浮窗，/state 会被无限每 3 秒打一次。加硬上限。
+     */
+    occupancyRetryMax?: number;
+    /**
      * 「更早的历史 / 展开单条记录」这两条读路径的等待上限（毫秒）。默认 10 秒。
      *
      * 与 stateTimeoutMs 同一个理由：把"永远转圈"这条路径压到几十毫秒，才能在单测里真触发。

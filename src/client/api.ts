@@ -87,7 +87,11 @@ async function readJsonResponse(response: Response, url: string): Promise<unknow
   if (!text.trim()) return {};
   try { return JSON.parse(text); }
   catch (error) {
-    throw new AssistantApiError('Invalid JSON response from ' + url + ': ' + text.slice(0, 512), { code: 'JSON_PARSE_FAILED', status: response.status, url, raw: text.slice(0, 4096) });
+    // 认证中间件 / 代理的错误页返回的是 HTML：别把原文塞进用户界面。
+    if (text.trim().slice(0, 1) === '<') {
+      throw new AssistantApiError('接口返回的是一个网页而不是数据（HTTP ' + response.status + '）—— 多半是登录页或代理的错误页。刷新页面重新登录后再试。', { code: 'HTML_RESPONSE', status: response.status, url, raw: text.slice(0, 4096) });
+    }
+    throw new AssistantApiError('接口返回的内容无法解析（HTTP ' + response.status + '）。可以重试一次；一直这样请刷新页面。', { code: 'JSON_PARSE_FAILED', status: response.status, url, raw: text.slice(0, 4096) });
   }
 }
 
@@ -96,7 +100,12 @@ async function json<T>(url: string, init?: RequestInit): Promise<ApiEnvelope<T>>
   try { response = await fetch(url, { credentials: 'same-origin', ...init }); }
   catch (error) {
     if (error instanceof AssistantApiError) throw error;
-    throw new AssistantApiError('Network request failed for ' + url + ': ' + (error instanceof Error ? error.message : String(error)), { code: 'NETWORK_ERROR', url, raw: error });
+    throw new AssistantApiError('连不上本地服务（' + url + '）。宿主可能正在重启或已经退出，稍等一下再试。', { code: 'NETWORK_ERROR', url, raw: error });
+  }
+  // 401/403 是「登录态没了」，不是「接口返回了坏 JSON」：先按状态码给出可操作的中文，
+  // 否则用户看到的是 Invalid JSON response ... <html>login</html> 这种英文 + HTML 片段。
+  if (response.status === 401 || response.status === 403) {
+    throw new AssistantApiError('登录状态已失效（HTTP ' + response.status + '）。刷新页面重新登录后再试。', { code: 'UNAUTHORIZED', status: response.status, url });
   }
   const body = await readJsonResponse(response, url);
   const info = errorInfo(body);
@@ -129,7 +138,7 @@ async function stream(url: string, expectedSessionId: string, requestBody: unkno
     const info = errorInfo(body);
     throw new AssistantApiError(info?.message || ('SSE request failed (' + response.status + ') at ' + url), { code: info?.code ?? 'HTTP_ERROR', status: response.status, url, raw: body, retryable: info?.retryable });
   }
-  if (!response.body) throw new AssistantApiError('SSE response body unavailable at ' + url, { code: 'SSE_BODY_UNAVAILABLE', status: response.status, url });
+  if (!response.body) throw new AssistantApiError('没有拿到回答内容（响应体为空），请重试一次。', { code: 'SSE_BODY_UNAVAILABLE', status: response.status, url });
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -168,10 +177,10 @@ async function stream(url: string, expectedSessionId: string, requestBody: unkno
     if (buffer.trim()) consume(buffer);
   } catch (error) {
     if (error instanceof AssistantApiError) throw error;
-    if (signal?.aborted) throw new AssistantApiError('SSE request aborted at ' + url, { code: 'ABORTED', url, raw: error });
-    throw new AssistantApiError('SSE stream failed at ' + url + ': ' + (error instanceof Error ? error.message : String(error)), { code: 'SSE_STREAM_FAILED', url, raw: error });
+    if (signal?.aborted) throw new AssistantApiError('本次解释已中断。', { code: 'ABORTED', url, raw: error });
+    throw new AssistantApiError('读回答的时候连接断了：' + (error instanceof Error ? error.message : String(error)) + '。上面已经收到的内容仍然保留，可以重试一次。', { code: 'SSE_STREAM_FAILED', url, raw: error });
   } finally { reader.releaseLock(); }
-  if (!terminal) throw new AssistantApiError('SSE stream ended without a terminal event at ' + url, { code: 'SSE_TERMINAL_MISSING', url, raw: buffer.slice(0, 4096) });
+  if (!terminal) throw new AssistantApiError('连接在回答结束前断开了（网络或代理中途掐断）。已经收到的内容保留在上面，可以重试一次。', { code: 'SSE_TERMINAL_MISSING', url, raw: buffer.slice(0, 4096) });
 }
 
 export function createAssistantApi(base = '/api/explain-assistant'): AssistantApi {
