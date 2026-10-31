@@ -1,0 +1,38 @@
+/**
+ * 忙碌态的**门控**：延迟出现 + 最短停留。
+ *
+ * ── 为什么不能只写 CSS ──────────────────────────────────────────────
+ * 入口按钮的忙碌态（"/state 还没回来"）在正常宿主下只持续几十毫秒。
+ * 如果一进入忙碌就把它画出来，用户看到的是"闪一下"——而这一轮用户已经为三处
+ * 类似的"闪"（生成完闪一下、停止突然闪出、切会话闪跳）提过要求，不能在这里再犯。
+ *
+ * 两条阈值：
+ * · 延迟 150ms 出现：40ms 就回来的 /state 全程什么都不画；
+ * · 出现后至少留 300ms：避免"刚画出来就被撤掉"，那比不画还糟。
+ *
+ * 用 setTimeout 而不是 `animation-delay`：CSS 的延迟**无法取消**，
+ * 状态在延迟期内翻回去时，动画仍会在之后自己跑起来。
+ *
+ * 计时器可注入 → 阈值与边界都能单测（见 tests/header-icon.test.mjs）。
+ */
+export declare const BUSY_APPEAR_DELAY_MS = 150;
+export declare const BUSY_MIN_VISIBLE_MS = 300;
+export interface BusyTimers {
+    setTimeout(handler: () => void, ms: number): unknown;
+    clearTimeout(handle: any): void;
+    /** 可注入的时钟（测试用）；缺省 Date.now。 */
+    now?(): number;
+}
+export interface BusyGate {
+    /** 目标状态（真实的"是否在等 /state"）。 */
+    set(wanted: boolean): void;
+    /** 卸载：清掉所有计时器，不再回调。 */
+    dispose(): void;
+    /** 当前**画面上**是否显示忙碌态。 */
+    readonly visible: boolean;
+}
+/**
+ * @param timers 计时器（浏览器里就是 setTimeout / clearTimeout）
+ * @param onChange 可见性翻转时的回调（只在真的翻转时调用）
+ */
+export declare function createBusyGate(timers: BusyTimers, onChange: (visible: boolean) => void): BusyGate;

@@ -1318,3 +1318,80 @@ html[data-ea-selecting] [data-tool]:hover{
 .ea-error-enter{animation:ea-error-in 220ms cubic-bezier(.2,.85,.25,1) both}
 @media (prefers-reduced-motion: reduce){.ea-error-enter{animation:none}}
 
+
+/* ---------- 入口按钮（宿主会话头部右上角那个） ----------
+   用户 2026-10-31：「这个图标太丑，改改，样式和动画简单精致舒适，动画顺滑优美」。
+
+   旧版按钮里是一个**文字字符** "?"：字形、字重、基线全由宿主字体决定，30px 的方框里
+   又粗又偏，和隔壁 16px 细线图标（↗ / ⋯ / ▯）根本不是一套语言。
+   新版是 16×16 自绘线性图标（圆角气泡 + 两行短横线 + 左下小尾巴），三层常驻挂载
+   （气泡 / 忙碌弧 / 未读点）；状态切换只改按钮上的 data-unread / data-busy，
+   这里做透明度交叉淡入 —— 不换节点，就不会有"抖一下"。
+
+   为什么 hover/press **不**用 transform: scale：
+   1px 描边缩到 0.94，抗锯齿会把它摊成 1.06px 的灰边，16px 图标上就是"发脏"。
+   所以这里只动 color / opacity：不重排、不重算几何，描边也不发虚。 */
+/* 按钮本体也要自己画：宿主没有给 header 插槽里的 <button> 任何样式，
+   之前它就是一坨**浏览器默认外观**（浅灰底 + 2px 边框）——那才是"丑"的另一半。
+   这里按宿主 header 图标的语言重画：透明底、无边框、28×28、圆角 6、hover 淡底。 */
+.ea-hbtn-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:28px;height:28px;padding:0;margin:0;
+  border:0;border-radius:var(--dsw-radius-sm,6px);
+  background:transparent;color:inherit;font:inherit;cursor:pointer;
+  -webkit-appearance:none;appearance:none;
+  transition:background-color 140ms cubic-bezier(.33,0,.2,1),color 140ms cubic-bezier(.33,0,.2,1);
+}
+.ea-hbtn-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.14))}
+.ea-hbtn-btn:active{background:var(--dsw-alias-interactive-bg-hover-solid,rgba(127,127,127,.22))}
+.ea-hbtn-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:1px;border-radius:var(--dsw-radius-sm,6px)}
+.ea-hbtn{
+  position:relative;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:16px;
+  height:16px;
+  line-height:0;
+  color:inherit;
+}
+.ea-hbtn>svg{display:block;width:16px;height:16px;overflow:visible}
+.ea-hbtn-glyph{transition:color 140ms cubic-bezier(.33,0,.2,1),opacity 120ms cubic-bezier(.33,0,.2,1)}
+.ea-hbtn-btn:hover .ea-hbtn-glyph{color:var(--dsw-alias-label-primary,inherit)}
+.ea-hbtn-btn:active .ea-hbtn-glyph{opacity:.55;transition-duration:90ms}
+/* 忙碌弧：与气泡同一个墨迹框（r=6 → 12×12），切换时重心不移动。
+   旋转只在忙碌时跑（不忙时它藏着，没必要让合成器一直转）。 */
+.ea-hbtn-ring{position:absolute;inset:0;opacity:0;transition:opacity 160ms cubic-bezier(.33,0,.2,1)}
+.ea-hbtn-ring>circle{
+  transform-box:fill-box;
+  transform-origin:center;
+  transition:stroke-dashoffset 260ms ease-out;
+}
+.ea-hbtn-btn[data-busy="true"] .ea-hbtn-glyph{opacity:0}
+.ea-hbtn-btn[data-busy="true"] .ea-hbtn-ring{opacity:1;transition-delay:60ms}
+.ea-hbtn-btn[data-busy="true"] .ea-hbtn-ring>circle{stroke-dashoffset:0;animation:ea-hbtn-spin 900ms linear infinite}
+/* 从 12 点方向起转：默认的 circle 路径从 3 点开始，直接转的话第一帧像一道"笑"，
+   从 -90° 起就一眼是 loading。 */
+@keyframes ea-hbtn-spin{from{transform:rotate(-90deg)}to{transform:rotate(270deg)}}
+/* 未读点：绝对定位、不参与布局（否则每次未读翻转按钮内容都会重排一下）。
+   位置在图标墨迹框（2–14）之外，留 0.5px 空隙，不压住气泡的圆角。 */
+.ea-hbtn-dot{
+  position:absolute;
+  top:-3px;
+  right:-3px;
+  width:4.5px;
+  height:4.5px;
+  border-radius:999px;
+  background:currentColor;
+  opacity:0;
+  transform:scale(.3);
+  pointer-events:none;
+  transition:opacity 140ms ease-out,transform 200ms cubic-bezier(.2,.9,.3,1.15);
+}
+.ea-hbtn-btn[data-unread="true"] .ea-hbtn-dot{opacity:1;transform:scale(1)}
+@media (prefers-reduced-motion:reduce){
+  /* 减少动态偏好下不做缩放/旋转，但**状态照旧可见**：未读点仍然出现，忙碌弧仍然在。 */
+  .ea-hbtn-glyph,.ea-hbtn-ring,.ea-hbtn-dot{transition:none}
+  .ea-hbtn-btn[data-busy="true"] .ea-hbtn-ring>circle{animation:none}
+  .ea-hbtn-dot{transform:none}
+}

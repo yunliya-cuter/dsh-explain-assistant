@@ -298,7 +298,10 @@ test('清除未读 接线: 宿主注册 mark-read 路由，客户端在 open() �
   const markAt = clientSource.indexOf('api.markRead(sessionId)');
   // 刷新那一行现在带 { keepCleared: true }（抑制「打开」引发的这次刷新把 true 写回来），
   // 所以这里匹配 refreshState(sessionId 之后的内容，不写死参数。
-  const refreshAt = clientSource.indexOf('refreshState(sessionId, { keepCleared: true })');
+  //
+  // 从 markAt **之后**开始找：文件里还有别处也调 refreshState(sessionId, { keepCleared: true })
+  // （例如「占用待补」的自动补取），indexOf 从头找会指到那一处，断言的"先后"就变成假的。
+  const refreshAt = clientSource.indexOf('refreshState(sessionId, { keepCleared: true })', markAt);
   assert.ok(markAt > 0, '客户端必须真的调用 markRead');
   assert.ok(refreshAt > markAt, '必须先让宿主标记已读、再刷新（否则刷新可能把 true 写回来）');
   assert.match(clientSource, /options\?\.keepCleared === true && payload\.unread === true/,

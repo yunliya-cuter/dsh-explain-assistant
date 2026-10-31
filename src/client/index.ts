@@ -17,6 +17,14 @@ type ClientPluginOptions = {
    */
   stateTimeoutMs?: number;
   /**
+   * 「占用待补」时自动重取 /state 的延迟（毫秒）。默认 3 秒。
+   *
+   * 宿主那边主 agent 上下文的读取有 500ms 截止时间：超时那次不带占用（occupancyPending=true），
+   * 后台继续读。等它读完，客户端在这里自动补一次 —— 用户不需要再点一次。
+   * 做成可覆盖的唯一理由是可验证性：单测里压到 0 才能真触发。
+   */
+  occupancyRetryDelayMs?: number;
+  /**
    * 「更早的历史 / 展开单条记录」这两条读路径的等待上限（毫秒）。默认 10 秒。
    *
    * 与 stateTimeoutMs 同一个理由：把"永远转圈"这条路径压到几十毫秒，才能在单测里真触发。
@@ -422,6 +430,24 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
     return refreshState(target);
   };
 
+  /**
+   * 「占用待补」的自动补取（见 ClientPluginOptions.occupancyRetryDelayMs）。
+   *
+   * 只补一次：宿主那次后台读完成之后缓存是热的，这一次是毫秒级的；再拿不到就等用户下次打开。
+   * 三个守卫缺一不可 —— 已卸载 / 浮窗已经关了 / 其实已经有占用（别的路径补上了），都不该再打请求。
+   */
+  const occupancyRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const scheduleOccupancyRefresh = (sessionId: string): void => {
+    if (disposed || occupancyRefreshTimers.has(sessionId)) return;
+    const timer = setTimeout(() => {
+      occupancyRefreshTimers.delete(sessionId);
+      const state = assistantRegistry.get(sessionId);
+      if (disposed || !state?.open || state.occupancyKnown) return;
+      void refreshState(sessionId, { keepCleared: true }).catch(() => undefined);
+    }, options.occupancyRetryDelayMs ?? 3000);
+    occupancyRefreshTimers.set(sessionId, timer);
+  };
+
   const refreshState = (sessionId: string, options?: { keepCleared?: boolean }): Promise<void> => {
     const controller = new AbortController();
     const task = withStateTimeout(callApi(() => api.state(sessionId, controller.signal)), () => controller.abort()).then(result => {
@@ -550,6 +576,8 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
         stateError: undefined,
       } as Partial<AssistantClientState>;
       assistantRegistry.update(sessionId, patch);
+      // 宿主说「这次没算占用」（主 agent 上下文没赶上 500ms 截止）→ 过一会儿自动补一次。
+      if (payload.occupancyPending === true && !active.has(sessionId)) scheduleOccupancyRefresh(sessionId);
     }).catch(error => {
       // 失败**也是**一次结局：置 stateReady 并落明确的中文错误（见 applyStateFailure）。
       // 旧写法只写 error/phase，没有就绪标记 —— 界面无从区分「还在加载」与「加载失败」，
@@ -951,6 +979,8 @@ export function createClientPlugin(options: ClientPluginOptions = {}) {
     // 待写的浮窗位置必须**当场冲刷**：dispose 之后定时器不会再跑，
     // 用户「拖完立刻关掉页面/切走」的那一次位置就会静默丢掉。
     for (const sessionId of [...pendingGeometry.keys()]) flushGeometry(sessionId);
+    for (const timer of occupancyRefreshTimers.values()) clearTimeout(timer);
+    occupancyRefreshTimers.clear();
     assistantRegistry.sessions().forEach(state => { if (state.open) assistantRegistry.close(state.sessionId); });
     assistantRegistry.setCurrent(undefined);
   };

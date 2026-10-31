@@ -66,7 +66,7 @@ test('冷启动徽标: 宿主 unread=true 时，不打开浮窗也必须变成�
 
     const unread = plugin.registry.get('cold-1').unread;
     assert.equal(unread, true, '冷启动预取后必须拿到宿主未读');
-    assert.equal(badge.headerButtonText(unread), '? ·', '按钮必须显示「? ·」，不需要先点开浮窗');
+    assert.equal(badge.headerButtonState(unread, false).unread, true, '按钮必须挂上未读徽标，不需要先点开浮窗');
     assert.equal(badge.headerButtonTitle(unread), '解释小助手有新内容');
   } finally { plugin.dispose(); }
 });
@@ -74,14 +74,14 @@ test('冷启动徽标: 宿主 unread=true 时，不打开浮窗也必须变成�
 test('冷启动徽标 真链路: 预取 → 订阅触发 → 按钮文案跟着变', async () => {
   const api = fakeApi(true);
   const plugin = client.createClientPlugin({ api, session: { id: 'cold-2' } });
-  let text = '?';
+  let unread = badge.headerButtonState(plugin.registry.get('cold-2').unread, false).unread;
   const stop = badge.watchUnread(plugin.registry, 'cold-2', () => {
-    text = badge.headerButtonText(plugin.registry.get('cold-2').unread);
+    unread = badge.headerButtonState(plugin.registry.get('cold-2').unread, false).unread;
   });
   try {
-    assert.equal(text, '?', '前置：还没有未读');
+    assert.equal(unread, false, '前置：还没有未读');
     await plugin.primeUnread('cold-2');           // 冷启动预取
-    assert.equal(text, '? ·', '预取写入 registry 后，订阅必须通知按钮重渲染（整条链都要通）');
+    assert.equal(unread, true, '预取写入 registry 后，订阅必须通知按钮重渲染（整条链都要通）');
   } finally { stop(); plugin.dispose(); }
 });
 
@@ -139,7 +139,7 @@ test('冷启动徽标 降级: /state 失败时显示「?」且不抛、不留错
     await assert.doesNotReject(() => plugin.primeUnread('fail-1'), '预取失败不得抛给调用方');
     const state = plugin.registry.get('fail-1');
     assert.equal(state.unread, false, '拿不到就保持「无未读」→ 按钮显示「?」');
-    assert.equal(badge.headerButtonText(state.unread), '?', '降级显示「?」');
+    assert.equal(badge.headerButtonState(state.unread, false).unread, false, '降级为不显示徽标');
     assert.equal(state.error, undefined, '预取失败不得往界面写错误态（它只是锦上添花）');
   } finally { plugin.dispose(); }
 });

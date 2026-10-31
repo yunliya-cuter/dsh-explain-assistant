@@ -196,8 +196,15 @@ test('t4 判据4(唯一风险): 慢宿主下点击有浮窗之外的忙碌反馈
     header = renderComponent(env.react, env.headerComponent, { sessionId: 'slow' });
     runEffects(header.effects, cleanups);
     const button = header.tree;
-    const label = String(button.children?.join?.('') ?? button.children ?? '');
-    assert.match(label, /…/, '慢宿主下按钮必须立刻给出可见的忙碌反馈（浮窗之外），实际=' + JSON.stringify(label));
+    // 忙碌反馈的载体从"文字 ? …"换成了图标上的三层：气泡 / 忙碌弧 / 未读点。
+    // 这里断言**层在**（不是文字），以及在忙的这一刻 data-opening 必须为 true
+    // ——"延迟 150ms 才把弧画出来"的时机由 busy-gate 单测覆盖，不在这里用假时钟模拟。
+    const icon = button.children?.[0];
+    assert.equal(icon?.type, 'span', '忙碌反馈必须挂在图标容器上（元素树，不是 DOM 节点）');
+    assert.equal(icon.props?.className, 'ea-hbtn');
+    const ring = icon.children?.[1];
+    assert.equal(ring?.props?.className, 'ea-hbtn-ring', '忙碌弧必须常驻，状态切换时才有东西可画');
+    assert.ok(ring.children?.some?.(c => c.type === 'circle'), '缺少忙碌弧的圆：状态切换时没有可画的东西');
     assert.equal(button.props['data-opening'], 'true', '忙碌态必须体现在按钮上（可被页面实测采到）');
     assert.equal(button.props['aria-busy'], 'true', '读屏也要能知道「正在打开」');
     // 「忙碌态不得追加请求」这一条要用**前后不变**表达，而不是一个绝对值：

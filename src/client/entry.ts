@@ -5,8 +5,9 @@ import { attachSelection } from './selection.js';
 import { syncPickMarks } from './pick-marks.js';
 import { createArchiveWatcher } from './archive-watch.js';
 import { beginExit } from './exit-anim.js';
-import { headerButtonText, headerButtonTitle, watchUnread } from './header-badge.js';
-import { shouldMountOverlay, isOpening, watchOpening, openingLabel, openingTitle } from './open-gate.js';
+import { headerButtonState, createHeaderContent, watchUnread } from './header-badge.js';
+import { createBusyGate } from './busy-gate.js';
+import { shouldMountOverlay, isOpening, watchOpening, openingTitle } from './open-gate.js';
 import css from './styles.css';
 
 let React: any = null;
@@ -105,12 +106,45 @@ export function apply(ctx: any): void {
       }, [id]);
       const state = id ? registry.get(id) : undefined;
       const unread = state?.unread === true;
+      /**
+       * 按钮内容（气泡 / 忙碌弧 / 未读点三层）是**每次渲染重新产出的一棵元素树**。
+       *
+       * 为什么不是「建一次真 DOM 节点、当 children 传给 React」：真实 React 不接受
+       * DOM 节点当子节点（会当成普通对象，渲染不出来）——第一版就是这么写的，
+       * 页面上表现为「按钮还在、图标没了」。元素树由 React 按 type 复用真实 DOM 节点，
+       * 所以重渲染既不换节点、也不打断正在跑的过渡。
+      /**
+       * 忙碌态要**延迟出现、出现后至少停留一会儿**（阈值在 busy-gate.ts）。
+       * 正常宿主 /state 几十毫秒就回来 —— 那就一个像素都不画，避免"闪一下"。
+       */
+      const [busy, setBusy] = React.useState(false);
+      const gateRef = React.useRef(null);
+      const ensureGate = () => {
+        if (!gateRef.current) gateRef.current = createBusyGate({
+          // 用箭头包一层：直接传 window.setTimeout 的引用，被当成对象方法调用时
+          // this 会变成那个普通对象，浏览器抛 Illegal invocation（见 busy-gate.ts 的说明）。
+          setTimeout: (handler, ms) => setTimeout(handler, ms),
+          clearTimeout: handle => clearTimeout(handle),
+        }, setBusy);
+        return gateRef.current;
+      };
+      ensureGate();
+      React.useEffect(() => {
+        ensureGate().set(opening);
+      }, [opening]);
+      // 卸载时清计时器并把门控置空：StrictMode 下效果会"卸载再挂载"，
+      // 若不置空，第二次挂载拿到的是一个已 dispose 的门控，忙碌态就永远不出现了。
+      React.useEffect(() => () => { gateRef.current?.dispose(); gateRef.current = null; }, []);
+      const view = headerButtonState(unread, busy);
       return h('button', {
         type: 'button',
-        'aria-label': '打开解释小助手',
+        className: 'ea-hbtn-btn',
+        'aria-label': view.ariaLabel,
         'aria-busy': opening ? 'true' : undefined,
         'data-opening': opening ? 'true' : undefined,
-        title: opening ? openingTitle() : headerButtonTitle(unread),
+        'data-unread': view.unread ? 'true' : 'false',
+        'data-busy': view.busy ? 'true' : 'false',
+        title: opening ? openingTitle() : view.title,
         onClick: () => {
           if (!id) return;
           selectedId = id;
@@ -118,7 +152,7 @@ export function apply(ctx: any): void {
           plugin.setSession(id, props?.cwd);
           plugin.open();
         },
-      }, headerButtonText(unread) + openingLabel(opening));
+      }, createHeaderContent(h));
     };
 
     const h = React.createElement;

@@ -28,16 +28,6 @@ export function isOpening(state: { open?: boolean; stateReady?: boolean } | unde
   return state?.open === true && state?.stateReady === false;
 }
 
-/**
- * 忙碌态在按钮上长什么样。
- *
- * 用「…」而不是转圈字符：入口按钮本身很窄，追加的必须是一眼能看懂、
- * 且不会被误读成「按钮坏了」的符号。title 同步说明正在做什么。
- */
-export function openingLabel(opening: boolean): string {
-  return opening ? ' …' : '';
-}
-
 export function openingTitle(): string {
   return '正在打开解释小助手，正在读取当前状态…';
 }

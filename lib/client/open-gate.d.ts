@@ -27,13 +27,6 @@ export declare function isOpening(state: {
     open?: boolean;
     stateReady?: boolean;
 } | undefined): boolean;
-/**
- * 忙碌态在按钮上长什么样。
- *
- * 用「…」而不是转圈字符：入口按钮本身很窄，追加的必须是一眼能看懂、
- * 且不会被误读成「按钮坏了」的符号。title 同步说明正在做什么。
- */
-export declare function openingLabel(opening: boolean): string;
 export declare function openingTitle(): string;
 type OverlayVisibilityInput = {
     /** 用户是否已经点开了浮窗（意图）。 */

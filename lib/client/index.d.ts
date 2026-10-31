@@ -20,6 +20,14 @@ type ClientPluginOptions = {
      */
     stateTimeoutMs?: number;
     /**
+     * 「占用待补」时自动重取 /state 的延迟（毫秒）。默认 3 秒。
+     *
+     * 宿主那边主 agent 上下文的读取有 500ms 截止时间：超时那次不带占用（occupancyPending=true），
+     * 后台继续读。等它读完，客户端在这里自动补一次 —— 用户不需要再点一次。
+     * 做成可覆盖的唯一理由是可验证性：单测里压到 0 才能真触发。
+     */
+    occupancyRetryDelayMs?: number;
+    /**
      * 「更早的历史 / 展开单条记录」这两条读路径的等待上限（毫秒）。默认 10 秒。
      *
      * 与 stateTimeoutMs 同一个理由：把"永远转圈"这条路径压到几十毫秒，才能在单测里真触发。
