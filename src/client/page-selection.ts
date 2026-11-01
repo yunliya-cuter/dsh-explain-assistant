@@ -47,11 +47,12 @@ const PAD_X = 1.5
 const PAD_Y = 1.5
 const SNAP_EPS = 0.05
 /**
- * 一屏最多画多少个高亮块。每个块两个弹簧，成本可以忽略；
+ * 最多画多少个高亮块。每个块两个弹簧，成本可以忽略；
  * 但一次 Ctrl+A 就能产生几百个矩形，所以要有上限 —— 超过就交还原生选区。
- * 64 是"长回答整段全选"的实测上界（约 30 行、含行内代码碎片）。
+ * 收集窗口上下各放宽一屏（滚进来的行要提前画好），块数因此按 3 屏估：
+ * 440px 正文区 × 3 ≈ 47 行，160 是留足余量的上界。
  */
-const MAX_BLOCKS = 64
+const MAX_BLOCKS = 160
 
 function round(n: number): number {
   return Math.round(n * 100) / 100
@@ -372,11 +373,16 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
     for (const range of ranges) {
       const clip = clipRectOf(range.startContainer)
       if (!clip) continue
+      /* 上下各放宽一屏：块挂在滚动容器里，滚进来的行**已经画好了**。
+         同时不再按可见区裁剪矩形 —— 容器会裁。手工裁的话贴边那一行的高度
+         会随着滚动每帧被改一次，上边界附近看起来就是橙框在抖。 */
+      const padY = clip.bottom - clip.top
+      const win: ClipRect = { left: clip.left, top: clip.top - padY, right: clip.right, bottom: clip.bottom + padY, el: clip.el }
       const scope = range.commonAncestorContainer
       const scopeEl = scope.nodeType === 1 ? (scope as Element) : scope.parentElement
       if (!scopeEl) continue
       const nodes: Text[] = []
-      collectVisibleText(scopeEl, clip, nodes, budget, range)
+      collectVisibleText(scopeEl, win, nodes, budget, range)
       for (const text of nodes) {
         const parent = text.parentElement
         if (parent?.closest?.('.ea-field, .ea-page-sel-layer, .ea-model-search')) continue
@@ -387,10 +393,10 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
         const list = part.getClientRects()
         for (const r of Array.from(list)) {
           if (r.width <= 0 || r.height <= 0) continue
-          const left = Math.max(r.left - PAD_X, clip.left)
-          const top = Math.max(r.top - PAD_Y, clip.top)
-          const right = Math.min(r.right + PAD_X, clip.right)
-          const bottom = Math.min(r.bottom + PAD_Y, clip.bottom)
+          const left = Math.max(r.left - PAD_X, win.left)
+          const top = Math.max(r.top - PAD_Y, win.top)
+          const right = Math.min(r.right + PAD_X, win.right)
+          const bottom = Math.min(r.bottom + PAD_Y, win.bottom)
           if (right - left <= 0.5 || bottom - top <= 0.5) continue
           if (coveredBy(out, { left, top, right, bottom } as DOMRect)) continue
           out.push({ left, width: right - left, top, height: bottom - top })
