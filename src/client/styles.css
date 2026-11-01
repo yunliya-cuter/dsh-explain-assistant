@@ -829,7 +829,9 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
   border-radius:4px;
   background:var(--ea-selection,rgba(47,107,255,.28));
   opacity:0;
-  will-change:left,width,opacity;
+  /* 位置走 transform（见 page-selection.ts frameBlock）：left/top 是布局属性，
+     每帧改一次就是一次布局，块多时单帧要好几毫秒。 */
+  will-change:transform,width,opacity;
 }
 /* 自绘高亮在场时，把原生选中底色关掉（只关底色，字色保持原样，不会变成白字） */
 .dsh-explain-assistant-overlay[data-page-selection="on"] ::selection{background:transparent;color:inherit}
