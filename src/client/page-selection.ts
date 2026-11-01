@@ -96,6 +96,11 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
   layer.setAttribute('aria-hidden', 'true')
   root.insertBefore(layer, root.firstChild)
 
+  /** 高亮层当前挂在哪个滚动容器里（内容坐标；浏览器滚内容时块跟着同一次合成一起走） */
+  let host: HTMLElement | null = null
+  let hostPrevPos = ''
+  let hostPatched = false
+
   const blocks: Block[] = []
   let rafId = 0
   let lastTime = 0
@@ -113,6 +118,29 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
   let overflowed = false
   const engineOk = typeof document.createRange === 'function'
   let enabled = engineOk && !reducedMotion()
+
+  /**
+   * 把高亮层挂进**真正滚动的那个容器**。
+   *
+   * 为什么必须挂进去：层如果是相对浮窗定位的（inset:0），内容滚动时层不动，
+   * 只能等主线程收到 scroll 再把块挪过去 —— 永远慢一帧以上，看起来就是"跟不上"。
+   * 挂进滚动容器后，块和文字同属一份滚动内容，浏览器滚一次两者一起走，零延迟。
+   */
+  function ensureHost(el: Element | null): void {
+    const target = (el as HTMLElement) || root
+    if (host === target) return
+    if (host && hostPatched) {
+      try { host.style.position = hostPrevPos } catch { /* 忽略 */ }
+      hostPatched = false
+      hostPrevPos = ''
+    }
+    try {
+      const cs = getComputedStyle(target)
+      if (cs.position === 'static') { hostPrevPos = target.style.position; target.style.position = 'relative'; hostPatched = true }
+      target.appendChild(layer)
+      host = target
+    } catch { /* 挂不上就留在原地 */ }
+  }
 
   function createBlock(): Block {
     const node = document.createElement('div')
@@ -141,12 +169,13 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
    * 之上，最上面一个 y=-39）。只认「内容确实超出」的祖先，避免被圆角 overflow:hidden
    * 的装饰层误裁。
    */
-  function clipRectOf(node: Node): { left: number; top: number; right: number; bottom: number } | null {
+  function clipRectOf(node: Node): { left: number; top: number; right: number; bottom: number; el: Element | null } | null {
     let left = 0
     let top = 0
     let right = window.innerWidth || document.documentElement.clientWidth || 0
     let bottom = window.innerHeight || document.documentElement.clientHeight || 0
     let el: Element | null = node.nodeType === 1 ? (node as Element) : node.parentElement
+    let owner: Element | null = null
     let guard = 0
     while (el && el !== document.body && el !== document.documentElement && guard++ < 40) {
       const cs = getComputedStyle(el)
@@ -160,15 +189,16 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
         top = Math.max(top, r.top + el.clientTop)
         right = Math.min(right, r.left + el.clientLeft + el.clientWidth)
         bottom = Math.min(bottom, r.top + el.clientTop + el.clientHeight)
+        owner = el
         break
       }
       el = el.parentElement
     }
     if (right - left < 2 || bottom - top < 2) return null
-    return { left, top, right, bottom }
+    return { left, top, right, bottom, el: owner }
   }
 
-  type ClipRect = { left: number; top: number; right: number; bottom: number }
+  type ClipRect = { left: number; top: number; right: number; bottom: number; el?: Element | null }
 
   /**
    * 只收集落在可见区里的文本节点。
@@ -412,6 +442,12 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
    */
   function measure(): void {
     const ranges = selectionScope()
+    if (ranges && ranges.length) {
+      const c0 = clipRectOf(ranges[0].startContainer)
+      ensureHost(c0 && c0.el ? c0.el : root)
+    } else {
+      ensureHost(root)
+    }
     if (!ranges) {
       setNative(false)
       active = false

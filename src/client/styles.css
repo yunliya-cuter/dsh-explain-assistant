@@ -819,10 +819,11 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
    于是它只染色底板，不覆盖任何字形（盖住字会让选中的字看起来变粗）。
    整层 pointer-events:none，拖选/双击/Ctrl+A/复制一概不受影响。 */
 .ea-page-sel-layer{
-  position:absolute;inset:0;z-index:-1;
-  pointer-events:none;overflow:hidden;
-  border-radius:inherit;
-  contain:layout paint;
+  /* 0×0 的坐标系原点：真正的裁剪交给挂载它的滚动容器（overflow 会裁），
+     这里**不能**再写 inset:0 / overflow:hidden —— 那样层会被裁成 0×0，块全都不见。 */
+  position:absolute;left:0;top:0;width:0;height:0;
+  z-index:-1;
+  pointer-events:none;overflow:visible;
 }
 .ea-page-sel{
   position:absolute;left:0;top:0;width:0;height:0;
