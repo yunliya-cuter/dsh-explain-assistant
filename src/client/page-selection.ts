@@ -105,6 +105,8 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
   let dirty = true
   /** 上一次量出来的矩形（视口坐标），tick 每帧只拿它推进弹簧 */
   let rectsCache: Rect[] | null = null
+  /** 下一次 tick 要不要"瞬时落位"（滚动/缩放触发时为 true） */
+  let pendingSnap = false
   /** 量不出/画不了 → 交还原生选中色 */
   let native = false
   /** 这一趟扫描是不是撞上了 MAX_BLOCKS */
@@ -369,11 +371,15 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
     return out.length ? out : null
   }
 
-  function frameBlock(block: Block, dt: number, rect: Rect | null, origin: DOMRect): boolean {
+  function frameBlock(block: Block, dt: number, rect: Rect | null, origin: DOMRect, snap: boolean): boolean {
     let moving = false
     if (rect) {
       block.alive = true
-      if (block.opacity.x < SNAP_EPS) {
+      /* 视口刚动过（滚动/缩放）：直接落位，不做弹簧。
+         可见区的矩形集合每滚一步整体换一批，按索引匹配的块会拿到"另一行"的目标值，
+         弹簧一过渡就成了"橙框自己会动"（台架实测：滚动中 16 个块全部偏离、17 行没人盖）。 */
+      if (snap) { block.left.x = rect.left; block.left.v = 0; block.width.x = rect.width; block.width.v = 0 }
+      else if (block.opacity.x < SNAP_EPS) {
         block.left.x = rect.left
         block.left.v = 0
         block.width.x = rect.width
@@ -433,14 +439,15 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
     if (dead) return
     const dt = clamp((now - lastTime) / 1000, 0, cfg.maxDt)
     lastTime = now
-    if (dirty) { dirty = false; measure() }
+    let snapNow = false
+    if (dirty) { dirty = false; measure(); snapNow = pendingSnap; pendingSnap = false }
     const rects = rectsCache
     if (rects) ensureBlocks(rects.length)
     const origin = layer.getBoundingClientRect()
     let moving = false
     for (let i = 0; i < blocks.length; i++) {
       const rect = rects && i < rects.length ? rects[i] : null
-      if (frameBlock(blocks[i], dt, rect, origin)) moving = true
+      if (frameBlock(blocks[i], dt, rect, origin, snapNow)) moving = true
     }
     rafId = moving ? requestAnimationFrame(tick) : 0
   }
@@ -451,9 +458,11 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
     rafId = requestAnimationFrame(tick)
   }
 
-  function refresh(): void {
+  /** snap = 这次重算是"视口动了"引起的，块必须瞬时落位，不能过渡。 */
+  function refresh(snap = false): void {
     if (dead || !enabled) return
     dirty = true
+    if (snap) pendingSnap = true
     start()
   }
 
@@ -465,8 +474,8 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
   const onSelectionChange = () => refresh()
   const onPointerDown = () => { if (active) start() }
   const onPointerUp = () => refresh()
-  const onScroll = () => { refresh() }
-  const onViewportChange = () => refresh()
+  const onScroll = () => { refresh(true) }
+  const onViewportChange = () => { refresh(true) }
 
   const listeners: Array<[EventTarget, string, EventListener, boolean]> = [
     [document, 'selectionchange', onSelectionChange as EventListener, false],
