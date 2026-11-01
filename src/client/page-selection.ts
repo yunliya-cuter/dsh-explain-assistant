@@ -408,7 +408,12 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
       /* 视口刚动过（滚动/缩放）：直接落位，不做弹簧。
          可见区的矩形集合每滚一步整体换一批，按索引匹配的块会拿到"另一行"的目标值，
          弹簧一过渡就成了"橙框自己会动"（台架实测：滚动中 16 个块全部偏离、17 行没人盖）。 */
-      if (snap) { block.left.x = rect.left; block.left.v = 0; block.width.x = rect.width; block.width.v = 0 }
+      if (snap) {
+        /* 滚动中滚进来的行直接落位、满不透明：不做淡入，否则会看到"先空一块再变橙"。 */
+        block.left.x = rect.left; block.left.v = 0
+        block.width.x = rect.width; block.width.v = 0
+        if (block.opacity.x < 0.99) { block.opacity.x = 1; block.opacity.v = 0 }
+      }
       else if (block.opacity.x < SNAP_EPS) {
         block.left.x = rect.left
         block.left.v = 0
