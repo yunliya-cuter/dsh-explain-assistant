@@ -172,6 +172,14 @@ type OverlayContext = {
     liveTurn: HTMLElement;
     /** 当前这一问的问句气泡。 */
     liveQuestion: HTMLElement;
+    /**
+     * 流式期间「回到最新」那颗浮动按钮。
+     *
+     * 它挂在**正文滚动区里**（sticky + 负 margin，与历史的「回到最近」同一套），
+     * 不是 absolute 定位的独立层：绝对定位的后代会被算进滚动容器的 scrollHeight，
+     * 正是上一轮 warm-ui「能滚到空白」的根因；sticky 元素的负 margin 正好抵掉自己占的高度。
+     */
+    followJump: HTMLButtonElement;
     /** 历史窗口：只挂最近一段；记 id 而不是下标（宿主往前插页时下标会整体后移）。 */
     historyWindow?: HistoryWindowState;
     /** 上次渲染历史用的签名。没变就不重画 —— 流式期间每个分片都重画整段历史是纯浪费。 */

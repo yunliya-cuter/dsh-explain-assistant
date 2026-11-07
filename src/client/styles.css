@@ -703,8 +703,12 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
 /* 「回到最近」：往上翻过之后才出现，贴在可视区右下角。
    sticky 挂在按钮本身，再用负 margin 抵掉它占的高度 —— 这样它既固定在视野里，
    又不会把下面的内容推开。 */
-.ea-conv-jump-btn{position:sticky;bottom:10px;align-self:flex-end;margin-top:-44px;z-index:2;width:34px;height:34px;border-radius:50%;border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.14));background:var(--dsw-alias-button-floating-fill,var(--dsw-alias-bg-layer-2,#fff));color:var(--dsw-alias-label-primary,#111);box-shadow:var(--dsw-elevation-panel,0 3px 8px rgba(0,0,0,.12));cursor:pointer;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;transform:translateY(-6px)}
-.ea-conv-jump-btn:hover{background:var(--dsw-alias-interactive-bg-hover-solid,rgba(127,127,127,.16))}
+.ea-conv-jump-btn,.ea-body-jump{position:sticky;bottom:10px;align-self:flex-end;flex:0 0 auto;min-height:34px;margin-top:-44px;z-index:2;width:34px;height:34px;border-radius:50%;border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.14));background:var(--dsw-alias-button-floating-fill,var(--dsw-alias-bg-layer-2,#fff));color:var(--dsw-alias-label-primary,#111);box-shadow:var(--dsw-elevation-panel,0 3px 8px rgba(0,0,0,.12));cursor:pointer;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;transform:translateY(-6px)}
+.ea-conv-jump-btn:hover,.ea-body-jump:hover{background:var(--dsw-alias-interactive-bg-hover-solid,rgba(127,127,127,.16))}
+/* 流式期间那颗「回到最新」（见 overlay.tsx 的 followJump）：与上面同一颗按钮，
+   只是它挂在整个正文的末尾，所以永远贴在正文区右下角。
+   [hidden] 必须显式写：上面那条 display:flex 会盖掉浏览器默认的 [hidden]{display:none}。 */
+.ea-body-jump[hidden]{display:none}
 /* 当前这一问：与历史同一套样式，位置贴在输入框上方。 */
 .ea-conv-live{display:flex;flex-direction:column;min-width:0}
 .ea-conv-live[hidden]{display:none}

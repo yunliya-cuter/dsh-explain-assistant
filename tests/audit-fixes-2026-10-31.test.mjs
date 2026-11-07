@@ -10,7 +10,7 @@ import { fakeDom, moduleFromSource, FakeElement, waitFor } from './fixtures/runt
  *
  * 对应关系（编号沿用审计报告）：
  *   U6 发送位在忙时变成「停止」，点一下真的取消
- *   U1 贴底时自动跟随；问句顶到视野顶端就停；用户自己上滚也停
+ *   U1 贴底时自动跟随（2026-11-07 改：一跟到底，只有用户自己上滚才停）
  *   U2 属于「当前这一问」的失败原因贴到那一问下面，不再只挂在几十屏之上的顶部
  *   B3 压缩日志（kind:'compact'）不进历史（宿主下发 + 客户端渲染两层都要挡）
  *   U4 历史条数只数问答记录
@@ -68,7 +68,14 @@ test('U6 反例: 空闲时仍是「发送」，不会被误做成停止', async 
 });
 
 /* ================================================================== *
- * U1：流式跟随
+ * U1：流式跟随（2026-11-07 按用户实测重定契约）
+ *
+ * 用户原话：「小助手插件的内容生成时的自动跟随有点问题，不知道是bug还是设计的
+ * 不符合使用直觉」。实测根因有两条：
+ *   ① 旧规则「问句顶到正文区顶端就停」——正文区实测只有 348px 高，一屏之后
+ *      跟随就永久停住，而回答普遍 1300~2900 字（三到八屏）；
+ *   ② 那条规则**不可恢复**：用户滚回底部，下一帧又被同一条规则置成暂停。
+ * 新契约只有一条：**跟不跟，由用户是否贴着底决定**。
  * ================================================================== */
 
 /**
@@ -104,8 +111,6 @@ test('U1: 贴底时跟随（内容变长就跟到底）', async () => {
       body.scrollHeight = 2000;
       body.scrollTop = 1600;                       // 正好贴底：max = 2000 - 400
       plugin.registry.get = () => state;
-      // 换一问 → 先把这一问带进视野（贴底）
-      root.ownerDocument = undefined;
       const { updateOverlay } = await moduleFromSource('src/client/overlay.tsx');
       updateOverlay(root, { ...state, text: '第一段，多几个字' }, plugin);
       assert.equal(body.scrollTop, 1600, '贴底时必须自动跟到底（= scrollHeight - clientHeight）');
@@ -113,7 +118,7 @@ test('U1: 贴底时跟随（内容变长就跟到底）', async () => {
   } finally { dom.restore(); }
 });
 
-test('U1: 问句顶到视野顶端后停止跟随（用户要的「读得完」）', async () => {
+test('U1: 问句顶到视野顶端后仍然跟随（不再"一屏就永久停"）', async () => {
   const dom = fakeDom();
   try {
     const rect = { top: 120, height: 40 };
@@ -121,23 +126,23 @@ test('U1: 问句顶到视野顶端后停止跟随（用户要的「读得完」�
       const state = { ...base, phase: 'running', question: '它现在在干什么', text: '第一段' };
       const { root, plugin } = await render(state);
       const body = bodyOf(root);
+      const { updateOverlay } = await moduleFromSource('src/client/overlay.tsx');
       body.scrollHeight = 2000;
       body.scrollTop = 1600;
-      const { updateOverlay } = await moduleFromSource('src/client/overlay.tsx');
       updateOverlay(root, { ...state, text: '第一段' }, plugin);
       assert.equal(body.scrollTop, 1600, '先跟到底（= 2000 - 400）');
 
-      // 回答长到把问句顶出视野 → 从这一刻起不再拽
+      // 回答长到把问句顶出视野：旧版从这一帧起就永久停住（一屏就停、且恢复不了）
       rect.top = -30;
       body.scrollHeight = 2600;
       body.scrollTop = 2200;                      // 仍贴底（max = 2200）
       updateOverlay(root, { ...state, text: '第一段 + 第二段' }, plugin);
-      assert.equal(body.scrollTop, 2200, '问句到顶之后必须停止跟随');
+      assert.equal(body.scrollTop, 2200, '问句到顶不影响跟随：仍然贴底');
 
       body.scrollHeight = 3000;
-      body.scrollTop = 2600;                      // 又贴底（max = 2600）
+      body.scrollTop = 2600;
       updateOverlay(root, { ...state, text: '第一段 + 第二段 + 第三段' }, plugin);
-      assert.equal(body.scrollTop, 2600, '一旦停下就保持停（不能过一帧又自己跟上来）');
+      assert.equal(body.scrollTop, 2600, '继续跟到这一条写完（max = 3000 - 400）');
     });
   } finally { dom.restore(); }
 });
@@ -155,14 +160,140 @@ test('U1: 用户自己往上滚之后必须停手（不抢滚动条）', async (
       updateOverlay(root, { ...state, text: '第一段' }, plugin);
       assert.equal(body.scrollTop, 1600);
 
-      // 用户往上滚
+      // 用户往上滚（离开底部超过容差）
       body.scrollTop = 600;
       body.emit('scroll');
       body.scrollHeight = 2600;
-      body.scrollTop = 2200;                      // 即便又回到贴底位置，这一问也已经"停"了
+      body.scrollTop = 600;                       // 用户停在原处，内容继续长
       updateOverlay(root, { ...state, text: '第一段 + 第二段' }, plugin);
-      assert.equal(body.scrollTop, 2200, '用户上滚之后不得再自动跟随');
+      assert.equal(body.scrollTop, 600, '用户上滚之后不得再自动跟随');
     });
+  } finally { dom.restore(); }
+});
+
+test('U1: 上滚之后又滚回底部 → 立刻恢复跟随（旧版到这里就永远跟不上了）', async () => {
+  const dom = fakeDom();
+  try {
+    await withLayout({ top: 120, height: 40 }, async () => {
+      const state = { ...base, phase: 'running', question: '它现在在干什么', text: '第一段' };
+      const { root, plugin } = await render(state);
+      const body = bodyOf(root);
+      const { updateOverlay } = await moduleFromSource('src/client/overlay.tsx');
+      body.scrollHeight = 2000;
+      body.scrollTop = 1600;
+      updateOverlay(root, { ...state, text: '第一段' }, plugin);
+
+      body.scrollTop = 600;
+      body.emit('scroll');                        // 用户上滚 → 暂停
+      body.scrollHeight = 2600;
+      updateOverlay(root, { ...state, text: '第一段 + 第二段' }, plugin);
+      assert.equal(body.scrollTop, 600, '暂停期间不跟');
+
+      body.scrollTop = 2200;                      // 用户自己滚回底部（= 2600 - 400）
+      body.emit('scroll');
+      body.scrollHeight = 3000;
+      updateOverlay(root, { ...state, text: '第一段 + 第二段 + 第三段' }, plugin);
+      assert.equal(body.scrollTop, 2600, '滚回底部后必须恢复跟随（max = 3000 - 400）');
+    });
+  } finally { dom.restore(); }
+});
+
+test('U1: 连接阶段（一个字还没吐）上滚也算接管，第一个分片来了不许拽回去', async () => {
+  const dom = fakeDom();
+  try {
+    await withLayout({ top: 120, height: 40 }, async () => {
+      const state = { ...base, phase: 'connecting', question: '它现在在干什么', text: '' };
+      const { root, plugin } = await render(state);
+      const body = bodyOf(root);
+      const { updateOverlay } = await moduleFromSource('src/client/overlay.tsx');
+      body.scrollHeight = 2000;
+      body.scrollTop = 1600;
+      updateOverlay(root, { ...state, text: '' }, plugin);
+      assert.equal(body.scrollTop, 1600, '刚开始这一问：贴底');
+
+      // 模型还在想（实测常常十几秒），用户趁机往上翻
+      body.scrollTop = 1200;
+      body.emit('scroll');
+      body.scrollHeight = 2400;
+      body.scrollTop = 1200;
+      updateOverlay(root, { ...state, phase: 'running', text: '第一段' }, plugin);
+      assert.equal(body.scrollTop, 1200, '连接阶段的上滚也是接管：第一个分片来了不得把他拽回底部');
+    });
+  } finally { dom.restore(); }
+});
+
+test('U1: 暂停时出现「回到最新」，点它恢复跟随并贴底', async () => {
+  const dom = fakeDom();
+  try {
+    await withLayout({ top: 120, height: 40 }, async () => {
+      const state = { ...base, phase: 'running', question: '它现在在干什么', text: '第一段' };
+      const { root, plugin } = await render(state);
+      const body = bodyOf(root);
+      const { updateOverlay } = await moduleFromSource('src/client/overlay.tsx');
+      body.scrollHeight = 2000;
+      body.scrollTop = 1600;
+      updateOverlay(root, { ...state, text: '第一段' }, plugin);
+      const jump = root.querySelector('.ea-body-jump');
+      assert.ok(jump, '必须有「回到最新」这颗按钮');
+      assert.equal(jump.hidden, true, '跟随时它不该出现');
+
+      body.scrollTop = 600;
+      body.emit('scroll');
+      assert.equal(jump.hidden, false, '用户上滚之后它必须出现 —— 否则界面上没有任何"还在长"的提示');
+
+      body.scrollHeight = 2600;
+      updateOverlay(root, { ...state, text: '第一段 + 第二段' }, plugin);
+      assert.equal(body.scrollTop, 600, '暂停期间不跟');
+      jump.emit('click');
+      assert.equal(body.scrollTop, 2200, '点「回到最新」必须贴到当前底部（max = 2600 - 400）');
+      assert.equal(jump.hidden, true, '恢复跟随后按钮应该收起来');
+    });
+  } finally { dom.restore(); }
+});
+
+test('U1: 刚发出一问就把它带进视野（模型思考那十几秒里问句也在屏幕上）', async () => {
+  const dom = fakeDom();
+  try {
+    await withLayout({ top: 120, height: 40 }, async () => {
+      const state = { ...base, phase: 'idle', question: '', text: '' };
+      const { root, plugin } = await render(state);
+      const body = bodyOf(root);
+      const { updateOverlay } = await moduleFromSource('src/client/overlay.tsx');
+      body.scrollHeight = 2000;
+      body.scrollTop = 400;                       // 用户原本翻在上面
+      updateOverlay(root, { ...state, phase: 'connecting', question: '它现在在干什么', text: '', liveRecordId: 'r9' }, plugin);
+      assert.equal(body.scrollTop, 2000, '问句一发出就必须贴到底（问句在视野里），不能等第一个分片');
+    });
+  } finally { dom.restore(); }
+});
+
+test('U1: 没贴底时上方内容变短，正在读的那一段不被顶走（落地不跳）', async () => {
+  const dom = fakeDom();
+  try {
+    const rects = new Map();
+    const original = FakeElement.prototype.getBoundingClientRect;
+    FakeElement.prototype.getBoundingClientRect = function () {
+      const cls = String(this.className || '');
+      const id = this.getAttribute && this.getAttribute('data-record-id');
+      if (cls.includes('ea-body')) return { top: 0, bottom: 400, height: 400, left: 0, right: 900, width: 900 };
+      if (cls.includes('ea-conv-live')) return { top: 260, bottom: 360, height: 100, left: 0, right: 900, width: 900 };
+      if (id && rects.has(id)) return { top: rects.get(id), bottom: rects.get(id) + 100, height: 100, left: 0, right: 900, width: 900 };
+      return { top: 0, bottom: 0, height: 0, left: 0, right: 0, width: 0 };
+    };
+    try {
+      const state = { ...base, phase: 'running', question: '它现在在干什么', text: '正在写的这一条', liveRecordId: 'r7', records: [] };
+      const { root, plugin } = await render(state);
+      const body = bodyOf(root);
+      body.scrollHeight = 3000;
+      body.scrollTop = 1000;                      // 用户没贴底（max = 2600）
+      const { updateOverlay } = await moduleFromSource('src/client/overlay.tsx');
+      // 落地：r7 从活体块变成历史里的一轮；同时历史窗口把最上面一轮摘掉，
+      // 整段内容向上抽 300px（真实现场是 -311 的窗口裁剪 + -612 的上一轮折叠）
+      rects.set('r7', -40);
+      const landed = { ...state, phase: 'idle', text: '正在写的这一条', records: [{ id: 'r7', question: '它现在在干什么', answerText: '正在写的这一条' }] };
+      updateOverlay(root, landed, plugin);
+      assert.equal(body.scrollTop, 700, '内容整体上移 300px，滚动位置必须补 -300（否则正在读的那一段被换掉）');
+    } finally { FakeElement.prototype.getBoundingClientRect = original; }
   } finally { dom.restore(); }
 });
 
@@ -523,7 +654,7 @@ test('不闪: 刚落地的这一条不播进场动画（它上一帧已经在屏
   } finally { dom.restore(); }
 });
 
-test('跟随阈值: 贴着底 100px 以内算"接近最下面"要跟；离开 250px 就不跟', async () => {
+test('跟随阈值: 贴着底 40px 以内要跟；离开 100px 就不跟（2026-11-07 从 120 收到 48）', async () => {
   const dom = fakeDom();
   try {
     await withLayout({ top: 120, height: 40 }, async () => {
@@ -532,16 +663,16 @@ test('跟随阈值: 贴着底 100px 以内算"接近最下面"要跟；离开 25
       const { updateOverlay } = await moduleFromSource('src/client/overlay.tsx');
       const body = bodyOf(root);
       body.scrollHeight = 2000;                    // max = 1600
-      body.scrollTop = 1500;                       // 距底 100px：接近，应跟随
+      body.scrollTop = 1560;                       // 距底 40px：几乎贴底，应跟随
       updateOverlay(root, { ...state, text: '第一段 + 更多' }, plugin);
-      assert.equal(body.scrollTop, 1600, '距底 100px 属于"接近最下面"，应当跟随（= 2000 - 400）');
+      assert.equal(body.scrollTop, 1600, '距底 40px 属于"几乎贴着底"，应当跟随（= 2000 - 400）');
 
-      const second = await render({ ...state, text: '第二问' });
-      const body2 = bodyOf(second.root);
-      body2.scrollHeight = 2000;
-      body2.scrollTop = 1350;                      // 距底 250px：正在读上面，不该跟
-      updateOverlay(second.root, { ...state, text: '第二问 + 更多' }, second.plugin);
-      assert.equal(body2.scrollTop, 1350, '离底 250px 时不得把用户拽回去');
+      // 同一条回答期间：用户往上滚到"距底 100px"（约六行），这个时候不该再跟
+      body.scrollTop = 1500;
+      body.emit('scroll');
+      body.scrollHeight = 2400;
+      updateOverlay(root, { ...state, text: '第一段 + 更多 + 再更多' }, plugin);
+      assert.equal(body.scrollTop, 1500, '离底 100px（约六行）时不得把用户拽回去 —— 旧版 120px 容差会把他拽回去');
     });
   } finally { dom.restore(); }
 });
