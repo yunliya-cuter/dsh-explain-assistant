@@ -2022,10 +2022,10 @@ export function renderOverlay(state, plugin, initialGeometry, options = {}) {
     const selectBar = el('div', { class: 'ea-select-bar', role: 'group', 'aria-label': '选择主对话内容' }, el('span', { class: 'ea-select-bar-dot', 'aria-hidden': 'true' }), selectBarCount, el('span', { class: 'ea-select-bar-hint', text: 'Ctrl+点击 可加选 · Esc 完成' }), selectBarClear, selectBarDone);
     const body = el('div', { class: 'dsh-explain-assistant-content ea-body' });
     /**
-     * 用户自己滚动时更新「跟随」开关（见 OverlayContext.followPaused）。
+     * 用户自己滚动时更新跟随状态机（见 OverlayContext.followPhase）。
      *
      * 只在**滚动事件**里判：程序自己把 scrollTop 设到底，落点永远满足"贴底"，
-     * 所以这条监听不会把自动跟随自己关掉。容差见 FOLLOW_NEAR_BOTTOM（48px ≈ 三行）：
+     * 所以这条监听不会把自动跟随自己关掉。容差见 FOLLOW_EDGE_DISTANCE（24px ≈ 一行）：
      * 缩放/高分屏下一两像素的误差不该被读成"用户滚上去了"。
      */
     body.addEventListener('scroll', () => {
@@ -2045,25 +2045,25 @@ export function renderOverlay(state, plugin, initialGeometry, options = {}) {
         // 用户自己动了滚动条：内部浮点位置作废，下次重新对齐到真实位置。
         current.followPos = undefined;
         /**
-         * 「贴着底 / 离开底」是跟随的**唯一**开关（2026-11-07 改）。
+         * 用户滚动只做两件事（状态机见 OverlayContext.followPhase）：
+         *   · 离开底部 → following 变 paused（**立即**停手，不看滚了多少）；
+         *   · 滚回底部 → paused 变 following（恢复；stopped 是终态，不自动恢复）。
          *
-         * 滚回底部 → 立刻恢复跟随；离开底部 → 立刻停手。
-         * 旧版除了这里还有一条「问句顶到正文区顶端就停」，那条规则一旦触发，
-         * 即便用户滚回底部也会在下一帧被重新置上 —— 等于再也跟不上了（见 followStreaming）。
+         * 判据是 isBusy（不是 isBusy && text）：连接阶段（模型还在想、一个字都没吐）
+         * 常常持续十几秒，用户正是趁这段时间往上翻 —— 那一刻不置暂停的话，
+         * 第一个分片一到就把他拽回底部（实测：上滚 400px 停 1.8 秒后被拉回）。
          */
-        const atBottom = (node.scrollTop ?? 0) >= max - FOLLOW_NEAR_BOTTOM;
-        if (atBottom)
-            current.followPaused = false;
-        // 只有"这一问还在跑"时才把它当成"用户想看上面"：其它时候的滚动与跟随无关。
-        //
-        // 判据是 isBusy，**不是** isBusy && text：连接阶段（模型还在想、一个字都没吐）
-        // 往往持续十几秒，用户正是趁这段时间往上翻去看上一条 —— 旧写法在那一刻不置暂停，
-        // 等第一个分片一到就把他拽回底部。实测就是这样：上滚 400px 停在原地 1.8 秒，
-        // 内容一开始长，画面立刻被拉走。
-        else if (isBusy(current.state))
-            current.followPaused = true;
+        const atBottom = (node.scrollTop ?? 0) >= max - FOLLOW_EDGE_DISTANCE;
+        if (isBusy(current.state)) {
+            if (atBottom) {
+                if (current.followPhase === 'paused')
+                    current.followPhase = 'following';
+            }
+            else if (current.followPhase === 'following')
+                current.followPhase = 'paused';
+        }
         if (current.followJump)
-            current.followJump.hidden = !current.followPaused;
+            current.followJump.hidden = !(current.followPhase === 'paused' && isBusy(current.state));
     });
     const errorSlot = el('div', { class: 'ea-slot' });
     /**
@@ -2135,7 +2135,8 @@ export function renderOverlay(state, plugin, initialGeometry, options = {}) {
         const current = contexts.get(root);
         if (!current)
             return;
-        current.followPaused = false;
+        if (current.followPhase === 'paused')
+            current.followPhase = 'following';
         current.followPos = undefined;
         current.scrollToTail = true;
         current.rerender();
@@ -2770,80 +2771,79 @@ function scrollToNewestOnOpen(ctx, state) {
     }, 0);
 }
 /**
- * 流式回答的自动跟随（用户 2026-11-07 的判据）。
+ * 流式跟随（用户 2026-11-07 的准确定义）。
  *
- *   ① **只要用户停在（或接近）底部就跟** —— 一直跟到这一条回答写完为止；
- *   ② 用户自己往上滚 → 立刻停（由 body 的 scroll 监听置 followPaused），
- *      右下角出现「回到最新」；滚回底部或点它，立刻恢复跟随；
- *   ③ 换了一问 → 先把这一问带进视野，再从"贴底"开始跟。
+ * 三句话就是全部规则：
+ *   ① **启动**：发送那一刻，视口停在最新内容的底部（24px 以内）才跟；
+ *      不在底部（用户在翻历史）就一个像素都不动 —— 包括模型思考的十几秒和第一个分片。
+ *   ② **跟随**：跟到用户这一问的气泡**顶到可视区顶端**为止。
+ *   ③ **停止**：到达停止线后本次回答不再自动滚动（终态）；
+ *      用户中途自己上滚则立即停（paused，可滚回底部或点「回到最新」恢复）。
  *
- * 为什么删掉了 2026-10-31 那条「问句顶到正文区顶端就停」：
- * 那条要求的本意是「别让字飞得太快、读不完」。但正文区实测只有 348px 高，
- * 也就是**一屏多一点**之后跟随就永久停住；而小助手的回答普遍 1300~2900 字
- * （三到八屏，见 $DSH_HOME/explain-assistant/sessions 里的真实记录），
- * 剩下的全在看不见的下方继续长 —— 用户看到的就是"自动跟随跟一下就没了"。
- * 更要命的是它**不可恢复**：滚回底部会在下一帧被同一条规则重新置成暂停。
- * 现在要不要停只由用户自己的滚动决定，跟不跟由滚动位置决定，规则只有一条。
+ * 为什么不是"全程跟随"：用户原话「全程跟随不要」——正文区只有 348px，
+ * 跟到底等于一直在把刚出现的字往上顶，人根本读不了。停在"问句贴顶"那一刻，
+ * 屏幕上正好是这一问 + 一屏回答，可以按自己的速度往下读。
  */
-function followStreaming(ctx, state) {
+function followStreaming(ctx, state, wasAtBottom) {
     const body = ctx.body;
-    /**
-     * 换了一问：先把这一问带进视野（否则问完看不到自己刚问的那句话），再从"贴底"开始跟。
-     *
-     * 这里必须**当场**贴底，不能只置 scrollToTail 等下一帧：模型往往先思考十几秒，
-     * 下一帧要等第一个分片才来 —— 这段时间里用户看到的是"我问的那句话根本没出现"。
-     * 实测就是如此：问句停在可视区下沿之外 106px，足足 19 秒。
-     *
-     * 只在**真的有一问在跑**时才做：回答落地那一帧 liveRecordId 也会变，但那不是"新的一问"，
-     * 把画面拉到底就变成用户报过的"一生成完就跳到最后"。
-     */
     const key = state.liveRecordId || state.question || '';
     if (key && isBusy(state) && ctx.followTurnKey !== key) {
         ctx.followTurnKey = key;
-        ctx.followPaused = false;
+        /* ① 启动判定只看**发送前那一刻**（wasAtBottom 是本帧改 DOM 之前量的）。 */
+        ctx.followPhase = wasAtBottom ? 'following' : 'idle';
         ctx.followPos = undefined;
-        const height = body.scrollHeight;
-        if (typeof height === 'number' && Number.isFinite(height))
-            body.scrollTop = height;
+        if (ctx.followPhase === 'following') {
+            // 已经在底部：这一问刚挂上来就在下面，直接贴底（问句立刻可见）。
+            const height = body.scrollHeight;
+            if (typeof height === 'number' && Number.isFinite(height))
+                body.scrollTop = height;
+        }
     }
     if (!isBusy(state)) {
-        // 一次回答结束：下一次提问从头开始跟随。
-        ctx.followPaused = false;
+        // 这一问结束了：状态复位，下一次发送重新判定。
+        ctx.followPhase = 'idle';
         ctx.followTurnKey = key;
         stopFollowLoop(ctx);
         return;
     }
-    // 还没吐字（connecting）：不启动循环，但**保留**用户的暂停状态 ——
-    // 连接阶段往上翻也算"他接管了滚动"，等第一个分片来了不该把他拽回去。
+    // 还没吐字（connecting）：状态原样保留（用户在思考阶段上滚照样算接管）。
     if (!state.text)
         return;
-    /**
-     * 跟不跟，只看**用户有没有接管**（followPaused，由 body 的 scroll 监听维护）。
-     *
-     * 这里刻意**不再每帧拿 wasAtBottom 判一次**：内容每帧都在长，等到下一帧时
-     * "刚才还贴着底"可能已经变成"离底两百像素"，用户刚滚回底部的意愿会被这一条吃掉 ——
-     * 实测症状就是"滚回底部也不跟了"。wasAtBottom 现在只用于
-     * 「没贴底时保住阅读位置」（见 updateOverlay 的 readingAnchor）。
-     */
-    if (ctx.followPaused)
+    if (ctx.followPhase !== 'following')
         return;
     /**
-     * 跟随要**丝滑**（用户原话：「自动跟随应更加丝滑」）。
+     * ②③ 停止线：用户这一问的气泡顶边碰到可视区顶边。
      *
-     * 旧写法每个分片直接 `scrollTop = scrollHeight` —— 一帧跳几十到几百像素，
-     * 看起来就是"画面一段段往上顶"。改成缓动：每帧只走剩余距离的一部分，
-     * 新分片来了就重新定目标，于是画面是连续地滑到底，而不是一跳一跳。
+     * 越过的这一点点要**补回去**：跟随是缓动的，等这一帧量到"已经到顶"时，
+     * 问句往往已经滑出上沿十几到几十像素。补回之后问句正好贴在顶端 ——
+     * 用户看到的就是"我问的那句在最上面、下面是一屏回答"，也就是他要的阅读起点。
      */
+    const question = ctx.liveQuestion;
+    if (typeof question.getBoundingClientRect === 'function' && typeof body.getBoundingClientRect === 'function') {
+        const qr = question.getBoundingClientRect();
+        const br = body.getBoundingClientRect();
+        if (qr.height > 0 && br.height > 0 && qr.top <= br.top + 1) {
+            ctx.followPhase = 'stopped';
+            stopFollowLoop(ctx);
+            const overshoot = br.top - qr.top;
+            if (overshoot > 0.5) {
+                const next = Math.max(0, (body.scrollTop ?? 0) - overshoot);
+                ctx.programmaticTop = next;
+                body.scrollTop = next;
+            }
+            return;
+        }
+    }
     startFollowLoop(ctx);
 }
 /**
- * 「接近最下面」的容差：**三行以内**（48px）。
+ * 「停在最新消息底部」的容差：**一行以内**（24px）。
  *
- * 旧值是 120px（约六行）。用户往上滚五六行想看清一句话，位置仍落在容差里，
- * 于是下一块内容一到就把他拽回底部 —— 这是"自动跟随不符合直觉"的另一种形态：
- * 想停停不下来。48px 只覆盖"几乎贴着底"，剩下的都算用户接管。
+ * 用户 2026-11-07 的定义是"正在看的地方是最新消息的**底部**"，所以这里比
+ * "接近底部"更严：往上翻两行就不算底部了（那条要求本来就是"我在读上面的，
+ * 别动我的画面"）。48px（约两行半）是上一版的值，实测往上滚 40px 仍被当成底部。
  */
-const FOLLOW_NEAR_BOTTOM = 48;
+const FOLLOW_EDGE_DISTANCE = 24;
 /**
  * 缓动跟随：每帧把剩余距离吃掉一部分，直到贴底。
  *
@@ -2897,7 +2897,7 @@ function startFollowLoop(ctx) {
     const step = (ts) => {
         ctx.followRaf = undefined;
         const streaming = isBusy(ctx.state) && Boolean(ctx.state.text);
-        if (!streaming || ctx.followPaused) {
+        if (!streaming || ctx.followPhase !== 'following') {
             ctx.followPos = undefined;
             return;
         }
@@ -2946,8 +2946,17 @@ export function updateOverlay(root, state, plugin) {
      */
     const bodyForScroll = ctx.body;
     const bodyMax = (bodyForScroll.scrollHeight ?? 0) - (bodyForScroll.clientHeight ?? 0);
-    // 「接近最下面」也算贴底（用户 2026-10-31：只有在最下面或接近最下面时才自动跟随）。
-    const wasAtBottom = bodyMax > 0 && (bodyForScroll.scrollTop ?? 0) >= bodyMax - FOLLOW_NEAR_BOTTOM;
+    /*
+     * 「在不在底部」——跟随的启动判据（见 followStreaming 的 ①）。
+     *
+     * · bodyMax <= 0：内容不足一屏，本来就没得滚，算在底部；
+     * · !ctx.autoScrolled：浮窗**刚挂载**那一帧也算在底部，否则"发出去之后才点开浮窗"
+     *   永远判成"用户在看历史"（新 DOM 的 scrollTop 是 0），这一问一次都不跟 ——
+     *   而点开浮窗本来就是要看最新那一条；
+     * · 其余按 24px 的容差算。
+     */
+    const wasAtBottom = bodyMax <= 0 || !ctx.autoScrolled ||
+        (bodyForScroll.scrollTop ?? 0) >= bodyMax - FOLLOW_EDGE_DISTANCE;
     /**
      * 「这一帧之前，用户正在看哪儿」——改 DOM 之前量一次，改完按同一条元素的位移补回去。
      *
@@ -3039,7 +3048,7 @@ export function updateOverlay(root, state, plugin) {
         // 换了会话就是「第一次看到」：新会话若已有压缩记录，不该把视野拽到那一行。
         ctx.compactSig = undefined;
         // 跟随状态属于上一个会话的某一问，不能带过来（循环也要停：它读的是上一个会话的 DOM）。
-        ctx.followPaused = false;
+        ctx.followPhase = 'idle';
         ctx.followTurnKey = undefined;
         stopFollowLoop(ctx);
     }
@@ -3359,9 +3368,9 @@ export function updateOverlay(root, state, plugin) {
     }
     scrollToNewestOnOpen(ctx, state);
     // 流式跟随排在最后：它读的是这一帧重画后的真实高度，并自己决定要不要动滚动。
-    followStreaming(ctx, state);
-    // 「回到最新」只在"跟随被用户接管、且下面还在长"时出现（见 followStreaming 的说明）。
-    ctx.followJump.hidden = !(ctx.followPaused && isBusy(state));
+    followStreaming(ctx, state, wasAtBottom);
+    // 「回到最新」只在"用户自己上滚导致暂停、且这一问还在长"时出现（stopped 是终态，不给）。
+    ctx.followJump.hidden = !(ctx.followPhase === 'paused' && isBusy(state));
     // 「打开即聚焦」的投递点之一：浮窗从加载页切到就绪档的那一次重画（见 deliverFocus）。
     deliverFocus(ctx);
     // 注意：这里**不再回写 scrollTop**。见函数开头说明。
