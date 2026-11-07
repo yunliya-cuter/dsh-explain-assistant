@@ -188,8 +188,15 @@ test('P-1/P-2: 低对比度的宿主 token 不得直接用于小字号正文', a
   assert.match(css, /--ea-text-tertiary:#6b7075/, '浅色三级文字必须是算过的深色版');
 });
 
-test('P-3: 焦点环要有 3:1 以上的对比度，且 :has() 不支持时仍要看得见焦点', async () => {
+test('P-3: 焦点环要有 3:1 以上的对比度，且只在**真有焦点**时出现', async () => {
   const css = await readSource('src/client/styles.css');
-  assert.match(css, /@supports selector\(:has\(\*\)\)/, 'outline:none 必须包在 @supports 里');
+  const field = await readSource('src/client/text-field.ts');
+  // 2026-11-07：用户报「没有焦点却有光圈」——文本输入框在 Chrome 里连鼠标点一下都算
+  // :focus-visible，:has() 的失效重算又可能在焦点离开后漏掉一次。焦点环改成属性驱动。
   assert.match(css, /inset 0 0 0 2px var\(--dsw-alias-button-primary-fill/, '焦点环必须是品牌色 2px（旧的 rgba(0,0,0,.18) 只有 1.53:1）');
+  assert.match(css, /\.ea-field\[data-focus="keyboard"\]/, '焦点环只能由 data-focus="keyboard" 触发（键盘焦点）');
+  assert.equal(/:has\(\.ea-input:focus-visible\)/.test(css), false, '不得再用 :has(:focus-visible) 画焦点环（鼠标点一下也会亮）');
+  assert.match(field, /root\.setAttribute\('data-focus'/, 'data-focus 必须由真实的 focus 事件写入');
+  assert.match(field, /root\.removeAttribute\('data-focus'\)/, 'blur 时必须把 data-focus 摘掉');
+  assert.match(css, /\.ea-field \.ea-input:focus-visible\{\s*outline:none/, '输入框自身不得再画第二圈 outline（两层边）');
 });

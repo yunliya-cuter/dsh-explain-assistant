@@ -1200,9 +1200,15 @@ body[data-ds-dark-theme] .ea-select-bar{
    caret 与占位文字已经足够说明「这里可以打字」，键盘用户仍能看到焦点位置的细微变化。 */
 /* 焦点环画在**底板**上：输入框已经是透明的壳，再在它身上画一圈内阴影，
    就会和底板的边贴成两条并排的线（用户看到的就是「两层」）。 */
-.dsh-explain-assistant-overlay .ea-field:has(.ea-input:focus-visible){
-  /* 审计 2026-10-31：原来那圈 rgba(0,0,0,.18) 实测只有 1.53:1（深色 2.05:1），
-     键盘 Tab 到这里基本看不出焦点在哪。改用品牌色 2px 内环（浅色 4.4:1 / 深色 3.4:1）。 */
+/* 焦点环：**只由 data-focus="keyboard" 触发**，这个属性由 text-field.ts 在真的收到
+   focus/blur 时写 —— 与自绘光标共用同一个判据（document.activeElement === input）。
+   为什么不再用 :focus-visible / :has()（2026-11-07，用户报「没有焦点却有光圈」）：
+     · 文本输入框在 Chrome 里连「鼠标点一下」都算 :focus-visible —— 点进输入框就常驻
+       一圈亮环（深色玻璃上是一圈接近白色的光，用户原话「光圈」）；
+     · :has() 的失效重算在部分内核版本会漏掉焦点变化，于是「焦点早走了、环还留着」。
+   改成属性驱动之后，有环 ⇔ 有键盘焦点，两者不可能错开。
+   对比度：品牌色 2px 内环，浅色 4.4:1 / 深色 3.4:1（旧的 rgba(0,0,0,.18) 只有 1.53:1）。 */
+.dsh-explain-assistant-overlay .ea-field[data-focus="keyboard"]{
   box-shadow:
     inset 0 1px 2px rgba(0,0,0,.16),
     inset 0 0 0 2px var(--dsw-alias-button-primary-fill,#2f6bff);
@@ -1220,13 +1226,12 @@ body[data-ds-dark-theme] .ea-select-bar{
 }
 /* 上面那条全局规则会给 textarea 套一圈 2px 蓝框。输入框包进 .ea-field 之后，
    这圈框会落在底板里面，和底板的边贴成「两条线」——正是用户说的「两层」。
-   输入框的焦点提示改由底板的 :has() 规则给（见文件上方 .ea-field:has(...)）。
-   审计 2026-10-31：这条 outline:none 必须包在 @supports 里 —— 不支持 :has() 的引擎
-   会同时丢掉 :has 那条规则和这条 outline，输入框直接没有任何焦点提示。 */
-@supports selector(:has(*)) {
-  .dsh-explain-assistant-overlay .ea-field .ea-input:focus-visible{
-    outline:none;
-  }
+   输入框的焦点提示改由底板的 data-focus 属性给（见文件上方 .ea-field[data-focus="keyboard"]）。
+   2026-11-07：这条 outline:none 不再包在 @supports 里 —— 焦点环已经与 :has() 无关，
+   所以任何引擎都不该再给输入框画第二圈边框（旧的 @supports 是因为「:has 不支持时
+   要留着原生 outline 兜底」，现在兜底是属性规则本身，与 :has 能力无关）。 */
+.dsh-explain-assistant-overlay .ea-field .ea-input:focus-visible{
+  outline:none;
 }
 /* ---------- §5.2 「这一问围绕哪几条」（输入框上方常驻） ----------
    上一版这里只有一句话：「正在围绕这条内容提问：assistant-step  取消」。

@@ -52,15 +52,35 @@ function makeReact() {
   const states = [];
   let cursor = 0;
   const order = [];
+  /**
+   * Hook 槽位必须**按组件**分开（2026-11-07 修）。
+   *
+   * 旧写法只用全局下标当键（states[i] / states['r'+i]），于是 HeaderButton 的
+   * useRef(null) 与 OverlayBridge 的 useRef(hostRef) 落在同一个槽位里：
+   * 真实 React 里它们是两个毫不相干的对象，而在这个夹具里是**同一个对象**。
+   * 后果：浮窗组件把容器写进 ref.current 之后，入口按钮再渲染时
+   * gateRef.current 就变成了那个容器 —— ensureGate().set 不是函数，整条挂载链炸掉。
+   * 这是夹具缺陷，不是产品缺陷：真实 React 的 hook 状态属于组件实例。
+   * 现在按「组件身份」分作用域（WeakMap 分配，不依赖函数名，压缩后也不会撞）。
+   */
+  const scopes = new WeakMap();
+  let nextScope = 0;
+  const scopeOf = (component) => {
+    if (typeof component !== 'function') return 'default';
+    let id = scopes.get(component);
+    if (!id) { id = 'c' + (nextScope++); scopes.set(component, id); }
+    return id;
+  };
+  let scope = 'default';
   return {
     states,
-    reset() { cursor = 0; },
+    reset(component) { cursor = 0; scope = scopeOf(component); },
     api: {
       createElement(type, props, ...children) { return { type, props: props || {}, children }; },
       useEffect(effect) { order.push({ kind: 'effect', effect }); },
-      useReducer(init) { const i = cursor++; return [typeof init === 'function' ? init(0) : init, () => {}]; },
-      useState(init) { const i = cursor++; if (states[i] === undefined) states[i] = typeof init === 'function' ? init() : init; return [states[i], (next) => { states[i] = typeof next === 'function' ? next(states[i]) : next; }]; },
-      useRef(init) { const i = cursor++; if (states['r' + i] === undefined) states['r' + i] = { current: init === undefined ? null : init }; return states['r' + i]; },
+      useReducer(init) { cursor++; return [typeof init === 'function' ? init(0) : init, () => {}]; },
+      useState(init) { const key = scope + ':s' + (cursor++); if (states[key] === undefined) states[key] = typeof init === 'function' ? init() : init; return [states[key], (next) => { states[key] = typeof next === 'function' ? next(states[key]) : next; }]; },
+      useRef(init) { const key = scope + ':r' + (cursor++); if (states[key] === undefined) states[key] = { current: init === undefined ? null : init }; return states[key]; },
     },
     take() { const taken = order.splice(0, order.length); return taken; },
   };
@@ -118,7 +138,7 @@ async function mountEnv({ stateImpl } = {}) {
  * 那个带 ref 的 props 取出来，构造真实的容器元素再交给 effect。
  */
 function renderComponent(react, Component, props, prevTree) {
-  react.reset();
+  react.reset(Component);
   const tree = Component(props);
   const effects = react.take();
   // ref 注入：组件返回的 h('div', { ref }) —— 把容器塞给 ref.current
@@ -321,6 +341,27 @@ test('t4 判据6: 已就绪会话（关闭再打开）零延迟挂载，不再�
     assert.equal(host.children.length, 1, '已就绪会话关闭再打开必须立即挂载（零延迟、无加载态）');
     assert.equal(host.children[0].style.left, firstLeft, '关闭再打开不得发生重定位');
     void callsBefore; void registryEl;
+  } finally { env.cleanup(); }
+});
+
+test('t4 附加: 用户点开浮窗后，焦点默认落在输入框（打开即可直接输入）', async () => {
+  // 用户 2026-11-07：「我希望点开小助手后默认焦点在输入框来直接输入。」
+  // 走**真实组件**：header 的 onClick → registry.open（openedByUser=true）→ 延后挂载 →
+  // renderOverlay 的 deliverFocus。判据是 dom.document.activeElement，不是「调用过 focus」。
+  const env = await mountEnv({ stateImpl: async () => ({ payload: { records: [], catalog: { groups: [], failures: [] } } }) });
+  try {
+    const cleanups = [];
+    const header = renderComponent(env.react, env.headerComponent, { sessionId: 'auto-focus' });
+    runEffects(header.effects, cleanups);
+    header.tree.props.onClick();
+    await flushed(); await flushed();
+    const overlay = renderComponent(env.react, env.overlayComponent, {});
+    runEffects(overlay.effects, cleanups);
+    const host = overlay.tree.children?.find?.(c => c?.props?.ref)?.props?.ref?.current ?? overlay.tree.props?.ref?.current;
+    assert.equal(host.children.length, 1, '打开后浮窗必须已挂载');
+    const input = host.children[0].querySelectorAll('.ea-input')[0];
+    assert.ok(input, '浮窗里必须有输入框');
+    assert.equal(env.dom.document.activeElement, input, '焦点必须在输入框里（否则用户抬手就打，字却进了主对话）');
   } finally { env.cleanup(); }
 });
 

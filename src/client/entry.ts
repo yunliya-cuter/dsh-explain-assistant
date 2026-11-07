@@ -240,6 +240,17 @@ export function apply(ctx: any): void {
        * 所以新的函数体里**读不到**旧几何，只能靠清理那一刻存下来的值。
        */
       const lastGeometryRef = React.useRef(null);
+      /**
+       * 「这个会话的浮窗已经自动聚焦过输入框了」。
+       *
+       * 只挡重复：一次「打开」只许把焦点送进去一次。否则之后每一次重建
+       * （切会话、状态档位切换、宿主重渲染）都会再抢一次焦点 —— 用户正看着正文、
+       * 或者正在主对话里打字，焦点却被拽回小助手输入框。
+       * 关窗时清掉，下次打开重新允许。
+       */
+      const focusedSessionRef = React.useRef(null);
+      /** 重建前那个浮窗里是不是正有焦点（切会话重建不能把用户正在打的字弄丢）。 */
+      const hadFocusRef = React.useRef(false);
       const stateReady = state?.stateReady;
       // 「浮窗此刻是否已经在页面上」**实时读 DOM**（不是推断、不是记一个 ref）：
       // 这正是「切会话不得把已可见的浮窗藏起来」那条判据需要的事实依据。
@@ -270,6 +281,23 @@ export function apply(ctx: any): void {
         const current = registry.current;
         const mounting = Boolean(shouldMount && current?.open);
         /**
+         * 这次新建的浮窗要不要把焦点送进输入框。
+         *
+         * 只看两件事：**是用户自己开的**（openedByUser），以及**这个会话还没送过**。
+         * 后台切会话把浮窗带过来时 openedByUser 是 false（见 index.ts 的 setSession），
+         * 于是不会去抢主对话的焦点 —— 这正是「默认能直接输入」与「不许抢焦点」的分界线。
+         */
+        const autoFocus = Boolean(
+          mounting &&
+          current?.open &&
+          current?.openedByUser === true &&
+          focusedSessionRef.current !== current.sessionId
+        );
+        // 重建前正在这个浮窗里打字 → 重建后把焦点交给新的输入框（否则字打一半就"没了"）。
+        const restoreFocus = mounting && hadFocusRef.current === true;
+        hadFocusRef.current = false;
+        if (!current?.open) focusedSessionRef.current = null;
+        /**
          * 只在**要挂新窗**时清空宿主。
          *
          * 旧写法人人都会在这里无条件 replaceChildren() —— 它会把上一轮清理函数
@@ -279,7 +307,8 @@ export function apply(ctx: any): void {
          */
         if (mounting) host.replaceChildren();
         if (mounting && current?.open) {
-          const element = renderOverlay(current, plugin, previousGeometry);
+          const element = renderOverlay(current, plugin, previousGeometry, { autoFocus: autoFocus || restoreFocus });
+          if (autoFocus) focusedSessionRef.current = current.sessionId;
           host.appendChild(element);
           /**
            * 告诉页面上的装饰性动画「让路」：浮窗是 backdrop-filter 面板，
@@ -360,6 +389,8 @@ export function apply(ctx: any): void {
            */
           const closing = registry.current?.open === false;
           const element = host.firstElementChild as HTMLElement | null;
+          // 摘除之前记下「焦点是不是还在这个浮窗里」：重建（切会话）时要还给新的输入框。
+          hadFocusRef.current = Boolean(element && typeof element.contains === 'function' && element.contains(document.activeElement));
           if (closing && element) {
             /**
              * 关闭：**原节点原地**播退场，不克隆、不重建。

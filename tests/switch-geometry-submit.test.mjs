@@ -270,19 +270,35 @@ test('t11 A4: 同一棵 DOM 从 ready 原地切到 failed 时同样清掉 hero/q
 
 const REPO = path.resolve(import.meta.dirname, '..');
 
-/** 最小 React 运行时（够跑 entry.ts 的两个组件）。 */
+/**
+ * 最小 React 运行时（够跑 entry.ts 的两个组件）。
+ *
+ * Hook 槽位按**组件身份**分作用域（2026-11-07 修）：旧写法只按全局下标存，
+ * 于是 HeaderButton 的 useRef(null) 与 OverlayBridge 的 useRef(hostRef) 是同一个对象 ——
+ * 浮窗把容器写进 ref.current 之后，入口按钮的 gateRef 就变成了那个容器，
+ * ensureGate().set 直接不是函数。真实 React 的 hook 状态属于组件实例，夹具也得一样。
+ */
 function makeReact() {
   const slots = [];
   let cursor = 0;
   const order = [];
+  const scopes = new WeakMap();
+  let nextScope = 0;
+  const scopeOf = (component) => {
+    if (typeof component !== 'function') return 'default';
+    let id = scopes.get(component);
+    if (!id) { id = 'c' + (nextScope++); scopes.set(component, id); }
+    return id;
+  };
+  let scope = 'default';
   return {
-    reset() { cursor = 0; },
+    reset(component) { cursor = 0; scope = scopeOf(component); },
     api: {
       createElement(type, props, ...children) { return { type, props: props || {}, children }; },
       useEffect(effect) { order.push(effect); },
-      useReducer(init) { const i = cursor++; return [typeof init === 'function' ? init(0) : init, () => {}]; },
-      useState(init) { const i = cursor++; if (slots[i] === undefined) slots[i] = typeof init === 'function' ? init() : init; return [slots[i], v => { slots[i] = typeof v === 'function' ? v(slots[i]) : v; }]; },
-      useRef(init) { const i = cursor++; if (slots['r' + i] === undefined) slots['r' + i] = { current: init === undefined ? null : init }; return slots['r' + i]; },
+      useReducer(init) { cursor++; return [typeof init === 'function' ? init(0) : init, () => {}]; },
+      useState(init) { const key = scope + ':s' + (cursor++); if (slots[key] === undefined) slots[key] = typeof init === 'function' ? init() : init; return [slots[key], v => { slots[key] = typeof v === 'function' ? v(slots[key]) : v; }]; },
+      useRef(init) { const key = scope + ':r' + (cursor++); if (slots[key] === undefined) slots[key] = { current: init === undefined ? null : init }; return slots[key]; },
     },
     take() { return order.splice(0, order.length); },
   };
@@ -343,7 +359,7 @@ async function entryEnv() {
    * 修正后这个假绿就消失了：把修复还原，下面的用例会真的变红。
    */
   const render = (Component, props) => {
-    react.reset();
+    react.reset(Component);
     const tree = Component(props);
     const effects = react.take();
     const withRef = (node) => {

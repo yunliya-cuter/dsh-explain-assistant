@@ -2137,9 +2137,96 @@ type OverlayContext = {
   modelOpen: boolean
   /** 原地重画自己：用于只影响本浮窗、不改 registry 的交互（例如展开模型列表）。 */
   rerender: () => void
+  /** 还没送达的「打开即聚焦」：等浮窗挂进文档、且已经从加载页切到就绪档之后再投递（见 deliverFocus）。 */
+  pendingFocus?: boolean
 }
 
 const contexts = new WeakMap<HTMLElement, OverlayContext>()
+
+/**
+ * 把焦点送进输入框：**一条明确路径**，不是「调一次 focus() 就算完」。
+ *
+ * 三个必须处理的现实（都是实测踩过的）：
+ * 1. 调用这一刻浮窗可能还没挂进文档（entry.ts 是 renderOverlay 返回之后才 appendChildren），
+ *    也可能还停在加载页（/state 没回来时输入区是收起的）→ 等它就绪，最多等 60 帧。
+ * 2. 挂载那一帧焦点可能被宿主或其它模块抢走 → 下一帧再校验一次，仍失败再补一次并记一条日志。
+ * 3. 用户在打开的同一瞬间已经点去别处（典型：点了主对话输入框继续打字）→ **不许抢回来**：
+ *    只有焦点空着（body/浮窗自己）时才动手。
+ *
+ * 之所以要「校验」，是因为 focus() 是**异步生效**的（浏览器在下一帧才真正把焦点交给元素，
+ * 期间的 focus 事件可能被别的模块的 focus() 覆盖）。只看「有没有调用过」，就会出现
+ * 「看起来打开了但打不了字」。
+ */
+export function deliverFocus(ctx: OverlayContext, attempt = 0): void {
+  if (!ctx.pendingFocus) return
+  const input = ctx.input
+  const root = ctx.root
+  const ready = (() => {
+    try { return input.isConnected !== false && root.getAttribute('data-surface') === 'ready' } catch { return false }
+  })()
+  if (!ready) {
+    if (attempt > 60) { ctx.pendingFocus = false; return }
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => deliverFocus(ctx, attempt + 1))
+    return
+  }
+  ctx.pendingFocus = false
+  /**
+   * @param force 第一次投递必须**无条件**把焦点拿过来：用户点了「?」，宿主的焦点
+   *   通常还停在主对话输入框上（内容可编辑的 DIV），若把「别处有焦点」当成拒绝理由，
+   *   「打开就能直接输入」就永远不会发生。只有后面那两次补救才让位 —— 那时用户
+   *   可能已经在主对话里接着打字了，再抢就是打断。
+   */
+  const doFocus = (force: boolean): boolean => {
+    if (input.isConnected === false) return true
+    if (document.activeElement === input) return true
+    const active = document.activeElement as HTMLElement | null
+    /** 用户/宿主正在别处打字（输入框、textarea、contenteditable）。 */
+    const typingElsewhere = Boolean(
+      active &&
+      active !== input &&
+      !root.contains(active) &&
+      ((active as HTMLElement).isContentEditable === true ||
+        (typeof (active as HTMLElement & { matches?: (s: string) => boolean }).matches === 'function' &&
+          (active as HTMLElement & { matches: (s: string) => boolean }).matches('input, textarea, [contenteditable=""], [contenteditable="true"]')))
+    )
+    if (!force && typingElsewhere) return true
+    /**
+     * 把焦点交给输入框会**清掉页面上已有的选中区**（Chrome 的既定行为：焦点进
+     * 文本控件时，文档选区整体作废）。而用户的典型动作恰恰是「在主对话里拖选一段 →
+     * 点 ? 问小助手」—— 那一段的橙色高亮会凭空消失，看着像"选中被吃掉了"。
+     * 所以：聚焦前后各留一手，把那段选区还回去（它只是视觉，不影响输入）。
+     */
+    const pageSelection = (() => {
+      try {
+        const selection = document.getSelection()
+        return selection && selection.rangeCount > 0 && !selection.isCollapsed ? selection.getRangeAt(0).cloneRange() : null
+      } catch { return null }
+    })()
+    try { input.focus({ preventScroll: true }) } catch { try { input.focus() } catch { return true } }
+    if (pageSelection) {
+      try {
+        const selection = document.getSelection()
+        if (selection && (selection.rangeCount === 0 || selection.isCollapsed)) {
+          selection.removeAllRanges()
+          selection.addRange(pageSelection)
+        }
+      } catch { /* 老浏览器 / 选区已失效：忽略，不能因为还选区把聚焦搞失败 */ }
+    }
+    return document.activeElement === input
+  }
+  if (doFocus(true)) return
+  // 还是一次明确的重试：宿主确实会在挂载那一帧把自己的焦点恢复回去（实测过）。
+  const retry = (left: number): void => {
+    if (left <= 0) {
+      try { console.warn('[dsh-explain-assistant] 输入框没能拿到焦点：焦点被其它模块占着') } catch { /* 没有 console 就算了 */ }
+      return
+    }
+    const later = (): void => { if (!doFocus(false)) retry(left - 1) }
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(later)
+    else setTimeout(later, 32)
+  }
+  retry(2)
+}
 
 /**
  * @param initialGeometry 重建前那个浮窗**实际显示在屏幕上的**几何。
@@ -2156,7 +2243,7 @@ const contexts = new WeakMap<HTMLElement, OverlayContext>()
  *   没有已知位置时（第一次打开某个会话、且从未有过浮窗）不传 → 仍落默认值，
  *   这正是默认值唯一该服务的场景。
  */
-export function renderOverlay(state: AssistantClientState, plugin: OverlayProps['plugin'], initialGeometry?: { x: number; y: number; width: number; height: number }): HTMLElement {
+export function renderOverlay(state: AssistantClientState, plugin: OverlayProps['plugin'], initialGeometry?: { x: number; y: number; width: number; height: number }, options: { autoFocus?: boolean } = {}): HTMLElement {
   previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : previouslyFocused
   const like = plugin as PluginLike
   const root = el('section', {
@@ -2405,8 +2492,11 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
    */
   const send = button(sendLabel(state, 'ready'), isBusy(state) ? '停止本次解释' : '发送问题', () => {
     const current = contexts.get(root)
-    if (current && isBusy(current.state)) { current.plugin.cancel?.(); return }
+    if (current && isBusy(current.state)) { current.plugin.cancel?.(); returnFocus(); return }
     form.requestSubmit()
+    // 鼠标点「发送」之后焦点留在按钮上，接着打字一个字都进不去（同一类「看着能打字其实不能」）。
+    // 发完立刻把焦点交回输入框：下一句可以直接打。
+    returnFocus()
   }, { class: 'ea-btn ea-btn-primary ea-send' })
   send.setAttribute('data-stop', isBusy(state) ? 'true' : 'false')
   const ringSlot = el('div', { class: 'ea-ring-slot' })
@@ -2418,6 +2508,13 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
    * 现在把它固定钉在输入框正上方，随依据变化实时更新。
    */
   const targetBar = el('div', { class: 'ea-target-bar', role: 'status', 'aria-live': 'polite' })
+  /**
+   * 把焦点交回输入框。用在「点发送/停止」之后：鼠标点击会把焦点留在按钮上，
+   * 而用户接下来要做的几乎总是继续打字。
+   */
+  const returnFocus = (): void => {
+    try { input.focus({ preventScroll: true }) } catch { /* 老浏览器不支持参数 */ }
+  }
   const form = el('form', { class: 'dsh-explain-assistant-form ea-composer' }) as HTMLFormElement
   form.append(targetBar, field.root, el('div', { class: 'ea-composer-actions' }, ringSlot, send))
 
@@ -2512,6 +2609,9 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     // 默认折叠模型列表：一开就摊开 33 个模型会把「使用说明 + 快捷问题」顶出可视区。
     // 未选模型时由摘要行 + 醒目的提示承担「先选一个」的引导（§7/§11.8）。
     form, input, field, send, modelOpen: false, modelQuery: '', modelCloseToken: 0,
+    // 缺省是「要」：renderOverlay 建出来就是为了展示给用户，打不开字比抢焦点更糟。
+    // 唯一的例外（后台重建）由调用方显式传 false —— 见 entry.ts 的 autoFocus。
+    pendingFocus: options.autoFocus !== false,
     rerender: () => updateOverlay(root, ctx.state, ctx.plugin),
   }
   contexts.set(root, ctx)
@@ -2647,25 +2747,20 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   }, { once: true })
 
   /**
-   * 打开时的焦点归属（C2）。
+   * 打开时的焦点归属（2026-11-07 改）。
    *
-   * 旧写法无条件把焦点塞进输入框：用户只是点一下「?」看一眼，正在主输入框里打的字
-   * 就被截到小助手这边来了。现在按**上一次输入方式**决定：
-   *  · 键盘打开（Tab 到「?」再回车）→ 焦点进输入框，省一次 Tab；
-   *  · 鼠标打开 → 一个焦点都不动（主输入框继续能打字），Esc 由 document 级监听兜住。
+   * 旧写法按**上一次输入方式**决定：鼠标打开就一个焦点都不动，理由是怕截走用户
+   * 正在主对话里打的字（C2）。实测代价更大 —— 浮窗一打开，输入框就在那儿、还带着
+   * 一根闪动的光标，用户抬手就打，字却全部进了主对话。用户原话：
+   * 「我希望点开小助手后默认焦点在输入框来直接输入」。
    *
-   * preventScroll 仍然必须给：默认的 focus() 会把浏览器滚到输入框，
-   * 于是首屏直接停在模型列表上、「使用说明 + 快捷问题」被顶出可视区。
+   * 现在分两种来源（判据在 entry.ts，见那边的 autoFocus）：
+   *  · 用户点/按开的 → 焦点送进输入框；
+   *  · 不是用户开的（后台切会话把浮窗带过来）→ 不抢。
+   * 具体怎么送见 deliverFocus：它要等挂载 + 就绪，送完还要校验一次。
    */
-  queueMicrotask(() => {
-    const modality = (() => {
-      try { return document.documentElement?.getAttribute('data-input-modality') } catch { return null }
-    })()
-    if (modality !== 'pointer') {
-      try { (input || root).focus({ preventScroll: true }) } catch { /* 老浏览器不支持参数 */ }
-    }
-    body.scrollTop = 0
-  })
+  body.scrollTop = 0
+  deliverFocus(ctx)
   return root
 }
 
@@ -3476,5 +3571,7 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   scrollToNewestOnOpen(ctx, state)
   // 流式跟随排在最后：它读的是这一帧重画后的真实高度，并自己决定要不要动滚动。
   followStreaming(ctx, state, wasAtBottom)
+  // 「打开即聚焦」的投递点之一：浮窗从加载页切到就绪档的那一次重画（见 deliverFocus）。
+  deliverFocus(ctx)
   // 注意：这里**不再回写 scrollTop**。见函数开头说明。
 }
