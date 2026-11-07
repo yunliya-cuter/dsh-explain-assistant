@@ -198,6 +198,21 @@ export class AssistantRegistry {
   get currentSessionId(): SessionId | undefined { return this.activeSessionId; }
   setCurrent(sessionId?: SessionId): void { if (this.activeSessionId === sessionId) { this.emit(); return; } this.activeSessionId = sessionId; this.emit(); }
   update(sessionId: SessionId, patch: Partial<AssistantClientState> | ((state: AssistantClientState) => void)): void { const state = this.get(sessionId); if (typeof patch === 'function') patch(state); else Object.assign(state, patch); this.emit(); }
+  /**
+   * 只改草稿的**快速通道**：改完不通知渲染。
+   *
+   * 为什么单独开一条：输入框每敲一个字都会 update({ draft }) → emit → 整个浮窗重画一遍
+   * （历史区比对签名、占用环重建、依据行重建……）。2026-11-07 实测：打字时
+   * updateOverlay 及其子调用约占单字耗时的 1/6，而**渲染树里没有任何一处读 draft**
+   * —— 浮窗唯一用到它的地方是「程序改写 value 后回写输入框」，那条判的是
+   * input.value !== state.draft，草稿跟着更新才不会被写回去。
+   * 所以这里只需要把值记下来，一次重画都不需要。
+   */
+  updateDraft(sessionId: SessionId, draft: string): void {
+    const state = this.get(sessionId)
+    if (state.draft === draft) return
+    state.draft = draft
+  }
   open(sessionId: SessionId, cwd?: string): void { this.get(sessionId, cwd); this.activeSessionId = sessionId; this.update(sessionId, { open: true, openedByUser: true, unread: false }); }
   close(sessionId: SessionId): void { this.update(sessionId, { open: false, openedByUser: false }); }
   remove(sessionId: SessionId): void { this.states.delete(sessionId); if (this.activeSessionId === sessionId) this.activeSessionId = undefined; this.emit(); }

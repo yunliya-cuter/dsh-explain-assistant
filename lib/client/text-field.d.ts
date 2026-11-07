@@ -63,7 +63,7 @@ export declare function springConfig(response: number, dampingRatio: number): {
     c: number;
 };
 export declare function createSpring(value: number, response: number, damping: number): Spring;
-/** 推进一个弹簧；返回是否还在动。与 caret.js 的 stepSpring 同一份积分器。 */
+/** 推进一个弹簧；返回是否还在动。与 caret.js 的 stepSpring 是同一份积分器。 */
 export declare function stepSpring(s: Spring, dt: number, substep: number): boolean;
 export type TextFieldHandle = {
     /** 包裹后的根节点（表单里应当 append 它，而不是原来的输入框） */

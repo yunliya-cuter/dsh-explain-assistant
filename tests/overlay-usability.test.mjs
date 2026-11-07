@@ -18,7 +18,13 @@ function pluginSpy() {
   return {
     updates,
     plugin: {
-      registry: { update: (id, patch) => updates.push({ id, patch }), close() {}, get: () => undefined },
+      registry: {
+        update: (id, patch) => updates.push({ id, patch }),
+        // 2026-11-07：草稿走独立快通道（不触发整棵浮窗重画）。替身照样记一条，
+        // 「输入必须写回 registry.draft」这条断言因此仍然盯着真实行为。
+        updateDraft: (id, draft) => updates.push({ id, patch: { draft } }),
+        close() {}, get: () => undefined
+      },
       api: { selectModel: async () => ({}), models: async () => ({ payload: {} }) },
       submit: async () => {}, loadEarlier: async () => {}, cancel() {},
     },

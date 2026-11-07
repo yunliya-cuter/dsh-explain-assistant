@@ -2474,9 +2474,31 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
       root.style.setProperty('--ea-body-h', height + 'px')
     }
   }
+  /**
+   * 正文区高度合并到「一帧最多量一次」，并且**拖动改大小的过程中一次都不量**。
+   *
+   * 2026-11-07（用户报「拉伸时卡顿」）实测：拖右下角 40 帧，p50 帧间隔 67ms、
+   * p95 166ms、20 个长任务。剖面里 ResizeObserverCallback 每帧 5–36ms ——
+   * 这条回调读 body.clientHeight（强制布局）再写 --ea-body-h（把整棵浮窗的样式标脏，
+   * 于是浏览器还要再排一次）；而它写进去的那个变量只给「完整内容」面板算 max-height 用，
+   * 拖动过程中根本没人看。尺寸稳定之后补量一次就够。
+   */
+  let bodyMeasureRaf = 0
+  const scheduleBodyMeasure = () => {
+    if (typeof requestAnimationFrame !== 'function') { measureBodyHeight(); return }
+    if (bodyMeasureRaf) return
+    const step = (): void => {
+      bodyMeasureRaf = requestAnimationFrame(() => {
+        bodyMeasureRaf = 0
+        if (root.getAttribute('data-resizing') === 'true') { step(); return }
+        measureBodyHeight()
+      })
+    }
+    step()
+  }
   measureBodyHeight()
   // 测试环境的假 DOM 里没有 ResizeObserver（也不需要）：没有就只保留首帧量到的那一次。
-  const bodyObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(() => measureBodyHeight()) : undefined
+  const bodyObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(() => scheduleBodyMeasure()) : undefined
   bodyObserver?.observe(body)
 
   const ctx: OverlayContext = {
@@ -2497,7 +2519,15 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   root.setAttribute('data-view', 'chat')
 
   input.value = state.draft
-  input.addEventListener('input', () => { const current = contexts.get(root); if (current) current.plugin.registry.update(current.state.sessionId, { draft: input.value }) })
+  // 走 updateDraft：草稿不进渲染树，敲字时不必重画整棵浮窗（见 store.ts 的说明）。
+  // 对没有这条快通道的实现（第三方 registry / 老测试替身）退回 update —— 行为一样，只是多一次重画。
+  input.addEventListener('input', () => {
+    const current = contexts.get(root)
+    if (!current) return
+    const registry = current.plugin.registry
+    if (typeof registry.updateDraft === 'function') registry.updateDraft(current.state.sessionId, input.value)
+    else registry.update(current.state.sessionId, { draft: input.value })
+  })
   form.addEventListener('submit', event => {
     event.preventDefault()
     const current = contexts.get(root)

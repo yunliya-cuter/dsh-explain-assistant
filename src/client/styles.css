@@ -805,6 +805,9 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
 }
 .ea-field-caret{
   position:absolute;left:0;top:0;width:2px;height:18px;border-radius:2px;
+  /* 位置/高度都走 transform（见 text-field.ts frame）：提成合成层，弹簧每帧只改变换，
+     不再让输入区重新布局。 */
+  will-change:transform;
   background:var(--ea-caret,var(--dsw-alias-button-primary-fill,#2f6bff));
   pointer-events:none;z-index:3;opacity:0;
   transition:opacity .36s ease-in-out;
@@ -860,6 +863,10 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay[data-selection-mode=true
   /* 审计 2026-10-31：这里原本是 resize:vertical，右下角因此长出一条斜纹拖拽柄，
      还被 12px 圆角切掉一半；而窗口本身已经能拖边改大小，这条柄只会让人误以为在拖输入框。 */
   resize:none;
+  /* 让浏览器自己按内容排版（Chrome 123+）：输入框随内容长高到 max-height 后自己滚，
+     不必再让 JS 每敲一个字就量一次 scrollHeight（那是一次强制布局）。
+     不支持的引擎里这条声明会被忽略，仍走 text-field.ts 的兜底逻辑。 */
+  field-sizing:content;
   padding:9px 11px;
   font:inherit;line-height:1.55;
   color:var(--dsw-alias-label-primary,#111);
@@ -1154,6 +1161,24 @@ body[data-ds-dark-theme] .ea-select-bar{
 .ea-resize-se{bottom:0;right:0;cursor:nwse-resize}
 .ea-resize-ne{top:0;right:0;cursor:nesw-resize}
 .ea-resize-sw{bottom:0;left:0;cursor:nesw-resize}
+/* 拖动改大小期间：**把最贵的两层绘制降级**。
+   
+   这不是审美取舍，是实测出来的：3082 真机（AMD 集显、1418×746、DPR 1.5）只改宽度、
+   不动任何 JS，24 帧的中位帧间隔在「开玻璃」时是 55.6 / 71.7 / 56.3ms，
+   关掉 backdrop-filter 与那圈 80px 投影后是 33.4 / 41.1 / 39.1ms；
+   同一组里的渲染耗时（LoAF 的 duration - styleAndLayout）477/977/542 → 146/367/155ms。
+   也就是说：拖动时每一帧都在**重新栅格化** 28px 的背板模糊和一整圈大投影 ——
+   元素尺寸一变，这两层就必须整块重画。JS 再怎么省也省不掉它们。
+   
+   所以拖动期间换成：实底（--ea-glass-pane）+ 一层小投影。松手立刻恢复玻璃。
+   外面那圈 2px 的蓝色边框反馈仍然保留（见下面的 ::after），用户看得见「正在改」。 */
+.dsh-explain-assistant-overlay[data-resizing=true]{
+  /* 必须 !important：深色主题那条是 body[data-ds-dark-theme] .dsh-explain-assistant-overlay
+     （0,2,1），比这里的（0,2,0）高一级 —— 不加的话深色下模糊根本关不掉（实测就是这样漏的）。 */
+  -webkit-backdrop-filter:none!important;backdrop-filter:none!important;
+  background:var(--ea-glass-pane);
+  box-shadow:0 8px 20px rgba(0,0,0,.16),inset 0 0 0 1px rgba(255,255,255,.16);
+}
 /* 拖动时给整个浮窗一个「正在改大小」的可见反馈，松手即恢复。 */
 .dsh-explain-assistant-overlay[data-resizing=true]{user-select:none}
 .dsh-explain-assistant-overlay[data-resizing=true]::after{
