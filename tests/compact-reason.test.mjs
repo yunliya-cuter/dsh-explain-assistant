@@ -26,7 +26,7 @@ import { moduleFromSource } from './fixtures/runtime.mjs';
 
 const reason = await moduleFromSource('src/shared/record-reason.ts');
 
-/** 2026-11-07：摘要必须符合六段骨架，否则会被判为 INVALID_SUMMARY（不落库）。 */
+/** 2026-11-07：摘要必须符合七段骨架，否则会被判为 INVALID_SUMMARY（不落库）。 */
 const SUMMARY_OK = [
   '## 一、用户与当前意图', '- 有效摘要正文',
   '## 二、硬约束与偏好（含否定式）', '无',
@@ -34,6 +34,7 @@ const SUMMARY_OK = [
   '## 四、已更正、已否决与已取代', '无',
   '## 五、未完成与待跟进', '无',
   '## 六、关键锚点（逐字照抄）', '无',
+  '## 七、已解释术语（术语 = 当时那句人话）', '无',
 ].join('\n');
 
 /* ================================================================== *

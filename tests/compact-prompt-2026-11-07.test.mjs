@@ -14,11 +14,11 @@ const textOf = (content) => Array.isArray(content) ? content.map(block => block.
  * 目标（用户原话）：「现在的提示词过于简单且缺少约束性…上下文压缩可以参考
  * dsh 的提示词针对我们的需求进行优化」。
  *
- * 这一组测试锁的是**契约**，不是文风：六段骨架、判据、来源分级、逐字保留、
+ * 这一组测试锁的是**契约**，不是文风：七段骨架、判据、来源分级、逐字保留、
  * 冲突消解、丢弃清单、长度预算、再压缩规则，任何一条被删都会红。
  * ======================================================================== */
 
-test('六段骨架逐字存在，且顺序与层级不变', () => {
+test('七段骨架逐字存在，且顺序与层级不变', () => {
   const titles = [
     '## 一、用户与当前意图',
     '## 二、硬约束与偏好（含否定式）',
@@ -26,6 +26,7 @@ test('六段骨架逐字存在，且顺序与层级不变', () => {
     '## 四、已更正、已否决与已取代',
     '## 五、未完成与待跟进',
     '## 六、关键锚点（逐字照抄）',
+    '## 七、已解释术语（术语 = 当时那句人话）',
   ];
   let cursor = -1;
   for (const title of titles) {
@@ -50,9 +51,9 @@ test('唯一职责与可验收判据：五问答不出就算压缩失败', () =>
   assert.match(spec, /不是续写|不回答用户的问题/, '必须写明它不是续写、不是回答');
 });
 
-test('空输入与工具边界：不找资料、不调用工具，六段照写「无」', () => {
+test('空输入与工具边界：不找资料、不调用工具，七段照写「无」', () => {
   const spec = prompts.COMPACT_SYSTEM_PROMPT;
-  assert.match(spec, /如果下面的对话是空的/, '空会话也必须输出合法的六段，而不是拒绝或追问');
+  assert.match(spec, /如果下面的对话是空的/, '空会话也必须输出合法的七段，而不是拒绝或追问');
   assert.match(spec, /每段写「无」/);
   assert.match(spec, /不调用任何工具/, '压缩器不该去读会话或调用工具');
   assert.match(spec, /不要解释、不要追问、不要去找资料/);
@@ -218,7 +219,7 @@ test('宿主确实把 purpose 与压缩预算接上了（不是只在纯函数�
   assert.match(source, /maxHistoryChars: COMPACT_CHAR_BUDGET/, '压缩必须用压缩自己的字数预算');
 });
 
-test('模型没按六段骨架输出时判为失败：拒绝或敷衍不得被存成摘要', async () => {
+test('模型没按七段骨架输出时判为失败：拒绝或敷衍不得被存成摘要', async () => {
   const stub = {
     stream() {
       return (async function* () {
@@ -228,15 +229,15 @@ test('模型没按六段骨架输出时判为失败：拒绝或敷衍不得被�
     },
   };
   const result = await llm.compactAssistant({ llm: stub, model: { provider: 'p', model: 'm' } }, []);
-  assert.equal(result.complete, false, '缺少六段骨架时必须判失败');
+  assert.equal(result.complete, false, '缺少七段骨架时必须判失败');
   assert.equal(result.failure?.code, 'INVALID_SUMMARY');
   assert.match(result.failure.message, /缺少必要的段落/);
   const reasons = await moduleFromSource('src/shared/record-reason.ts');
   assert.equal(reasons.deriveCompactReason({ complete: false, failure: { code: 'INVALID_SUMMARY' } }), 'invalid_summary', '原因码必须能落库并显示中文');
-  assert.match(reasons.RECORD_REASON_TEXT.invalid_summary, /六段格式/);
+  assert.match(reasons.RECORD_REASON_TEXT.invalid_summary, /七段格式/);
 });
 
-test('空会话使用自包含指令：不依赖「上面有对话」，且自带六段标题', async () => {
+test('空会话使用自包含指令：不依赖「上面有对话」，且自带七段标题', async () => {
   assert.match(prompts.COMPACT_EMPTY_INSTRUCTION, /这次没有历史对话/);
   for (const title of prompts.COMPACT_SECTION_TITLES) {
     assert.ok(prompts.COMPACT_EMPTY_INSTRUCTION.includes(title), '空指令必须自带这个标题：' + title);
