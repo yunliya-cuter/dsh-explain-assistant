@@ -245,6 +245,21 @@ test('U1: 到达停止线之后是终态 —— 滚到底也不会自己重新�
   } finally { dom.restore(); }
 });
 
+test('U1: 跟随中落地（记录比活体块高 20px）→ 仍然贴底，正文不被顶上去', async () => {
+  const dom = fakeDom();
+  try {
+    await withLayout({ top: 300, height: 40 }, async () => {
+      const { root, plugin, body, send, updateOverlay, idle } = await followHarness({ scrollTop: 1600 });
+      send();                                   // 跟随中（问句一直在可视区内，不会到停止线）
+      assert.equal(body.scrollTop, 1600);
+      // 落地：同一条回答变成历史记录，比活体块多了时间行/脚注 → 内容高 20px
+      body.scrollHeight = 2020;
+      updateOverlay(root, { ...idle, phase: 'complete', question: '它现在在干什么', text: '第一段', liveRecordId: 'r1', records: [{ id: 'r1', question: '它现在在干什么', answerText: '第一段' }] }, plugin);
+      assert.equal(body.scrollTop, 1620, '贴底的人落地后必须仍然贴底（= 2020 - 400），否则正文会被顶上去 20px');
+    });
+  } finally { dom.restore(); }
+});
+
 test('U1: 短回答（问句永远到不了顶）→ 跟到写完，最后贴底', async () => {
   const dom = fakeDom();
   try {
@@ -575,6 +590,7 @@ test('落地不跳: 用户没贴底时，回答从"当前这一问"搬进历史�
       const body = bodyOf(root);
       body.scrollHeight = 4000;
       body.scrollTop = 500;                       // 用户正在上面读，没贴底（max = 3600）
+      body.emit('scroll');                        // 真的滚过：跟随状态转成 paused（不滚就不会有 scroll 事件）
       const { updateOverlay } = await moduleFromSource('src/client/overlay.tsx');
       const landedRecord = { id: 'new', kind: 'ask', question: '它现在在干什么', answerText: '答：一整段回答', status: 'complete', startedAt: '2026-10-30T00:00:00.000Z' };
       updateOverlay(root, { ...before, phase: 'complete', liveRecordId: 'new', records: [landedRecord] }, plugin);

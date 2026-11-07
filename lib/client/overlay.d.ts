@@ -220,6 +220,8 @@ type OverlayContext = {
      * 只被三个事件改写：**发送 / 用户滚动 / 到达停止线**，别处一律不碰。
      */
     followPhase?: 'idle' | 'following' | 'paused' | 'stopped';
+    /** 「问句顶边贴住可视区顶边」对应的 scrollTop（每次重画量一次，缓动循环只读它）。 */
+    followStopAt?: number;
     /** 缓动跟随的 rAF 句柄（见 startFollowLoop）。 */
     followRaf?: number;
     /** 跟随用的**浮点**滚动位置：浏览器读回的 scrollTop 可能是整数，只靠它累加会丢小数（台阶来源）。 */

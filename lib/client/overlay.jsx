@@ -2822,6 +2822,8 @@ function followStreaming(ctx, state, wasAtBottom) {
     if (typeof question.getBoundingClientRect === 'function' && typeof body.getBoundingClientRect === 'function') {
         const qr = question.getBoundingClientRect();
         const br = body.getBoundingClientRect();
+        // 「问句顶边贴住可视区顶边」对应的 scrollTop（问句在内容里的位置固定，不随正文变长漂移）
+        ctx.followStopAt = qr.height > 0 && br.height > 0 ? (body.scrollTop ?? 0) + (qr.top - br.top) : undefined;
         if (qr.height > 0 && br.height > 0 && qr.top <= br.top + 1) {
             ctx.followPhase = 'stopped';
             stopFollowLoop(ctx);
@@ -2907,7 +2909,18 @@ function startFollowLoop(ctx) {
         lastTs = now;
         // 目标是**最大可滚动位置**，不是内容总高：写 scrollHeight 会被浏览器钳到底部，
         // 而我们的浮点位置却记住了那个越界值 —— 下一帧 delta 变负数，就再也追不动了。
-        const target = (body.scrollHeight ?? 0) - (body.clientHeight ?? 0);
+        //
+        // 但最大位置只是**上限**。真正的目标还要受「问句贴顶」那条停止线约束：
+        // 到了线就不再往下走，让问句停在上沿。这样缓动是**自然收敛**到停止线的，
+        // 不需要事后补一刀（那一刀会被看成"突然往上一跳"，用户 2026-11-07 报的就是这个）。
+        const maxTarget = (body.scrollHeight ?? 0) - (body.clientHeight ?? 0);
+        /**
+         * 停止线（"问句贴顶"那一刻的 scrollTop）由 **updateOverlay 每次重画时量一次**，
+         * 缓动循环只读这个数。循环里**绝不能**再量 getBoundingClientRect ——
+         * 每帧写 scrollTop 之后再量矩形就是每帧一次强制布局，那正是"不丝滑"的来源。
+         */
+        const stopAt = ctx.followStopAt;
+        const target = Number.isFinite(stopAt) && stopAt < maxTarget ? Math.max(0, stopAt) : maxTarget;
         if (!Number.isFinite(target) || target < 0) {
             ctx.followRaf = requestAnimationFrame(step);
             return;
@@ -2973,6 +2986,16 @@ export function updateOverlay(root, state, plugin) {
      */
     const readingAnchor = (() => {
         if (wasAtBottom)
+            return undefined;
+        /**
+         * **跟随进行中一律不记锚点**（2026-11-07 用户：「跟随动画没有之前丝滑」）。
+         *
+         * 记锚点要量活体块 + 历史里还看得见的头两轮，全是强制布局；而跟随期间量出来
+         * 必然是 0 位移 —— 纯开销。跟随循环每帧都在改 scrollTop，多几次强制布局就会掉帧，
+         * 看起来就是"不丝滑"。跟随的滚动权归跟随循环，这个锚点只在"用户自己在读
+         * （paused / stopped）"时才用。
+         */
+        if (isBusy(state) && ctx.followPhase === 'following')
             return undefined;
         const candidates = [];
         const push = (node, id) => {
@@ -3159,6 +3182,18 @@ export function updateOverlay(root, state, plugin) {
     // 「落地」：这一问的回答已经作为记录进了历史 → 当前这一块收起来，避免同一条回答出现两次。
     // 失败/中断没有落地（没有记录或记录未完成）时照常显示，用户得看到自己问过什么、为什么失败。
     const landed = Boolean(state.liveRecordId) && state.records.some(record => recordIdOf(record) === state.liveRecordId);
+    /**
+     * 落地那一帧：本来就贴着底的人**继续贴底**（2026-11-07 用户：「内容输出完成后
+     * 内容会往上移动一下」）。
+     *
+     * 根因是高度差：活体块里只有问句气泡 + 正文，而历史那一条多了时间行/工具过程/脚注，
+     * 实测 616px → 636px（+20px；长回答时更多）。跟随期间视口钉在内容底部，
+     * 落地后内容凭空高出一截，底边没变、正文就被顶上去一截 —— 看起来就是"生成完了往上跳一下"。
+     * 贴底的人要的是"最后一行还贴在底边"，所以这一帧直接再钉一次底；没贴底的人
+     * 走下面的阅读位置锚点，不受影响。
+     */
+    if (landed && (wasAtBottom || ctx.followPhase === 'following'))
+        ctx.scrollToTail = true;
     /**
      * 压缩中**不**进对话流：那段流式正文是"摘要"，不是"回答"。
      * 旧版把它按回答渲染，屏幕上会出现一个空问句气泡 + 自己滚出来的摘要 ——
@@ -3362,9 +3397,15 @@ export function updateOverlay(root, state, plugin) {
     }
     if (ctx.scrollToTail) {
         ctx.scrollToTail = false;
-        const height = ctx.body.scrollHeight;
-        if (typeof height === 'number' && Number.isFinite(height))
-            ctx.body.scrollTop = height;
+        /**
+         * 贴底写的是 **scrollHeight - clientHeight**（最大可滚动位置），不是 scrollHeight。
+         * 真实浏览器会自己把越界的值钳到底，写 scrollHeight 和不写一样；但写"最大值"
+         * 这条在测试的假 DOM 里也成立，两边口径统一，才测得出"到底有没有贴底"。
+         */
+        const node = ctx.body;
+        const target = (node.scrollHeight ?? 0) - (node.clientHeight ?? 0);
+        if (Number.isFinite(target) && target >= 0)
+            node.scrollTop = target;
     }
     scrollToNewestOnOpen(ctx, state);
     // 流式跟随排在最后：它读的是这一帧重画后的真实高度，并自己决定要不要动滚动。
