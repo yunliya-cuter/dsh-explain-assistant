@@ -352,6 +352,8 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 .ea-state-error-hint{margin:0;font-size:12px;line-height:1.6;color:var(--ea-text-tertiary,#777)}
 .ea-state-retry{align-self:flex-start}
 .ea-running{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--dsw-alias-label-secondary,#555)}
+/* 流式开始后槽位保持同高：只把内容藏起来，不删节点（见 currentStatusNodes 的说明） */
+.ea-running-placeholder{visibility:hidden}
 .ea-spinner{
   width:14px;height:14px;flex:0 0 auto;border-radius:50%;
   border:2px solid var(--dsw-alias-border-l3,rgba(0,0,0,.2));

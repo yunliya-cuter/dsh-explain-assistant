@@ -245,18 +245,29 @@ test('U1: 到达停止线之后是终态 —— 滚到底也不会自己重新�
   } finally { dom.restore(); }
 });
 
-test('U1: 跟随中落地（记录比活体块高 20px）→ 仍然贴底，正文不被顶上去', async () => {
+test('U1: 跟随中落地 → 正文块在屏幕上一动不动（记录多出来的时间行/脚注不许顶正文）', async () => {
   const dom = fakeDom();
   try {
-    await withLayout({ top: 300, height: 40 }, async () => {
+    const original = FakeElement.prototype.getBoundingClientRect;
+    FakeElement.prototype.getBoundingClientRect = function () {
+      const cls = String(this.className || '');
+      const size = (top, height) => ({ top, bottom: top + height, height, left: 0, right: 500, width: 500 });
+      if (cls.includes('ea-body')) return { top: 0, bottom: 400, height: 400, left: 0, right: 900, width: 900 };
+      if (cls.includes('ea-answer')) {
+        // 活体块里的正文：落地前 top=200；历史记录里的正文（多了上面 20px 的时间行）：top=220
+        const inLive = typeof this.closest === 'function' && this.closest('.ea-conv-live');
+        return size(inLive ? 200 : 220, 100);
+      }
+      return { top: 0, bottom: 0, height: 0, left: 0, right: 0, width: 0 };
+    };
+    try {
       const { root, plugin, body, send, updateOverlay, idle } = await followHarness({ scrollTop: 1600 });
       send();                                   // 跟随中（问句一直在可视区内，不会到停止线）
       assert.equal(body.scrollTop, 1600);
-      // 落地：同一条回答变成历史记录，比活体块多了时间行/脚注 → 内容高 20px
-      body.scrollHeight = 2020;
+      body.scrollHeight = 2020;                 // 落地：记录比活体块高 20px
       updateOverlay(root, { ...idle, phase: 'complete', question: '它现在在干什么', text: '第一段', liveRecordId: 'r1', records: [{ id: 'r1', question: '它现在在干什么', answerText: '第一段' }] }, plugin);
-      assert.equal(body.scrollTop, 1620, '贴底的人落地后必须仍然贴底（= 2020 - 400），否则正文会被顶上去 20px');
-    });
+      assert.equal(body.scrollTop, 1620, '正文块落地后下移 20px，scrollTop 就补 20px —— 屏幕上正文一动不动');
+    } finally { FakeElement.prototype.getBoundingClientRect = original; }
   } finally { dom.restore(); }
 });
 

@@ -229,9 +229,23 @@ function timeText(value) {
  * 用户看到的是跳变。所以正文独占一个槽位，这个提示条自己一个槽位，互不牵连。
  */
 function currentStatusNodes(state, plugin) {
-    if (!isBusy(state) || state.text)
+    if (!isBusy(state))
         return [];
-    return [el('div', { class: 'ea-running', role: 'status' }, el('span', { class: 'ea-spinner', 'aria-hidden': 'true' }), el('span', { text: state.phase === 'connecting' ? '正在连接模型…' : '正在解释…' }), button('停止', '停止本次解释', () => plugin.cancel?.(), { class: 'ea-btn ea-btn-quiet' }))];
+    /**
+     * 这一行的高度必须**全程恒定**（用户 2026-11-07：「内容输出完毕后还是会跳一下，
+     * 我推测是因为'正在连接模型'这几个字」）。
+     *
+     * 旧写法是「没吐字才画、一吐字就整行删掉」：24px 的行在首字到达那一帧消失，
+     * 下面的问句和正文整体往上顶 24px —— 一次实实在在的跳动。
+     * 现在只要这一问还在跑，这个槽位就在（同一高度、同一基线），首字到达只是把
+     * 里面的文字藏起来（visibility:hidden），**不动布局**。
+     */
+    const placeholder = Boolean(state.text);
+    return [el('div', {
+            class: 'ea-running' + (placeholder ? ' ea-running-placeholder' : ''),
+            role: 'status',
+            'aria-hidden': placeholder ? 'true' : undefined,
+        }, el('span', { class: 'ea-spinner', 'aria-hidden': 'true' }), el('span', { text: state.phase === 'connecting' ? '正在连接模型…' : '正在解释…' }), button('停止', '停止本次解释', () => plugin.cancel?.(), { class: 'ea-btn ea-btn-quiet' }))];
 }
 /** 当前这次提问的推理过程与工具过程（正文由 answerSlot 单独负责）。 */
 function currentDetailNodes(state) {
@@ -3192,8 +3206,22 @@ export function updateOverlay(root, state, plugin) {
      * 贴底的人要的是"最后一行还贴在底边"，所以这一帧直接再钉一次底；没贴底的人
      * 走下面的阅读位置锚点，不受影响。
      */
-    if (landed && (wasAtBottom || ctx.followPhase === 'following'))
-        ctx.scrollToTail = true;
+    /**
+     * 落地那一帧要按**正文块**锚定（用户 2026-11-07：「内容输出完毕后还是会跳一下」）。
+     *
+     * 为什么不是"钉底"：历史记录比活体块多了时间行（在正文上方）和脚注（在正文下方），
+     * 钉底只会把**底边**固定住 —— 多出来的脚注会把正文整体往上顶。用户看的是正文，
+     * 所以这里量的是"正文块顶边"，落地前后让它停在原地；脚注露出来多少随它去。
+     */
+    const landingAnswerTop = (() => {
+        if (!landed)
+            return undefined;
+        const answer = ctx.liveTurn.querySelector?.('.ea-answer');
+        if (!answer || typeof answer.getBoundingClientRect !== 'function')
+            return undefined;
+        const rect = answer.getBoundingClientRect();
+        return rect && rect.height > 0 ? rect.top : undefined;
+    })();
     /**
      * 压缩中**不**进对话流：那段流式正文是"摘要"，不是"回答"。
      * 旧版把它按回答渲染，屏幕上会出现一个空问句气泡 + 自己滚出来的摘要 ——
@@ -3246,6 +3274,33 @@ export function updateOverlay(root, state, plugin) {
     }
     ctx.detailInline = false;
     renderHistory(ctx, state);
+    // 落地：把**正文块**按它落地前的屏幕位置摆回去（见 landingAnswerTop）。
+    //
+    // 为什么要在下面再补两帧：落地这一帧还会排队一些异步重排（scheduleFoldCheck 折叠上一轮、
+    // 历史区按签名再重挂一次），它们会在我们量完之后再动一次布局。实测一次性补偿会残留 14px 左右，
+    // 补两帧之后归零。只补两帧、且只在"用户没有自己滚动"的前提下补，避免和用户抢滚动条。
+    if (landingAnswerTop !== undefined && state.liveRecordId) {
+        const session = ctx.sessionId;
+        const settle = (left) => {
+            const current = contexts.get(root);
+            if (!current || current.sessionId !== session)
+                return;
+            const turns = Array.from(current.historySlot.querySelectorAll('.ea-turn'));
+            const turn = turns.find(node => node.getAttribute('data-record-id') === state.liveRecordId);
+            const answer = turn?.querySelector('.ea-turn-a');
+            if (!answer || typeof answer.getBoundingClientRect !== 'function')
+                return;
+            const rect = answer.getBoundingClientRect();
+            if (!(rect.height > 0))
+                return;
+            const delta = rect.top - landingAnswerTop;
+            if (Number.isFinite(delta) && Math.abs(delta) > 1)
+                current.body.scrollTop += delta;
+            if (left > 0 && typeof requestAnimationFrame === 'function')
+                requestAnimationFrame(() => settle(left - 1));
+        };
+        settle(2);
+    }
     // 落地后把这一轮按"屏幕上原来的位置"摆回去（见 readingAnchor）。
     if (readingAnchor) {
         const turns = Array.from(ctx.historySlot.querySelectorAll('.ea-turn'));
