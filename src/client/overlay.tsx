@@ -298,24 +298,19 @@ function timeText(value: unknown): string {
 function currentStatusNodes(state: AssistantClientState, plugin: PluginLike): Child[] {
   if (!isBusy(state)) return []
   /**
-   * 这一行的高度必须**全程恒定**（用户 2026-11-07：「内容输出完毕后还是会跳一下，
-   * 我推测是因为'正在连接模型'这几个字」）。
+   * 「正在连接模型…/正在解释…」+ 停止按钮。
    *
-   * 旧写法是「没吐字才画、一吐字就整行删掉」：24px 的行在首字到达那一帧消失，
-   * 下面的问句和正文整体往上顶 24px —— 一次实实在在的跳动。
-   * 现在只要这一问还在跑，这个槽位就在（同一高度、同一基线），首字到达只是把
-   * 里面的文字藏起来（visibility:hidden），**不动布局**。
+   * 这几个字**不能待在正文里**（用户 2026-11-07：「内容输出完毕后还是会跳一下，
+   * 我推测是因为'正在连接模型'这几个字」）。它原来长在问句下面、正文上面：
+   * 首字一到整行删掉 → 下面整体上移 24px；落地时随活体块一起消失 → 又是一次。
+   * 现在它挪到**输入框上方那条状态带**里（见 renderOverlay 的 statusBar）：
+   * 状态带高度恒定，正文区的结构从连接到最后**一个字都不变**。
    */
-  const placeholder = Boolean(state.text)
-  return [el('div', {
-    class: 'ea-running' + (placeholder ? ' ea-running-placeholder' : ''),
-    role: 'status',
-    'aria-hidden': placeholder ? 'true' : undefined,
-  },
+  return [
     el('span', { class: 'ea-spinner', 'aria-hidden': 'true' }),
     el('span', { text: state.phase === 'connecting' ? '正在连接模型…' : '正在解释…' }),
     button('停止', '停止本次解释', () => plugin.cancel?.(), { class: 'ea-btn ea-btn-quiet' }),
-  )]
+  ]
 }
 
 /** 当前这次提问的推理过程与工具过程（正文由 answerSlot 单独负责）。 */
@@ -2070,6 +2065,8 @@ type OverlayContext = {
   liveTurn: HTMLElement
   /** 当前这一问的问句气泡。 */
   liveQuestion: HTMLElement
+  /** 输入框上方的状态带（「正在连接模型…」在这里；滚动区外，不影响正文布局）。 */
+  statusBar: HTMLElement
   /**
    * 流式期间「回到最新」那颗浮动按钮。
    *
@@ -2501,7 +2498,14 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
    */
   const liveQuestion = el('div', { class: 'ea-turn-q ea-live-q' })
   const liveTurn = el('section', { class: 'ea-conv-live', 'aria-label': '当前这一问' })
-  liveTurn.append(el('article', { class: 'ea-turn ea-turn-live' }, liveQuestion, currentSlot, answerSlot))
+  /**
+   * 与历史记录**同构**的时间行占位：记录在问句和正文之间有一行 .ea-turn-meta
+   * （右侧时间，行高 16px、上边距 -6px，实际占 10px）。活体块原来没有这一行，
+   * 落地那一刻'问句↔正文'的间距就变了 —— 只锚正文的话问句会往下挪 10~14px（实测 14px），
+   * 正是用户说的'往下移动一下'。这里放一个同 class、同高度的不可见占位，两边结构一致。
+   */
+  const liveMeta = el('div', { class: 'ea-turn-meta ea-live-meta', 'aria-hidden': 'true', text: '\u00A0' })
+  liveTurn.append(el('article', { class: 'ea-turn ea-turn-live' }, liveQuestion, liveMeta, currentSlot, answerSlot))
   // 展开面板放在最前面：用户点的是「查看完整内容」，结果必须在打开的那一刻就被看见，
   // 否则在长长的历史列表里点完之后什么都不会变化（内容其实在下面，用户以为按钮坏了）。
   const detailSlot = el('div', { class: 'ea-slot' })
@@ -2535,6 +2539,11 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   followJump.hidden = true
   body.appendChild(followJump)
 
+  /**
+   * 输入框上方的状态带：高度恒定（CSS min-height），只在忙的时候填内容。
+   * 「正在连接模型…」这几个字住在这里 —— 它在滚动区**外面**，怎么变都不影响正文布局。
+   */
+  const statusBar = el('div', { class: 'ea-status-bar', role: 'status', 'aria-live': 'polite' })
   const input = el('textarea', { class: 'ea-input', placeholder: '问小助手主 agent 正在做什么…', 'aria-label': '向解释小助手提问', rows: '2' }) as HTMLTextAreaElement
   /**
    * 平滑光标 + 蓝色选区（移植自 More 设置向导 2026-10-25 版，见 text-field.ts）。
@@ -2606,7 +2615,7 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
   // 中间层：正文 + 输入区 + 模型页槽。模型页绝对定位盖满它，
   // 于是「打开时输入区隐藏」造成的重排发生在遮挡物后面（看不见）。
   const main = el('div', { class: 'ea-main' })
-  main.append(body, form, modelPanelSlot, tutorialSlot)
+  main.append(body, statusBar, form, modelPanelSlot, tutorialSlot)
   root.append(titlebar, main, ...resizeZones.map(zone => zone.element))
   /**
    * 「查看完整内容」面板的高度上限要用「正文区有多高」来算（见 styles.css 的 .dsh-explain-assistant-detail）。
@@ -2663,7 +2672,7 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     // 不这样做的话，每次重画都会把用户刚拖好的位置按旧值拽回去。
     errorSlot, errorTailSlot, currentSlot, answerSlot, answerView, heroSlot, quickSlot, evidenceSlot, compactSlot, historySlot, detailSlot, ringSlot, targetBar, catalogNoteSlot, modelPanelSlot, modelTrigger,
     selectBar, selectBarCount, selectBarDone, compactBtn, tutorialBtn, tutorialSlot, tutorialOpen: false, tutorialCloseToken: 0,
-    liveTurn, liveQuestion, followJump, expandedIds: new Set<string>(), sessionId: state.sessionId,
+    liveTurn, liveQuestion, statusBar, followJump, expandedIds: new Set<string>(), sessionId: state.sessionId,
     loadingSlot, stateErrorSlot, root,
     // 默认折叠模型列表：一开就摊开 33 个模型会把「使用说明 + 快捷问题」顶出可视区。
     // 未选模型时由摘要行 + 醒目的提示承担「先选一个」的引导（§7/§11.8）。
@@ -3548,7 +3557,9 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   const showLive = !compacting && !landed && Boolean(state.question || state.text || isBusy(state))
   ctx.liveTurn.hidden = !showLive
   ctx.liveQuestion.textContent = showLive ? (state.question || '') : ''
-  fill(ctx.currentSlot, [...currentStatusNodes(state, ctx.plugin), ...currentDetailNodes(state), ...offlineFallbackNodes(state)])
+  fill(ctx.currentSlot, [...currentDetailNodes(state), ...offlineFallbackNodes(state)])
+  // 状态带在滚动区外：只有'这一问在跑'时有内容，高度由 CSS 固定，正文布局不受影响。
+  fill(ctx.statusBar, currentStatusNodes(state, ctx.plugin))
   // 正文：走增量渲染。
   //
   // streaming 的判据是「还在吐字」，也就是 phase 为 connecting/running。
@@ -3595,6 +3606,15 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   // 为什么要在下面再补两帧：落地这一帧还会排队一些异步重排（scheduleFoldCheck 折叠上一轮、
   // 历史区按签名再重挂一次），它们会在我们量完之后再动一次布局。实测一次性补偿会残留 14px 左右，
   // 补两帧之后归零。只补两帧、且只在"用户没有自己滚动"的前提下补，避免和用户抢滚动条。
+  /**
+   * 落地补偿**只能有一个来源**（2026-11-07 用户：「在内容生成完毕后会往下移动一下」）。
+   *
+   * 上一版这里同时跑了两套补偿：正文块锚点 + 阅读位置锚点（记录轮的顶边）。
+   * 两套都往同一个方向补，等于**补了两遍** —— 屏幕上的内容就往反方向多走了一段，
+   * 用户看到的是"往下移动一下"。现在：落地这一帧只要正文块锚点生效，
+   * 阅读位置锚点整帧跳过，绝不叠加。
+   */
+  let landingAnchored = false
   if (landingAnswerTop !== undefined && state.liveRecordId) {
     const session = ctx.sessionId
     const settle = (left: number): void => {
@@ -3611,9 +3631,11 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
       if (left > 0 && typeof requestAnimationFrame === 'function') requestAnimationFrame(() => settle(left - 1))
     }
     settle(2)
+    landingAnchored = true
   }
   // 落地后把这一轮按"屏幕上原来的位置"摆回去（见 readingAnchor）。
-  if (readingAnchor) {
+  // 落地那一帧已经由上面的正文块锚点负责，这里跳过（否则两套补偿叠加）。
+  if (readingAnchor && !landingAnchored) {
     const turns = Array.from(ctx.historySlot.querySelectorAll('.ea-turn') as ArrayLike<HTMLElement>)
     for (const anchor of readingAnchor) {
       const node = turns.find(turn => turn.getAttribute('data-record-id') === anchor.id)

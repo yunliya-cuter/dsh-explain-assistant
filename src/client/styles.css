@@ -354,6 +354,11 @@ body[data-ds-dark-theme] .dsh-explain-assistant-overlay{
 .ea-running{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--dsw-alias-label-secondary,#555)}
 /* 流式开始后槽位保持同高：只把内容藏起来，不删节点（见 currentStatusNodes 的说明） */
 .ea-running-placeholder{visibility:hidden}
+/* 输入框上方的状态带：高度恒定，「正在连接模型…」住这里 —— 它在滚动区之外，
+   这几个字的出现/消失永远不改变正文布局（见 overlay.tsx 的 statusBar 说明）。 */
+.ea-status-bar{flex:0 0 auto;min-height:24px;display:flex;align-items:center;gap:9px;padding:0 16px 2px;font-size:12.5px;color:var(--dsw-alias-label-secondary,#555)}
+/* 活体块里的时间行占位：只为与历史记录同构，不可见（见 overlay.tsx 的 liveMeta 说明）。 */
+.ea-live-meta{visibility:hidden}
 .ea-spinner{
   width:14px;height:14px;flex:0 0 auto;border-radius:50%;
   border:2px solid var(--dsw-alias-border-l3,rgba(0,0,0,.2));

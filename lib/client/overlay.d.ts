@@ -172,6 +172,8 @@ type OverlayContext = {
     liveTurn: HTMLElement;
     /** 当前这一问的问句气泡。 */
     liveQuestion: HTMLElement;
+    /** 输入框上方的状态带（「正在连接模型…」在这里；滚动区外，不影响正文布局）。 */
+    statusBar: HTMLElement;
     /**
      * 流式期间「回到最新」那颗浮动按钮。
      *
