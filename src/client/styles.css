@@ -41,6 +41,11 @@
   --ea-band-fill:rgba(127,127,127,.08);
   /* 输入框不再用实心底：深色下 --dsw-alias-bg-base 就是纯黑，压在半透明玻璃上会变成一块黑砖。
      改成「比玻璃略深一点的凹槽」+ 一圈细边，既有输入区的边界，又不把玻璃挖掉一块。 */
+  /* 选中高亮色。**优先跟随暖色主题的「业务主色」**（就是 warm-ui 在正文里画的那个橙），
+     拿不到就退回原来的蓝。用户在正文里看到的是橙框，浮窗里若还是蓝的，同一个动作两种颜色；
+     而且深色玻璃上 28% 的蓝几乎看不出变化（实测对比度 1.2:1），橙的亮度差更大、更认得出。 */
+  --ea-selection:rgba(47,107,255,.28);
+  --ea-selection:color-mix(in srgb, var(--dsw-alias-state-business-primary,#2f6bff) 34%, transparent);
   --ea-field-fill:rgba(255,255,255,.55);
   --ea-field-border:rgba(0,0,0,.12);
   /* 审计 2026-10-31：宿主的 warn/tertiary/error 是按大面积色块设计的，压在这层玻璃上不够读。

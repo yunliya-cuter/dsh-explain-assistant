@@ -103,3 +103,29 @@ test('拉伸: 拖动期间不量正文高度、不重算镜面（尺寸稳定后
   assert.match(tf, /function whenResizeSettled/, '输入框必须等尺寸稳定再量');
   assert.match(tf, /whenResizeSettled\(scheduleRefresh\)/, 'ResizeObserver 必须走 whenResizeSettled');
 });
+
+/* ============ 选中：高亮必须画在选中的字上，而且看得见 ============ */
+
+test('选中: 高亮层换挂载点时必须作废原点缓存（否则框会画到别处/干脆看不见）', async () => {
+  const src = await read('src/client/page-selection.ts');
+  // 2026-11-07 真机复现：刚打开浮窗、还没滚过时拖选第一段文字，文字在 y=78、橙框画在 y=153
+  // （正好差一个 .ea-turn-a 的原点 76px）。根因就是 originCache 在 ensureHost 换容器后没失效。
+  const m = src.match(/function ensureHost\(el: Element \| null\): void \{[\s\S]*?\n  \}/);
+  assert.ok(m, '必须有 ensureHost');
+  assert.match(m[0], /originCache = null/, '换挂载点后必须让原点缓存失效');
+});
+
+test('选中: 浮窗自己改大小要重新量（拖边只改 style，没有 window.resize）', async () => {
+  const src = await read('src/client/page-selection.ts');
+  assert.match(src, /new ResizeObserver\(\(\) => onPanelResize\(\)\)/, '必须观察浮窗自身尺寸');
+  assert.match(src, /data-resizing'\) === 'true'/, '拖动过程中先不重量（和浏览器重排叠在一起会更卡）');
+  assert.match(src, /refresh\(true\)/, '尺寸稳定后要补一次（缓存失效 + 重新量）');
+});
+
+test('选中: 高亮色跟随暖色主题的业务主色（深色玻璃上原来的蓝几乎看不见）', async () => {
+  const css = await read('src/client/styles.css');
+  // 深色玻璃上 28% 的蓝与底色的对比度实测只有 1.13:1 —— 等于没画；
+  // 换成 warm-ui 正文选区用的同一个 #e59f52（34%）后是 1.5~1.8:1，且和正文里的橙框同色。
+  assert.match(css, /--ea-selection:color-mix\(in srgb, var\(--dsw-alias-state-business-primary/, '高亮色必须跟业务主色走');
+  assert.match(css, /--ea-selection:rgba\(47,107,255,\.28\)/, '拿不到业务主色时仍要有兜底色（旧值）');
+});

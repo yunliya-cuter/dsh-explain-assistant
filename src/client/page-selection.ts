@@ -155,6 +155,12 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
       if (cs.position === 'static') { hostPrevPos = target.style.position; target.style.position = 'relative'; hostPatched = true }
       target.appendChild(layer)
       host = target
+      /* 层换了挂载点 → 它的原点（视口坐标）跟着变。
+         漏了这一句的后果是**看得见却画错地方**：2026-11-07 真机复现 —— 刚打开浮窗、
+         还没滚过的时候拖选第一段文字，文字在 y=78，橙框却画在 y=153（正好差一个
+         .ea-turn-a 的原点 76px）；差得再多一点就整块跑出可视区，用户看到的就是
+         「选中了，但什么框都没有」。 */
+      originCache = null
     } catch { /* 挂不上就留在原地 */ }
   }
 
@@ -605,6 +611,28 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
   const onPointerDown = () => { if (active) start() }
   const onPointerUp = () => refresh()
   const onScroll = () => { refresh(true) }
+  /**
+   * 浮窗自己改大小：拖边/拖角走的是 pointermove 直接改 style，**不会**派发 window.resize，
+   * 于是正文的折行全变了、高亮层却还按旧几何在画（用户看到的就是框错位）。
+   * 观察根节点即可 —— 没有选区时 refresh 只多一次空转（selectionScope 立刻返回）。
+   */
+  let settleRaf = 0
+  const onPanelResize = (): void => {
+    const panel = (root.closest?.('.dsh-explain-assistant-overlay') || root) as HTMLElement
+    if (panel.getAttribute('data-resizing') !== 'true') { refresh(true); return }
+    /* 拖动改大小期间先不重量：每帧一次量取会和浏览器自己的重排叠在一起（实测拖一下多 3 倍布局）。
+       尺寸稳定后补一次 —— 拖动时用户也不会盯着选区看。 */
+    if (settleRaf) return
+    const step = (): void => {
+      settleRaf = 0
+      if (dead) return
+      if (panel.getAttribute('data-resizing') === 'true') { settleRaf = requestAnimationFrame(step); return }
+      refresh(true)
+    }
+    settleRaf = requestAnimationFrame(step)
+  }
+  const sizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(() => onPanelResize()) : undefined
+  try { sizeObserver?.observe(root) } catch { /* 观察不了就算了 */ }
   const onViewportChange = () => { refresh(true) }
 
   const listeners: Array<[EventTarget, string, EventListener, boolean]> = [
@@ -659,6 +687,8 @@ export function mountPageSelection(root: HTMLElement, overrides: Partial<TextFie
       if (rafId) cancelAnimationFrame(rafId)
       rafId = 0
       listeners.forEach(([target, name, fn, capture]) => target.removeEventListener(name, fn, capture))
+      try { sizeObserver?.disconnect() } catch { /* 忽略 */ }
+      if (settleRaf) cancelAnimationFrame(settleRaf)
       motionQuery?.removeEventListener?.('change', onMotionChange)
       observer?.disconnect()
       root.removeAttribute('data-page-selection')
