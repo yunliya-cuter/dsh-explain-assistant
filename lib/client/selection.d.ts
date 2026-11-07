@@ -14,6 +14,13 @@ import type { EvidenceItem } from './store.js';
  * - 拿不到任何可判定属性，或内容为空 → 信息不足。
  */
 export declare function classifyEvidence(element: Element): EvidenceItem['evidenceState'];
+/**
+ * 只取「人眼看得见」的文字。
+ *
+ * textContent 会把隐藏节点、读屏专用文案一起算进来。这里逐文本节点判断，
+ * 跳过隐藏祖先；一个可见字符都没有时才退回 textContent（宁可多，也不要空）。
+ */
+export declare function visibleText(root: Element): string;
 export declare function evidenceFromElement(element: Element, sessionId: string): EvidenceItem;
 type SelectionController = {
     enter(): void;

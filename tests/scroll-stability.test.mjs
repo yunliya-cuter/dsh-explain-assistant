@@ -176,16 +176,20 @@ test('防抽搐: 用户正在滚动的过程中，重画一次都不许写 scrol
   assert.equal(model.value, 200 + 60 * 10, '用户的滚动位移必须完整保留，一次都不许被抹掉');
 }));
 
-test('防抽搐: 只有显式切换到另一条记录展开时才允许归零滚动位置', async () => withDom(async () => {
+test('防抽搐: 展开「完整内容」不得把滚动位置归零（面板自己滚进视野）', async () => withDom(async () => {
   const plugin = pluginSpy();
   const root = overlay.renderOverlay(state({ text: '回答' }), plugin);
   const body = bodyOf(root);
   const model = installScrollModel(body);
   model.browserAdjust(300);
 
-  // 显式展开第一条记录 r1：这一次归零是**有意**的（用户点了「查看完整内容」，面板要滚到可见处）
+  // 展开第一条记录 r1。
+  // 以前这里会把 scrollTop 归零 —— 真机上就是「点了『查看完整内容』，画面往上跳 544px，
+  // 而刚展开的面板落在视野下方 500 多像素处」。现在改为：保住当前位置，
+  // 由 placeDetailPanel 把面板摆进视野（量不到布局时一次都不写）。
   overlay.updateOverlay(root, state({ text: '回答2', historyDetail: { recordId: 'r1', status: 'ready', hasEarlier: false, loadingMore: false } }), plugin);
-  assert.deepEqual(model.writes, [0], '首次展开一条记录时归零是允许的（这是有意的定位行为）');
+  assert.deepEqual(model.writes, [], '展开详情不得把滚动位置归零，实际写了 ' + JSON.stringify(model.writes));
+  assert.equal(model.value, 300, '滚动位置必须原样保留');
 
   // 关键：同一条记录的**后续重画**（模拟续读、流式回答）——不许再动滚动位置
   model.writes.length = 0;
@@ -193,9 +197,9 @@ test('防抽搐: 只有显式切换到另一条记录展开时才允许归零滚
   overlay.updateOverlay(root, state({ text: '回答4', historyDetail: { recordId: 'r1', status: 'ready', hasEarlier: false, loadingMore: false } }), plugin);
   assert.deepEqual(model.writes, [], '同一条记录的后续重画不得再动滚动位置');
 
-  // 显式换成另一条记录 r2：又允许归零一次
+  // 换成另一条记录：同样不许归零
   overlay.updateOverlay(root, state({ text: '回答4', historyDetail: { recordId: 'r2', status: 'ready', hasEarlier: false, loadingMore: false } }), plugin);
-  assert.deepEqual(model.writes, [0], '只有换成另一条记录时才允许再归零一次');
+  assert.deepEqual(model.writes, [], '换一条记录也不得把滚动位置归零');
 }));
 
 /* ================================================================== *

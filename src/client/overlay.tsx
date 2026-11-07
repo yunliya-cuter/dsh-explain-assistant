@@ -487,6 +487,8 @@ type ModelPanel = {
   search: HTMLInputElement
   list: HTMLElement
   failures: HTMLElement
+  /** 「刷新」失败时的就地错误条：必须显示在**当前这一页**上（对话页此刻是隐形的）。 */
+  error: HTMLElement
   refresh: HTMLButtonElement
 }
 
@@ -586,10 +588,24 @@ function buildModelPanel(getCtx: () => OverlayContext | undefined): ModelPanel {
   }) as HTMLInputElement
   const list = el('div', { class: 'ea-model-list ea-model-panel-list', role: 'group', 'aria-label': '可选模型列表' })
   const failures = el('div', { class: 'ea-model-panel-failures' })
+  /**
+   * 「刷新」失败的就地错误条。
+   *
+   * 旧写法把错误写进 registry 的 state.error —— 那一块渲染在**对话页**顶部，
+   * 而此刻对话页整页被模型页盖住并淡出（opacity:0）。于是用户点「刷新」、
+   * 请求失败，界面上**一个像素都不会变**（只有按钮从灰变回可点）。
+   * 错误必须出现在用户此刻正在看的那一页上。
+   */
+  const error = el('p', { class: 'ea-model-panel-error ea-error', role: 'alert' })
+  error.hidden = true
   const refresh = button('刷新', '重新读取可用模型列表（绕开缓存）', () => {
     const ctx = getCtx()
     if (!ctx || !ctx.plugin.api?.models) return
     refresh.disabled = true
+    const idleLabel = refresh.textContent || '刷新'
+    refresh.textContent = '刷新中…'
+    error.hidden = true
+    error.textContent = ''
     /**
      * 「刷新」是用户亲手点的一下：失败、挂起都必须有结局。
      * 没有超时的话，一次卡住的请求会让这颗按钮**永远灰着** —— 看起来像"刷新坏了"。
@@ -597,12 +613,19 @@ function buildModelPanel(getCtx: () => OverlayContext | undefined): ModelPanel {
     const timeout = new Promise<never>((_, reject) => {
       setTimeout(() => reject(new Error('读取模型目录超时（等了 10 秒没有回应）。可以再点一次刷新。')), 10_000)
     })
-    void Promise.race([ctx.plugin.api.models(), timeout]).then(result => {
+    void Promise.race([ctx.plugin.api.models(ctx.state.sessionId), timeout]).then(result => {
       const payload = (result.payload || {}) as Record<string, unknown>
       ctx.plugin.registry.update(ctx.state.sessionId, { catalog: payload as never })
-    }).catch(error => ctx.plugin.registry.update(ctx.state.sessionId, {
-      error: error instanceof Error ? error.message : String(error),
-    })).finally(() => { refresh.disabled = false })
+      error.hidden = true
+      error.textContent = ''
+    }).catch(reason => {
+      const message = reason instanceof Error ? reason.message : String(reason)
+      error.textContent = '刷新失败：' + message
+      error.hidden = false
+    }).finally(() => {
+      refresh.disabled = false
+      refresh.textContent = idleLabel
+    })
   }, { class: 'ea-btn ea-btn-soft ea-model-panel-refresh' })
   const back = button('← 返回', '关闭模型选择，回到对话', () => {
     const ctx = getCtx()
@@ -625,6 +648,7 @@ function buildModelPanel(getCtx: () => OverlayContext | undefined): ModelPanel {
     el('div', { class: 'ea-model-panel-filter' }, search),
     list,
     failures,
+    error,
   )
   search.addEventListener('input', () => {
     const ctx = getCtx()
@@ -632,7 +656,7 @@ function buildModelPanel(getCtx: () => OverlayContext | undefined): ModelPanel {
     ctx.modelQuery = search.value
     renderModelList(ctx)
   })
-  return { root, count, current, search, list, failures, refresh }
+  return { root, count, current, search, list, failures, error, refresh }
 }
 
 /**
@@ -1521,8 +1545,17 @@ function historyTurnNodes(input: unknown, ctx: OverlayContext, newestId: string)
     // 正文渲染走缓存：updateOverlay 会反复重画，没有缓存就等于每次把所有历史重新解析一遍。
     // 缓存键必须稳定：有 id 用 id，没有 id 用正文指纹（不能用位置索引 —— 分页会漂移）。
     const key = id || 'turn#' + contentKey(question + '\u0000' + answer);
+    /**
+     * 这里必须**同时**挂 ea-answer。
+     *
+     * 流式那一份正文挂在 .ea-answer 下，用的是 .ea-answer .ea-md-* 这一套排版；
+     * 落地后这一份原来只挂 .ea-turn-a.ea-md-scope，用的是另一套（.ea-md-scope）——
+     * 两套的字号/段距并不相同：实测同一条回答落地瞬间 h2 15.5px → 14.5px、
+     * 段落间距 9px → 7px、列表项 2px → 0、代码块 12px → 11.5px，整块矮了 16px。
+     * 用户看到的就是「输出完了以后字变了」。挂上 ea-answer 之后两边同一套规则。
+     */
     nodes.push(el('div', {
-      class: 'ea-turn-a ea-md-scope',
+      class: 'ea-turn-a ea-md-scope ea-answer',
       'data-folded': folded ? 'true' : 'false',
     }, ...cachedMarkdownNodes(key, answer)));
   }
@@ -1921,8 +1954,12 @@ function ringNode(state: AssistantClientState): HTMLElement {
   const partsText = occupancyPartsText(state.occupancyParts)
   if (partsText) box.setAttribute('title', partsText)
   box.setAttribute('role', 'img')
+  /**
+   * 「0%」看着像没数据（真实值 0.242% 会被四舍五入成 0）—— 不足 1% 时明说「<1%」。
+   */
+  const percentKnown = known && percent > 0
   const baseLabel = known
-    ? '上下文占用约 ' + percent + '%' + (state.occupancyEstimated ? '（估算值）' : '')
+    ? (percentKnown ? '上下文占用约 ' + percent + '%' : '上下文占用不足 1%') + (state.occupancyEstimated ? '（估算值）' : '')
     : '上下文占用未知'
   // 无障碍标签必须与悬停提示**同源**：读屏用户拿不到 title，不能只给鼠标用户看构成。
   box.setAttribute('aria-label', partsText ? baseLabel + '。构成：' + partsText : baseLabel)
@@ -1947,7 +1984,7 @@ function ringNode(state: AssistantClientState): HTMLElement {
     arc.setAttribute('transform', 'rotate(-90 18 18)')
     svg.appendChild(arc)
   }
-  box.append(svg, el('span', { class: 'dsh-explain-assistant-ring-label ea-ring-label', text: known ? percent + '%' : '占用未知' }))
+  box.append(svg, el('span', { class: 'dsh-explain-assistant-ring-label ea-ring-label', text: known ? (percentKnown ? percent + '%' : '<1%') : '占用未知' }))
   if (known && state.occupancyEstimated) box.appendChild(el('small', { class: 'dsh-explain-assistant-ring-estimated ea-ring-estimated', text: '估算' }))
   return box
 }
@@ -1974,6 +2011,10 @@ type OverlayContext = {
   errorTailSlot: HTMLElement
   /** 上一次渲染过的错误文案：判断这次是不是"新出现"（决定要不要播进场动画）。 */
   lastErrorText?: string
+  /** 上一次重画历史时「详情签名」的值：用来判断这次重画是不是由展开/收起详情引起的（决定要不要保住滚动位置）。 */
+  detailSig?: string
+  /** 详情面板「摆进视野」的逐帧重试计数（面板要下一帧才挂得上）。 */
+  detailFitTries?: number
   /** 上一次重画压缩那一行用的签名：流式期间没变就不重画（省下整份摘要的 Markdown 重建）。 */
   compactRenderSig?: string
   currentSlot: HTMLElement
@@ -2510,44 +2551,49 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
 
   updateOverlay(root, state, like)
 
-  const focusable = () => {
-    const inPanel = (element: HTMLElement) => Boolean(element.closest('.ea-model-panel-slot'))
-    const inTutorial = (element: HTMLElement) => Boolean(element.closest('.ea-tutorial-panel-slot'))
-    const live = contexts.get(root)
-    const panelOpen = Boolean(live?.modelOpen)
-    const tutorialOpen = Boolean(live?.tutorialOpen)
-    return Array.from(root.querySelectorAll<HTMLElement>('button, textarea, input, select, summary, [tabindex]:not([tabindex="-1"])'))
-      .filter(element => !element.hasAttribute('disabled') && element.tabIndex >= 0 && !element.hidden)
-      // 选择页与对话页互斥显示，但 querySelectorAll 仍然取得到被 CSS 藏起来的那一半。
-      // 不按当前页过滤，Tab 就会跳到看不见的按钮上。
-      .filter(element => panelOpen ? inPanel(element) : !inPanel(element))
-      // 教程页与对话页也是互斥的：不按当前页过滤，Tab 会跳到被 CSS 藏起来的那一半。
-      .filter(element => tutorialOpen ? inTutorial(element) : !inTutorial(element))
+  /**
+   * Esc 关窗 —— 挂在 document 捕获阶段，不再挂在 root 上。
+   *
+   * 修的是「关闭按钮上写着『关闭（Esc）』，但点过主对话之后 Esc 就不管用」：
+   * 浮窗是非模态的（aria-modal=false，允许边看边选主对话），用户点一下主对话，
+   * 焦点就离开浮窗了，挂在 root 上的监听再也收不到那次按键。
+   *
+   * 三条边界：
+   *  · 组字中（IME）的 Esc 是「取消候选词」，不关窗；
+   *  · 选择模式有自己的 Esc（escapeWhileSelecting，先注册、会 stopPropagation），这里不抢；
+   *  · 浮窗已经从文档里摘掉（退场动画期间）时什么都不做。
+   */
+  const onDocumentKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape') return
+    if (!root.isConnected) return
+    const legacyIme = (event as KeyboardEvent & { keyCode?: number }).keyCode === 229
+    if (composing || event.isComposing || legacyIme) return
+    if (root.hasAttribute('data-selection-mode')) return
+    event.preventDefault()
+    // 选择页/教程页开着时 Esc 先关那一页（用户想退出的是这一页），再按一次才关窗。
+    const current = contexts.get(root)
+    if (current?.tutorialOpen) { closeTutorial(current); return }
+    if (current?.modelOpen) { closeModelPanel(current); return }
+    close.click()
   }
-  const keydown = (event: KeyboardEvent) => {
-    if (event.key === 'Escape') {
-      // 中文输入法组字时那一下 Esc 是「取消候选词」，不是「关窗」。
-      // 输入区的 Enter 分支早就判了 isComposing，Esc 这里漏了同样的判据。
-      const legacyIme = (event as KeyboardEvent & { keyCode?: number }).keyCode === 229
-      if (composing || event.isComposing || legacyIme) return
-      event.preventDefault()
-      // 选择页开着时 Esc 先关选择页（用户想退出的是这一页），再按一次才关窗。
-      const current = contexts.get(root)
-      if (current?.tutorialOpen) { closeTutorial(current); return }
-      if (current?.modelOpen) { closeModelPanel(current); return }
-      close.click()
-      return
-    }
-    if (event.key !== 'Tab') return
-    const items = focusable()
-    if (!items.length) { event.preventDefault(); root.focus(); return }
-    const first = items[0]
-    const last = items[items.length - 1]
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+  /**
+   * 同一个处理器挂两处：document（焦点在主对话时也收得到）与 root（浮窗内部）。
+   * 一次按键会先后经过两者（document 捕获 → root），用一个事件上的标记去重，
+   * 免得「按一次 Esc 关两层」。
+   */
+  const handleEscape = (event: KeyboardEvent) => {
+    const marked = event as KeyboardEvent & { __eaEscHandled?: boolean }
+    if (marked.__eaEscHandled) return
+    const before = event.defaultPrevented
+    onDocumentKeyDown(event)
+    if (!before && event.defaultPrevented) marked.__eaEscHandled = true
   }
-  root.addEventListener('keydown', keydown)
-  root.addEventListener('dsh-explain-assistant:dispose', () => root.removeEventListener('keydown', keydown), { once: true })
+  document.addEventListener('keydown', handleEscape, true)
+  root.addEventListener('keydown', handleEscape, true)
+  root.addEventListener('dsh-explain-assistant:dispose', () => {
+    document.removeEventListener('keydown', handleEscape, true)
+    root.removeEventListener('keydown', handleEscape, true)
+  }, { once: true })
 
   const controller: WindowController = attachWindowInteractions(root, titlebar, geometry, next => {
     const current = contexts.get(root)
@@ -2570,9 +2616,26 @@ export function renderOverlay(state: AssistantClientState, plugin: OverlayProps[
     selectBar.remove()
   }, { once: true })
 
-  // preventScroll：默认的 focus() 会把浏览器滚动到输入框，于是首屏直接停在模型列表上、
-  // 「使用说明 + 快捷问题」被顶到可视区外面——第一眼就看不到这窗口是干什么的。
-  queueMicrotask(() => { (input || root).focus({ preventScroll: true }); body.scrollTop = 0 })
+  /**
+   * 打开时的焦点归属（C2）。
+   *
+   * 旧写法无条件把焦点塞进输入框：用户只是点一下「?」看一眼，正在主输入框里打的字
+   * 就被截到小助手这边来了。现在按**上一次输入方式**决定：
+   *  · 键盘打开（Tab 到「?」再回车）→ 焦点进输入框，省一次 Tab；
+   *  · 鼠标打开 → 一个焦点都不动（主输入框继续能打字），Esc 由 document 级监听兜住。
+   *
+   * preventScroll 仍然必须给：默认的 focus() 会把浏览器滚到输入框，
+   * 于是首屏直接停在模型列表上、「使用说明 + 快捷问题」被顶出可视区。
+   */
+  queueMicrotask(() => {
+    const modality = (() => {
+      try { return document.documentElement?.getAttribute('data-input-modality') } catch { return null }
+    })()
+    if (modality !== 'pointer') {
+      try { (input || root).focus({ preventScroll: true }) } catch { /* 老浏览器不支持参数 */ }
+    }
+    body.scrollTop = 0
+  })
   return root
 }
 
@@ -2796,7 +2859,25 @@ function renderHistory(ctx: OverlayContext, state: AssistantClientState): void {
   const sig = historySignature(ctx, state, win)
   if (sig === ctx.historySig) return
   ctx.historySig = sig
+  /**
+   * 打开/收起「查看完整内容」会让签名变化 → 整段历史被重挂（fill 会先清空再插入），
+   * 正文高度在这一瞬塌成 0，浏览器立刻把 scrollTop 钳到一个更小的值
+   * （实测 1236 → 692），用户看到画面往上一跳、刚展开的面板落在视野之外。
+   *
+   * 只在「这次重画是详情引起的」时保住滚动位置：流式期间的重画**不能**这么干，
+   * 那会和浏览器的滚动锚定抢同一个值（见 updateOverlay 顶部那段说明，以前就是这么抽搐的）。
+   */
+  const detailSig = historyDetailSignature(state.historyDetail)
+  const keepScroll = detailSig !== ctx.detailSig ? (ctx.body as HTMLElement).scrollTop : undefined
+  ctx.detailSig = detailSig
   fill(ctx.historySlot, historyNodes(state, ctx.plugin, ctx, win))
+  if (keepScroll !== undefined) {
+    // 只有"真的被浏览器钳走了"才写回去：没必要就不碰（否则等于又回到无条件回写 scrollTop 的老路）。
+    try {
+      const body = ctx.body as HTMLElement
+      if (Math.abs((body.scrollTop ?? 0) - keepScroll) > 1) body.scrollTop = keepScroll
+    } catch { /* 量不到就让它自己钳 */ }
+  }
   ctx.pendingEnterId = undefined
   scheduleFoldCheck(ctx)
 }
@@ -3292,10 +3373,33 @@ export function updateOverlay(root: HTMLElement, state: AssistantClientState, pl
   fill(ctx.detailSlot, ctx.detailInline ? [] : historyDetailNodes(state, ctx.plugin))
   // 换了一条记录来展开时把面板滚到可见处；同一记录的续读/重画不动滚动位置。
   const detailId = state.historyDetail?.recordId
-  if (detailId && detailId !== ctx.detailRecordId) { ctx.detailRecordId = detailId; ctx.detailFit = true; scrollDetailIntoView(ctx) }
-  else if (!detailId) { ctx.detailRecordId = undefined; ctx.detailFit = false }
+  if (detailId && detailId !== ctx.detailRecordId) {
+    ctx.detailRecordId = detailId
+    ctx.detailFit = true
+    ctx.detailFitTries = 0
+  } else if (!detailId) {
+    ctx.detailRecordId = undefined
+    ctx.detailFit = false
+    ctx.detailFitTries = 0
+  }
   // 内容回来时面板会从「正在读取」的几十像素长成整块记录：那一刻再摆一次，之后不再碰滚动位置。
-  else if (ctx.detailFit && state.historyDetail?.status !== 'loading') { ctx.detailFit = false; placeDetailPanel(ctx) }
+  //
+  // 面板是**下一帧**才挂进那一轮里的（历史区重画有签名闸），当场量不到属于正常情况；
+  // 旧写法一次量不到就把 detailFit 置回 false，于是永远不再补滚 —— 实测面板停在 y=907，
+  // 而正文可视区是 78–389，用户点了「查看完整内容」屏幕上什么都不变。
+  else if (ctx.detailFit && state.historyDetail?.status !== 'loading') {
+    if (placeDetailPanel(ctx)) { ctx.detailFit = false; ctx.detailFitTries = 0 }
+    else if (typeof requestAnimationFrame === 'function' && (ctx.detailFitTries ?? 0) < 40) {
+      ctx.detailFitTries = (ctx.detailFitTries ?? 0) + 1
+      requestAnimationFrame(() => {
+        const live = contexts.get(root)
+        if (!live || !live.detailFit) return
+        if (placeDetailPanel(live)) { live.detailFit = false; live.detailFitTries = 0 }
+      })
+    } else {
+      ctx.detailFit = false
+    }
+  }
   ctx.ringSlot.replaceChildren(ringNode(state))
   // §5.2：常驻显示「这一问围绕哪几条」。每条一个可拆掉的标签；没有选择时整行收起。
   renderPickRow(ctx)

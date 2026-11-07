@@ -49,8 +49,10 @@ test('I-3: 每次移动都要重置闪烁静默期（否则打字时一直在闪
 
 test('S-1: 矩形数超过上限时必须退回原生选中色，不能只画前 24 个', async () => {
   const source = await readSource('src/client/page-selection.ts');
-  assert.match(source, /const MAX_BLOCKS = 64/, '上限必须是 64（长回答整段全选实测需要 33~40 个矩形）');
-  assert.match(source, /if \(overflowed\) setNative\(true\)/, '撞上上限必须切原生');
+  // 2026-11-07：高亮层改挂进滚动容器后要覆盖「屏内 + 上下各一屏」的预取窗口，
+  // 块数上限随之上调到 160（见 page-selection.ts 的说明）。这里断言的是「有上限且会切原生」。
+  assert.match(source, /const MAX_BLOCKS = 160/, '块数上限必须是有限值（160）：超了要退回原生选中色');
+  assert.match(source, /if \(overflowed \|\| covered\) \{\s*setNative\(true\)/, '撞上上限（或高亮被底色盖住）必须切原生');
   assert.match(source, /root\.removeAttribute\('data-page-selection'\)/, '切原生时要摘掉自检属性，让浏览器原生选中色回来');
 });
 
@@ -101,7 +103,8 @@ test('R-2: 两个整页必须互斥，关闭时 data-view 按仍打开的那一�
 
 test('I-6: 输入法组字时的 Esc 是取消候选词，不得关窗', async () => {
   const source = await readSource('src/client/overlay.tsx');
-  assert.match(source, /keydown = \(event: KeyboardEvent\)[\s\S]{0,400}?if \(composing \|\| event\.isComposing \|\| legacyIme\) return/, 'Esc 分支必须判 IME 状态');
+  // 2026-11-07：Esc 处理器从 root 移到 document（B4），判据形态不变。
+  assert.match(source, /const onDocumentKeyDown = \(event: KeyboardEvent\)[\s\S]{0,800}?if \(composing \|\| event\.isComposing \|\| legacyIme\) return/, 'Esc 分支必须判 IME 状态');
 });
 
 /* ============ H-8 证据截断要留痕 ============ */

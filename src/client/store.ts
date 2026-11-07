@@ -75,6 +75,13 @@ export type AssistantClientState = {
   sessionId: SessionId;
   cwd?: string;
   open: boolean;
+  /**
+   * 「这次打开是用户亲手点的」还是「切会话时跟着迁移过来的」。
+   *
+   * 用途只有一个：入口按钮的开关语义 —— 用户再点一次「?」应当收起浮窗，
+   * 但切会话迁移过来的 open 不能被下一次点击误判成"用户想关"。
+   */
+  openedByUser?: boolean;
   unread: boolean;
   draft: string;
   model?: ModelOption;
@@ -191,8 +198,8 @@ export class AssistantRegistry {
   get currentSessionId(): SessionId | undefined { return this.activeSessionId; }
   setCurrent(sessionId?: SessionId): void { if (this.activeSessionId === sessionId) { this.emit(); return; } this.activeSessionId = sessionId; this.emit(); }
   update(sessionId: SessionId, patch: Partial<AssistantClientState> | ((state: AssistantClientState) => void)): void { const state = this.get(sessionId); if (typeof patch === 'function') patch(state); else Object.assign(state, patch); this.emit(); }
-  open(sessionId: SessionId, cwd?: string): void { this.get(sessionId, cwd); this.activeSessionId = sessionId; this.update(sessionId, { open: true, unread: false }); }
-  close(sessionId: SessionId): void { this.update(sessionId, { open: false }); }
+  open(sessionId: SessionId, cwd?: string): void { this.get(sessionId, cwd); this.activeSessionId = sessionId; this.update(sessionId, { open: true, openedByUser: true, unread: false }); }
+  close(sessionId: SessionId): void { this.update(sessionId, { open: false, openedByUser: false }); }
   remove(sessionId: SessionId): void { this.states.delete(sessionId); if (this.activeSessionId === sessionId) this.activeSessionId = undefined; this.emit(); }
   markUnread(sessionId: SessionId): void { this.update(sessionId, { unread: true }); }
   sessions(): AssistantClientState[] { return [...this.states.values()]; }

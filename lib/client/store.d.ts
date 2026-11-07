@@ -114,6 +114,13 @@ export type AssistantClientState = {
     sessionId: SessionId;
     cwd?: string;
     open: boolean;
+    /**
+     * 「这次打开是用户亲手点的」还是「切会话时跟着迁移过来的」。
+     *
+     * 用途只有一个：入口按钮的开关语义 —— 用户再点一次「?」应当收起浮窗，
+     * 但切会话迁移过来的 open 不能被下一次点击误判成"用户想关"。
+     */
+    openedByUser?: boolean;
     unread: boolean;
     draft: string;
     model?: ModelOption;

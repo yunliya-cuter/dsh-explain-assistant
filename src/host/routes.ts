@@ -146,6 +146,10 @@ export function createExplainAssistantRoutes(options: RouteOptions): Map<string,
           // （异常可能发生在 try 的第一行，那时它们还没被赋值 → 用 ?? 兜底）。
           let question = '';
           let now = new Date().toISOString();
+          // 这条记录**开始**的时刻。以前 startedAt 用的是结束那一刻（now 在模型返回后才赋值），
+          // 于是「提问时间」其实是「答完时间」：8 秒的回答，时间戳整整晚 8 秒，
+          // startedAt 与 updatedAt 永远相同、也算不出耗时。
+          const startedAt = new Date().toISOString();
           // 异常/取消时，用户可能**已经看到了一部分回答**（例如模型吐了一半就断了）。
           // 那条记录若写空正文，重载后与用户当时的所见不符 —— 所以把已产出的文本累积下来一并落库。
           let partialText = '';
@@ -199,7 +203,7 @@ export function createExplainAssistantRoutes(options: RouteOptions): Map<string,
               id: requestId, kind: op, status: cleanSuccess ? 'complete' : 'interrupted', complete: cleanSuccess, question,
               answerText: 'text' in result ? result.text : result.summary, reasoningText: result.reasoning, usage: result.usage,
               evidence: content.evidence, tools: content.tools, images: content.images,
-              startedAt: now, updatedAt: now,
+              startedAt, updatedAt: now,
               ...(recordReason ? { [RECORD_REASON_FIELD]: recordReason } : {}),
             });
             recorded = true;
@@ -255,7 +259,7 @@ export function createExplainAssistantRoutes(options: RouteOptions): Map<string,
                 id: requestId, kind: op, status: 'interrupted', complete: false, question,
                 answerText: partialText, reasoningText: '',
                 evidence: [], tools: [], images: [],
-                startedAt: now, updatedAt: new Date().toISOString(),
+                startedAt, updatedAt: new Date().toISOString(),
                 [RECORD_REASON_FIELD]: reason,
               });
             } catch { /* 落库失败不得连累事件发送：用户仍应看到那条中文提示 */ }

@@ -150,7 +150,22 @@ export function apply(ctx: any): void {
           if (!id) return;
           selectedId = id;
           lastQuestionButton = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          /**
+           * 再点一次 = 关掉。
+           *
+           * 「?」在用户心里是个开关：点开之后想收起时，手会回到同一颗按钮上。
+           * 旧实现无条件调 open()，于是第二次点下去什么都不发生（浮窗原地不动），
+           * 只能去右上角找「×」。收起走 plugin.close()，顺带把「已读」补落到宿主。
+           *
+           * ⚠️ 必须在 setSession **之前**读：setSession 会把「开着」这件事迁到新会话上
+           * （切会话时浮窗跟着走），读晚了就永远读到 true —— 一切会话就变成"关窗"。
+           */
+          const wasOpen = registry.get(id)?.openedByUser === true;
           plugin.setSession(id, props?.cwd);
+          if (wasOpen) {
+            plugin.close();
+            return;
+          }
           plugin.open();
         },
       }, createHeaderContent(h));
