@@ -3,10 +3,11 @@ import { executeTool, TOOL_SCHEMAS, type ToolContext, type ToolResult } from './
 // 否则「用户点停止」会被转成冷冰冰的 INTERNAL_ERROR（实测：事件是 aborted，
 // 但 payload 里写着「解释小助手没能完成这次操作」——用户看不懂，也不是实情）。
 import { ExplainAssistantError } from './contracts.js';
+import { COMPACT_EMPTY_INSTRUCTION, COMPACT_INSTRUCTION, COMPACT_SECTION_TITLES, COMPACT_SYSTEM_PROMPT } from './prompts.js';
 
 export interface AssistantModel { provider:string; model:string; reasoningEffort?:string; contextWindow?:number; inputModalities?:readonly string[]; }
 export interface AssistantMessage { role:'system'|'user'|'assistant'|'tool'; content:unknown; id?:string; toolCallId?:string; isError?:boolean; source?:unknown; }
-interface LlmContext { llm?:any; tokenMeter?:any; model:AssistantModel; tools?:ToolContext; signal?:AbortSignal; maxRounds?:number; maxTools?:number; maxToolBytes?:number; totalTimeoutMs?:number; idleTimeoutMs?:number; onEvent?:(event:Record<string,unknown>)=>Promise<void>|void; }
+interface LlmContext { llm?:any; tokenMeter?:any; model:AssistantModel; tools?:ToolContext; signal?:AbortSignal; maxRounds?:number; maxTools?:number; maxToolBytes?:number; totalTimeoutMs?:number; idleTimeoutMs?:number; /** false = 这次请求不向模型暴露任何工具（压缩用）。 */ allowTools?:boolean; onEvent?:(event:Record<string,unknown>)=>Promise<void>|void; }
 /** 模型调用失败的原因（§10：不能静默失败，也不能把失败说成成功）。 */
 interface LlmFailureInfo { code:string; message:string; }
 interface LlmResult { text:string; reasoning:string; usage?:unknown; toolTrace:unknown[]; complete:boolean; /** true 表示因超时停止（§10/§11.9），上层要给出明确中文提示。 */ timeout?:boolean; /** true 表示模型输出撞到上限被截断（finish reason=max-tokens）：不算正常完成。 */ limit?:boolean; /** 非空表示模型调用本身失败，上层必须当错误处理，绝不能说成成功。 */ failure?:LlmFailureInfo; }
@@ -161,11 +162,14 @@ async function runAssistantInner(ctx:LlmContext,messages:AssistantMessage[],idle
  // 不如显式标记失败，由上层给出中文原因。
  if(!ctx.model?.provider || !ctx.model?.model) return {text:'',reasoning:'',toolTrace:[],complete:false,failure:{code:'MODEL_UNAVAILABLE',message:'这个主对话还没有选择模型，无法生成解释。'}};
  const maxRounds=ctx.maxRounds??DEFAULTS.maxRounds,maxTools=ctx.maxTools??DEFAULTS.maxTools,maxBytes=ctx.maxToolBytes??DEFAULTS.maxToolBytes; let text='',reasoning='',usage:any,toolCount=0,toolBytes=0,hitLimit=false; const trace:any[]=[]; let history=[...messages];
+ // 压缩请求不暴露任何工具：模型在「没有材料」时会去读会话/文件（实测空会话压缩时它声称
+ // 调用了会话读取工具），既浪费又可能把压缩变成一次真正的读取。传空数组即「无工具」。
+ const toolSchemas=ctx.allowTools===false?[]:TOOL_SCHEMAS;
  for(let round=0;round<maxRounds;round++){
   // dsh-llm 的 stream 需要**顶层** provider 与 model 两个字段来选适配器路由：
   // 只传 { model: {...} } 会让 registration(options.provider) 拿不到 provider，
   // 结果是流直接结束、返回空文本（表现为「点了发送没反应」）。
-  const stream=ctx.llm.stream({provider:ctx.model?.provider, model:ctx.model?.model, messages:history, tools:TOOL_SCHEMAS, ...(ctx.signal?{signal:ctx.signal}:{})}); const calls:any[]=[];
+  const stream=ctx.llm.stream({provider:ctx.model?.provider, model:ctx.model?.model, messages:history, tools:toolSchemas, ...(ctx.signal?{signal:ctx.signal}:{})}); const calls:any[]=[];
   // §10 空闲超时：连上了但一直不吐字，不能无限等。每收到一个 chunk 就重置计时。
   let idleTimer:any,failure:LlmFailureInfo|undefined;
   const resetIdle=()=>{clearTimeout(idleTimer); idleTimer=setTimeout(()=>{onIdle();},idleMs); if(typeof idleTimer?.unref==='function')idleTimer.unref();};
@@ -236,20 +240,32 @@ async function runAssistantInner(ctx:LlmContext,messages:AssistantMessage[],idle
  }
  return {text,reasoning,usage,toolTrace:trace,complete:false};
 }
-/** §9.1 压缩指令：中文，且必须保留限制性标注，不得因压缩丢失不确定性。 */
-export const COMPACT_INSTRUCTION = [
- '请把上面这段「解释小助手」的上下文压缩成一份简短的中文摘要。要求：',
- '1. 用白话中文写，不要用英文，不要用行话。',
- '2. 必须保留每条依据的分级（已观察到 / 仅据汇报 / 无从得知）。',
- '3. 必须原样保留「该步未提供足够信息」这类限制性标注，不得因为压缩而把不确定说成确定。',
- '4. 保留用户已经问过什么、结论是什么。',
- '5. 只压缩小助手自己与用户的对话。**主 agent 的上下文不在你要压缩的范围里**：',
- '   你不需要、也不得为它写任何摘要，更不要把它当成小助手说过的话。',
- '6. 不要改动主对话的任何内容。',
-].join('\n');
+/**
+ * §9.1 压缩指令。
+ *
+ * 2026-11-07：压缩提示词整体搬到 prompts.ts —— 它和「回答用户」的系统提示词是两件事，
+ * 混用会造成两种实测故障（摘要复述系统提示词、压缩指令被当成用户的话写进摘要）。
+ * 这里只做转发：既有调用方与测试继续从本模块取 COMPACT_INSTRUCTION，行为不变。
+ */
+export { COMPACT_INSTRUCTION, COMPACT_SECTION_TITLES, COMPACT_SYSTEM_PROMPT } from './prompts.js';
 export async function compactAssistant(ctx:LlmContext,messages:AssistantMessage[]):Promise<{summary:string;reasoning:string;usage?:unknown;complete:boolean;timeout?:boolean;failure?:LlmFailureInfo}>{
  // content 必须是内容块数组：dsh-llm 的适配器会执行 message.content.flatMap(...)，
  // 传字符串会在适配器里抛错，压缩请求根本发不出去。
- const result=await runAssistant(ctx,[...messages,{role:'user',content:[{type:'text',text:COMPACT_INSTRUCTION}]}]);
- return {summary:result.text,reasoning:result.reasoning,usage:result.usage,complete:result.complete,...(result.timeout===undefined?{}:{timeout:result.timeout}),...(result.failure===undefined?{}:{failure:result.failure})};
+ //
+ // 系统消息在这里被**替换**掉：压缩器不是「解释小助手」，不该带着回答问题的身份去读历史。
+ // 只保留 user / assistant 的对话消息，末尾再追加一条边界明确的压缩指令。
+ const transcript = messages.filter(message => message.role !== 'system');
+ const result=await runAssistant({...ctx,allowTools:false},[
+  {role:'system',content:[{type:'text',text:COMPACT_SYSTEM_PROMPT}]},
+  ...transcript,
+  {role:'user',content:[{type:'text',text:transcript.length===0?COMPACT_EMPTY_INSTRUCTION:COMPACT_INSTRUCTION}]},
+ ]);
+ // 六段骨架是**契约**，不是建议：模型没按骨架输出（例如只回一句「我做不到」）时，
+ // 绝不能把它当成摘要存进 compactState —— 那会污染此后的每一轮回答。
+ // 这里判为失败，让 routes 保留上一份可用摘要。
+ const missing=COMPACT_SECTION_TITLES.filter(title=>!result.text.includes(title));
+ // 空输出保留旧的 empty_result 语义（由 deriveCompactReason 处理）；
+ // 只有「说了话但没按骨架说」才算 INVALID_SUMMARY。
+ const invalid=result.complete&&result.text.trim().length>0&&missing.length>0;
+ return {summary:result.text,reasoning:result.reasoning,usage:result.usage,complete:result.complete&&!invalid,...(result.timeout===undefined?{}:{timeout:result.timeout}),...(invalid?{failure:{code:'INVALID_SUMMARY',message:'压缩结果缺少必要的段落：'+missing.join('、')}}:{}),...(result.failure===undefined?{}:{failure:result.failure})};
 }

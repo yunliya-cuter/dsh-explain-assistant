@@ -69,6 +69,47 @@ export declare function renderMainline(mainline: {
  */
 export declare const ALLOW_TEMPORARY_CODE_BLOCKS = false;
 export declare const SYSTEM_PROMPT: string;
+/**
+ * 上下文压缩的输出骨架（2026-11-07）。
+ *
+ * 六个标题是**契约**：压缩器的输出必须逐字包含它们，界面、测试与后续提问都按这个结构读。
+ * 改标题 = 改契约，必须同时改测试与 README。
+ */
+export declare const COMPACT_SECTION_TITLES: readonly ['## 一、用户与当前意图', '## 二、硬约束与偏好（含否定式）', '## 三、问过的问题与结论（按时间顺序）', '## 四、已更正、已否决与已取代', '## 五、未完成与待跟进', '## 六、关键锚点（逐字照抄）'];
+/**
+ * 压缩用的系统提示词。
+ *
+ * 为什么必须与 `SYSTEM_PROMPT` 分开（两条都是实测出来的，不是洁癖）：
+ * 1. 旧实现把「回答用户」的系统提示词原样带进压缩请求。模型于是把「我是谁 / 四要素 /
+ *    说话规则 / 术语表」又抄了一遍进摘要 —— 实测一份 827 字的摘要里，约 600 字是系统
+ *    提示词的复述，真正的对话事实被挤到只剩一小段。
+ * 2. 旧实现把压缩指令作为最后一条 user 消息追加在对话后面。模型分不清「对话内容」与
+ *    「压缩指令」，多份真实摘要里都出现了「当前这次要求是：把上下文压缩成简短中文摘要」
+ *    「用户实际提出的要求是把上面这段小助手上下文压缩成简短中文摘要」——指令被当成用户
+ *    说过的话，写进了下一轮的长期记忆。
+ *
+ * 所以压缩改用独立系统提示词（只讲压缩这一件事），对话作为「材料」回放，最后只用一句
+ * 边界明确的收尾指令启动输出。
+ */
+export declare const COMPACT_SYSTEM_PROMPT: string;
+/**
+ * 压缩请求的最后一条 user 消息：只负责启动输出，并划清「这条不是对话」的边界。
+ * 真正的规则全在 `COMPACT_SYSTEM_PROMPT` 里 —— 两条消息各司其职，模型才不会把指令当对话。
+ */
+export declare const COMPACT_INSTRUCTION: string;
+/**
+ * 空输入的收尾指令。
+ *
+ * 为什么不能复用 `COMPACT_INSTRUCTION`：那一句写的是「上面的对话到此结束」，而空输入时
+ * 「上面」什么都没有。实测模型会判定请求不成立、回一句「没有可压缩的对话」——
+ * 这句话如果被当成摘要存下来，会污染此后的每一轮回答（真实发生过一次）。
+ * 所以空输入给一条**自包含**的指令：把六段标题直接写在里面，不依赖「上面」有东西。
+ */
+export declare const COMPACT_EMPTY_INSTRUCTION: string;
+/** 压缩时最多回放多少轮问答。压缩是「把历史收拢」，不能像提问那样只取最近 6 轮。 */
+export declare const COMPACT_MAX_TURNS = 200;
+/** 压缩输入的字数预算（问答正文合计）。超出时从最旧的轮次开始丢，并在输入里显式说明。 */
+export declare const COMPACT_CHAR_BUDGET = 80000;
 /** 依据条目的白话分级标签（§6.3）。 */
 export declare function evidenceTier(item: Pick<EvidenceEnvelope, 'evidenceState'>): string;
 /**
@@ -96,6 +137,18 @@ type BuildMessagesDeps = {
     compactSummary?: string;
     /** 既往问答最多带几轮，避免「无节制把全部历史交给模型」（§5.1）。 */
     maxHistoryTurns?: number;
+    /**
+     * 既往问答正文字数预算（问题 + 回答合计）。省略 = 不限制。
+     * 压缩时用来兜住「历史特别长」的极端情况：超出就从最旧的轮次开始丢，并在输入里显式说明。
+     */
+    maxHistoryChars?: number;
+    /**
+     * 'ask'（默认）：回答用户的一个问题；'compact'：只输出待压缩的材料。
+     *
+     * 压缩模式不带证据、不带提问脚手架、也不注入主 agent 段 —— 它要的是「历史本身」，
+     * 不是「回答一个问题」。详细原因见 buildMessages 的注释。
+     */
+    purpose?: 'ask' | 'compact';
     /**
      * 既往回答来自哪个模型。
      *
@@ -129,6 +182,15 @@ type BuildMessagesDeps = {
  *
  * 纯函数：同样输入必然得到同样输出（不注入当前时间、不读写外部状态）。
  * 每条 message 的 content 都是内容块数组，符合 dsh-llm 的适配器要求。
+ *
+ * **purpose: 'compact'（2026-11-07 新增）**：压缩是「把历史收拢」，不是「回答一个问题」。
+ * 旧实现让压缩复用提问路径，于是有两个实测出来的缺陷：
+ * 1. 末尾会多出一条「用户没有输入具体问题，请说明当前这一步在做什么」+「本次没有拿到任何步骤依据」。
+ *    模型把它当成真实的一轮对话写进摘要 —— 多份真实摘要里都出现了「用户没有输入具体问题…」
+ *    「本次没有拿到任何步骤依据」，这些不是用户说过的话。
+ * 2. 只回放最近 6 轮（提问的限额）。第一次压缩一个几十轮的会话时，更早的问答直接丢失，
+ *    而摘要看上去是完整的 —— 这是最危险的一种丢失：没有任何痕迹。
+ * 压缩模式因此只回放历史，不加证据、不加提问脚手架，轮次与字数上限另算。
  */
 export declare function buildMessages(question: string, payload?: Record<string, unknown> | null, deps?: BuildMessagesDeps): AssistantMessage[];
 export {};

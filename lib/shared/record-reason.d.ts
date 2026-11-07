@@ -21,7 +21,7 @@
  * 但**没吐出可用的摘要**。它原先完全不落痕迹 —— 记录被写成 complete=true/status=complete，
  * 界面重载后看起来「这次压缩成功了」，用户不知道其实什么都没压出来。
  */
-export type RecordReason = 'timeout' | 'model_failed' | 'limit' | 'empty_result' | 'stopped';
+export type RecordReason = 'timeout' | 'model_failed' | 'limit' | 'empty_result' | 'invalid_summary' | 'stopped';
 /** 落库用的字段名。 */
 export declare const RECORD_REASON_FIELD = "reason";
 /** 各原因对应的中文提示（**唯一来源**）。 */

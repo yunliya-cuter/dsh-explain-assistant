@@ -9,6 +9,19 @@ const ctxMod = await moduleFromSource('src/host/session-context.ts');
 const prompts = await moduleFromSource('src/host/prompts.ts');
 const occupancy = await moduleFromSource('src/host/occupancy.ts');
 
+/**
+ * 2026-11-07：压缩摘要有了六段骨架契约，不按骨架输出的结果会被判失败。
+ * 这个文件里的假模型同时服务 ask 与 compact，按最后一条消息是不是压缩指令来分流。
+ */
+const STRUCTURED_SUMMARY = [
+  '## 一、用户与当前意图', '- 压缩后的摘要',
+  '## 二、硬约束与偏好（含否定式）', '无',
+  '## 三、问过的问题与结论（按时间顺序）', '无',
+  '## 四、已更正、已否决与已取代', '无',
+  '## 五、未完成与待跟进', '无',
+  '## 六、关键锚点（逐字照抄）', '无',
+].join('\n');
+
 /* ==========================================================================
  * 0.2：主 agent 的上下文进入小助手
  *
@@ -274,7 +287,13 @@ async function startHost(sessionQuery) {
       llm: {
         listProviders: async () => ['p'],
         listModels: async () => [{ id: 'm', provider: 'p' }],
-        stream: () => (async function* () { yield { type: 'text-delta', text: '回答' }; yield { type: 'finish', done: true }; })(),
+        stream: (options) => (async function* () {
+          const list = Array.isArray(options?.messages) ? options.messages : [];
+          const last = list[list.length - 1];
+          const isCompact = Array.isArray(last?.content) && last.content.some(block => typeof block?.text === 'string' && block.text.includes('【压缩指令】'));
+          yield { type: 'text-delta', text: isCompact ? STRUCTURED_SUMMARY : '回答' };
+          yield { type: 'finish', done: true };
+        })(),
         resolveModelInfo: async () => ({ context: { contextWindow: 128000 } }),
       },
       sessionQuery,

@@ -6,6 +6,20 @@ import path from 'node:path';
 import { moduleFromSource, fakeDom, waitFor, waitSettled } from './fixtures/runtime.mjs';
 
 /**
+ * 2026-11-07：压缩摘要现在有**六段骨架契约**（模型没按骨架输出就判失败、不落库）。
+ * 这组测试原先返回一句「第一份摘要正文」，属于不合契约的摘要，会被新契约挡下；
+ * 用一个最小但合规的六段摘要代替，断言仍按整份正文比对。
+ */
+const SUMMARY_FIRST = [
+  '## 一、用户与当前意图', '- 第一份摘要正文',
+  '## 二、硬约束与偏好（含否定式）', '无',
+  '## 三、问过的问题与结论（按时间顺序）', '无',
+  '## 四、已更正、已否决与已取代', '无',
+  '## 五、未完成与待跟进', '无',
+  '## 六、关键锚点（逐字照抄）', '无',
+].join('\n');
+
+/**
  * 静默缺陷猎捕（silent defects）。
  *
  * 这一类缺陷的共同点：**不报错**、功能表面能跑完，只有盯着最终结果才看得出来。
@@ -341,7 +355,7 @@ test('D5 静默缺陷: 第二次压缩失败会清掉上一次成功摘要，刷
   let mode = 'ok';
   const llm = {
     async *stream() {
-      if (mode === 'ok') { yield { type: 'text-delta', index: 0, text: '第一份摘要正文' }; return; }
+      if (mode === 'ok') { yield { type: 'text-delta', index: 0, text: SUMMARY_FIRST }; return; }
       // 真实 dsh-llm 的适配器失败形态：finish 块，而不是 throw
       yield { type: 'finish', reason: { kind: 'error', failure: { code: 'AUTH', message: 'Invalid API key' } } };
     },
@@ -355,7 +369,7 @@ test('D5 静默缺陷: 第二次压缩失败会清掉上一次成功摘要，刷
     await first.api.selectModel('d5', { provider: 'p', model: 'm' });
     await first.submit('/compact');
     await waitSettled(first.registry, 'd5', { label: '问答应结束（离开进行中）' });
-    assert.equal(first.registry.get('d5').compactState?.summary, '第一份摘要正文', '第一次压缩成功并显示摘要');
+    assert.equal(first.registry.get('d5').compactState?.summary, SUMMARY_FIRST, '第一次压缩成功并显示摘要');
 
     mode = 'fail';
     await first.submit('/compact');
@@ -372,7 +386,7 @@ test('D5 静默缺陷: 第二次压缩失败会清掉上一次成功摘要，刷
     second.open();
     await host.waitForState(stateBefore9, 'open() 引发的刷新应完成');
     const persisted = await host.get('/api/explain-assistant/state?sessionId=d5');
-    assert.equal(persisted.payload.compactState?.summary, '第一份摘要正文', '宿主磁盘上摘要仍然在');
+    assert.equal(persisted.payload.compactState?.summary, SUMMARY_FIRST, '宿主磁盘上摘要仍然在');
     const rendered = await renderState({ sessionId: 'd5', compactState: second.registry.get('d5').compactState });
     try {
       assert.equal(rendered.text.includes('第一份摘要正文'), false, '当前行为：刷新后界面也看不到那份仍然可用的摘要');
@@ -493,7 +507,7 @@ test('OK5 真·空回答与「提供方报错」在宿主侧目前不可区分�
  * ================================================================== */
 
 test('S1 修复: 压缩成功后刷新页面，摘要必须恢复', async () => {
-  const host = await startHost({ async *stream() { yield { type: 'text-delta', index: 0, text: '第一份摘要正文' }; } });
+  const host = await startHost({ async *stream() { yield { type: 'text-delta', index: 0, text: SUMMARY_FIRST }; } });
   const first = await clientPlugin('s1');
   try {
     const stateBefore10 = host.stateCompleted;
@@ -502,12 +516,12 @@ test('S1 修复: 压缩成功后刷新页面，摘要必须恢复', async () => 
     await first.api.selectModel('s1', { provider: 'p', model: 'm' });
     await first.submit('/compact');
     await waitFor(() => first.registry.get('s1').compactState?.summary, { label: '压缩成功后应能看到摘要' });
-    assert.equal(first.registry.get('s1').compactState?.summary, '第一份摘要正文', '压缩成功，内存里能看到摘要');
+    assert.equal(first.registry.get('s1').compactState?.summary, SUMMARY_FIRST, '压缩成功，内存里能看到摘要');
   } finally { first.dispose(); first.registry.remove('s1'); }
 
   // 宿主磁盘上摘要确实在
   const persisted = (await host.get('/api/explain-assistant/state?sessionId=s1')).payload.compactState;
-  assert.equal(persisted?.summary, '第一份摘要正文', '宿主 /state 下发的摘要正文仍然在');
+  assert.equal(persisted?.summary, SUMMARY_FIRST, '宿主 /state 下发的摘要正文仍然在');
 
   // 刷新页面 = 全新状态
   const second = await clientPlugin('s1');
@@ -516,7 +530,7 @@ test('S1 修复: 压缩成功后刷新页面，摘要必须恢复', async () => 
     await waitFor(() => second.registry.get('s1').compactState?.summary, { label: '刷新后摘要应恢复' });
     const state = second.registry.get('s1').compactState;
     // 已修复：刷新后必须从宿主恢复摘要。
-    assert.equal(state?.summary, '第一份摘要正文', '刷新后摘要必须恢复');
+    assert.equal(state?.summary, SUMMARY_FIRST, '刷新后摘要必须恢复');
     assert.equal(state?.status, 'complete', '有摘要即为已压缩');
     const rendered = await renderState({ sessionId: 's1', compactState: state });
     try { assert.match(rendered.text, /第一份摘要正文/, '界面上必须看得到那份摘要'); }

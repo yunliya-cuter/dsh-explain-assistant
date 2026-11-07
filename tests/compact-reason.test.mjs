@@ -26,6 +26,16 @@ import { moduleFromSource } from './fixtures/runtime.mjs';
 
 const reason = await moduleFromSource('src/shared/record-reason.ts');
 
+/** 2026-11-07：摘要必须符合六段骨架，否则会被判为 INVALID_SUMMARY（不落库）。 */
+const SUMMARY_OK = [
+  '## 一、用户与当前意图', '- 有效摘要正文',
+  '## 二、硬约束与偏好（含否定式）', '无',
+  '## 三、问过的问题与结论（按时间顺序）', '无',
+  '## 四、已更正、已否决与已取代', '无',
+  '## 五、未完成与待跟进', '无',
+  '## 六、关键锚点（逐字照抄）', '无',
+].join('\n');
+
 /* ================================================================== *
  * 1) 原因推导：compact 独有的空摘要形态
  * ================================================================== */
@@ -97,7 +107,7 @@ test('compact 端到端: 空摘要失败必须落库为「未完成 + empty_resu
 });
 
 test('compact 端到端 不回归: 真正成功时仍记 complete 且不带原因', async () => {
-  const record = await compactOnce(() => (async function* () { yield { type: 'text-delta', text: '有效摘要正文' }; yield { type: 'finish', done: true }; })());
+  const record = await compactOnce(() => (async function* () { yield { type: 'text-delta', text: SUMMARY_OK }; yield { type: 'finish', done: true }; })());
   assert.equal(record.reason, undefined, '成功的记录不得带原因（老形状不变）');
   assert.equal(record.status, 'complete', '成功仍记 complete');
   assert.equal(record.complete, true);

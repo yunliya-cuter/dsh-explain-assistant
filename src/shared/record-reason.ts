@@ -22,7 +22,7 @@
  * 但**没吐出可用的摘要**。它原先完全不落痕迹 —— 记录被写成 complete=true/status=complete，
  * 界面重载后看起来「这次压缩成功了」，用户不知道其实什么都没压出来。
  */
-export type RecordReason = 'timeout' | 'model_failed' | 'limit' | 'empty_result' | 'stopped';
+export type RecordReason = 'timeout' | 'model_failed' | 'limit' | 'empty_result' | 'invalid_summary' | 'stopped';
 
 /** 落库用的字段名。 */
 export const RECORD_REASON_FIELD = 'reason';
@@ -33,6 +33,7 @@ export const RECORD_REASON_TEXT: Record<RecordReason, string> = {
   model_failed: '这次解释没有成功：模型那边返回了错误，已经停下。你可以缩小问题范围，或换一个模型再试。',
   limit: '这次解释触及了安全上限，已停下。小助手不会无限重试，你可以缩小范围后再问。',
   empty_result: '这次整理没有拿到可用的摘要内容，已经停下。上一份可用摘要仍然保留，你可以稍后再试一次。',
+  invalid_summary: '这次整理没有按约定的六段格式输出，已经丢弃。上一份可用摘要仍然保留，你可以稍后再试一次。',
   // 用户自己按了「停止」：这**不是失败**，所以文案不能写成「没有成功」，否则等于把用户的决定说成系统出错。
   stopped: '这次解释是按你的要求停止的，没有生成完整回答。你可以重新问一次。',
 };
@@ -52,6 +53,7 @@ const RECORD_REASON_LABEL: Record<RecordReason, string> = {
   model_failed: '模型调用失败',
   limit: '触及安全上限（轮次/工具/体积限制）',
   empty_result: '模型没有返回可用的摘要内容',
+  invalid_summary: '压缩结果没有按约定的六段格式输出',
   stopped: '用户主动停止了这次解释',
 };
 
@@ -70,7 +72,7 @@ export const RECORD_INCOMPLETE_TEXT = '此记录未完成或未验证';
  * 向后兼容的关键：老记录没有该字段 → undefined → 界面行为与以前完全一样。
  */
 export function normalizeRecordReason(value: unknown): RecordReason | undefined {
-  return value === 'timeout' || value === 'model_failed' || value === 'limit' || value === 'empty_result' || value === 'stopped'
+  return value === 'timeout' || value === 'model_failed' || value === 'limit' || value === 'empty_result' || value === 'invalid_summary' || value === 'stopped'
     ? value : undefined;
 }
 
@@ -121,6 +123,7 @@ export function deriveErrorReason(error: unknown): RecordReason {
 export function deriveCompactReason(
   result: { complete?: boolean; timeout?: boolean; failure?: { code?: string }; summary?: string } | undefined,
 ): RecordReason | undefined {
+  if (result?.failure?.code === 'INVALID_SUMMARY') return 'invalid_summary';
   const base = deriveRecordReason(result);
   if (base) return base;
   if (result?.complete === true && !String(result.summary ?? '').trim()) return 'empty_result';

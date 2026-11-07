@@ -14,17 +14,20 @@ function captureLlm() {
     seen,
     stream(options) {
       seen.push(options.messages);
-      const chunks = [{ type: 'text-delta', text: '压缩后的中文摘要' }, { type: 'finish', done: true }];
+      const chunks = [{ type: 'text-delta', text: llm.COMPACT_SECTION_TITLES.join('\n') + '\n压缩后的中文摘要' }, { type: 'finish', done: true }];
       return (async function* () { for (const c of chunks) yield c; })();
     },
   };
 }
 
 test('压缩指令是中文，且要求保留限制性标注', async () => {
-  assert.ok(cjk(llm.COMPACT_INSTRUCTION) / llm.COMPACT_INSTRUCTION.length > 0.5, '压缩指令主体必须是中文');
-  assert.match(llm.COMPACT_INSTRUCTION, /该步未提供足够信息/, '必须要求保留固定的信息不足标注');
-  assert.match(llm.COMPACT_INSTRUCTION, /依据|分级/, '必须要求保留依据分级');
-  assert.match(llm.COMPACT_INSTRUCTION, /白话/, '必须要求白话中文');
+  // 2026-11-07：压缩规则搬进了独立的 COMPACT_SYSTEM_PROMPT（不再复用回答用的系统提示词）。
+  const spec = llm.COMPACT_SYSTEM_PROMPT;
+  assert.ok(cjk(spec) / spec.length > 0.5, '压缩规则主体必须是中文');
+  assert.match(spec, /该步未提供足够信息/, '必须要求保留固定的信息不足标注');
+  assert.match(spec, /依据|分级/, '必须要求保留依据分级');
+  assert.match(spec, /白话/, '必须要求白话中文');
+  assert.match(llm.COMPACT_INSTRUCTION, /不是对话的一部分/, '收尾指令必须划清「这条不是对话」的边界');
 });
 
 test('压缩请求发给模型的消息 content 是内容块数组，不是裸字符串', async () => {

@@ -229,7 +229,9 @@ export function createExplainAssistantRoutes(options: RouteOptions): Map<string,
               // 适配器故障文案多为英文，这里给一句用户看得懂的中文，并把原文留在 details 里供排查。
               const friendly = code === 'MODEL_UNAVAILABLE'
                 ? '这个主对话还没有可用的小助手模型，无法生成解释。你可以先在上面选一个模型，再问一次。'
-                : RECORD_REASON_TEXT.model_failed;   // 唯一来源：与记录重建时显示的是同一句
+                : code === 'INVALID_SUMMARY'
+                  ? RECORD_REASON_TEXT.invalid_summary   // 唯一来源：与记录重建时显示的是同一句
+                  : RECORD_REASON_TEXT.model_failed;     // 唯一来源：与记录重建时显示的是同一句
               controllerStream.enqueue(send('error', { code, message: friendly, retryable: false, details: { cause: failure.message } }));
             } else if (!result.complete) {
               controllerStream.enqueue(send('aborted', { message: (result as { timeout?: boolean }).timeout

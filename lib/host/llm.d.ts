@@ -24,7 +24,8 @@ interface LlmContext {
     maxTools?: number;
     maxToolBytes?: number;
     totalTimeoutMs?: number;
-    idleTimeoutMs?: number;
+    idleTimeoutMs?: number; /** false = 这次请求不向模型暴露任何工具（压缩用）。 */
+    allowTools?: boolean;
     onEvent?: (event: Record<string, unknown>) => Promise<void> | void;
 }
 /** 模型调用失败的原因（§10：不能静默失败，也不能把失败说成成功）。 */
@@ -50,8 +51,14 @@ interface LlmResult {
  * **模型调用失败**则不同：那是必须让用户看见的错误，用 failure 字段带回去。
  */
 export declare function runAssistant(ctx: LlmContext, messages: AssistantMessage[]): Promise<LlmResult>;
-/** §9.1 压缩指令：中文，且必须保留限制性标注，不得因压缩丢失不确定性。 */
-export declare const COMPACT_INSTRUCTION: string;
+/**
+ * §9.1 压缩指令。
+ *
+ * 2026-11-07：压缩提示词整体搬到 prompts.ts —— 它和「回答用户」的系统提示词是两件事，
+ * 混用会造成两种实测故障（摘要复述系统提示词、压缩指令被当成用户的话写进摘要）。
+ * 这里只做转发：既有调用方与测试继续从本模块取 COMPACT_INSTRUCTION，行为不变。
+ */
+export { COMPACT_INSTRUCTION, COMPACT_SECTION_TITLES, COMPACT_SYSTEM_PROMPT } from './prompts.js';
 export declare function compactAssistant(ctx: LlmContext, messages: AssistantMessage[]): Promise<{
     summary: string;
     reasoning: string;
@@ -60,4 +67,3 @@ export declare function compactAssistant(ctx: LlmContext, messages: AssistantMes
     timeout?: boolean;
     failure?: LlmFailureInfo;
 }>;
-export {};
