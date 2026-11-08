@@ -68,6 +68,18 @@ export declare function renderMainline(mainline: {
  * 用户看不懂，用短段落和短句子。」—— 其中表格那一项正是被长期放行替换掉的）。
  */
 export declare const ALLOW_TEMPORARY_CODE_BLOCKS = false;
+/**
+ * 回答形状（2026-11-08）。
+ *
+ * 用户原话：「我不是要你改渲染方式，而是改小助手说话的方式」。所以这条约束管的是
+ * **模型怎么写**，不是界面怎么画：结论一行、依据一条一行、建议一行、每行只说一句话。
+ *
+ * 为什么要作为**用户消息的收尾要求**再发一次（buildMessages 里追加）：
+ * 只写进系统提示时实测基本不理（39 行、单行 215 字）；同一段话出现在用户消息末尾时
+ * 立刻收敛（8-10 行、单行 ≤50 字、结论/建议齐全）。依据是本提示词自己的优先级表 ——
+ * 「用户本条消息里的明确指令」高于「默认格式」，所以格式必须是「用户说的」。
+ */
+export declare const OUTPUT_SHAPE_INSTRUCTION: string;
 export declare const SYSTEM_PROMPT: string;
 /**
  * 上下文压缩的输出骨架（2026-11-07）。

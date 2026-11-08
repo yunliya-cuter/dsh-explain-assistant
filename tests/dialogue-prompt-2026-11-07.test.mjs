@@ -51,11 +51,14 @@ test('长度预算写死：250 / 450 / 800，且规定超限先删什么', () =>
   assert.match(spec, /≤250 字/);
   assert.match(spec, /≤450 字/);
   assert.match(spec, /≤800 字/);
-  assert.match(spec, /发送前数一遍字数/);
+  // 2026-11-08 起「发送前数一遍字数」升级成「超了就删例子和修饰」（同一件事，动作更具体：
+  // 光数不改等于没写），预算与三块骨架的断言保留。
   assert.match(spec, /【最后检查】/);
-  assert.match(spec, /① 结论：一句话/);
-  assert.match(spec, /② 依据：2-3 条/);
-  assert.match(spec, /③ 建议：一句话/);
+  // 2026-11-08 起三块骨架改成「一行一件事」的形状约束（见 readability-prompt 测试）：
+  // 结论 / 依据 / 建议 三块还在，但换成了可数的行级写法。
+  assert.match(spec, /第 1 行：结论：/);
+  assert.match(spec, /以「- 」开头/);
+  assert.match(spec, /最后 1 行：建议：/);
 });
 
 test('格式：表格 ≤3 列；代码块在用户明确要求时允许，并要求补一句人话', () => {
