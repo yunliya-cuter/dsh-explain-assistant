@@ -248,6 +248,17 @@ async function runAssistantInner(ctx:LlmContext,messages:AssistantMessage[],idle
  * 这里只做转发：既有调用方与测试继续从本模块取 COMPACT_INSTRUCTION，行为不变。
  */
 export { COMPACT_INSTRUCTION, COMPACT_SECTION_TITLES, COMPACT_SYSTEM_PROMPT } from './prompts.js';
+/**
+ * 段标题比对用：去掉行首 #、空白与全角/半角括弧差异，只留可比较的字面。
+ *
+ * 为什么需要它：校验的目的是「模型有没有照骨架分段」，不是「空格和井号个数是否一致」。
+ * 2026-11-08 的三次真实失败里，有两次结构其实是七段，只是标题被换成了自编措辞 —— 归一化挡不住
+ * 那种「自编」，但能挡住「只差一个空格」的误杀，两者不能混为一谈。
+ */
+function normalizeSectionText(value:string):string{
+ return String(value).replace(/（/g,'(').replace(/）/g,')').replace(/[\s#*_`]/g,'').toLowerCase();
+}
+
 export async function compactAssistant(ctx:LlmContext,messages:AssistantMessage[]):Promise<{summary:string;reasoning:string;usage?:unknown;complete:boolean;timeout?:boolean;failure?:LlmFailureInfo}>{
  // content 必须是内容块数组：dsh-llm 的适配器会执行 message.content.flatMap(...)，
  // 传字符串会在适配器里抛错，压缩请求根本发不出去。
@@ -263,9 +274,13 @@ export async function compactAssistant(ctx:LlmContext,messages:AssistantMessage[
  // 七段骨架是**契约**，不是建议：模型没按骨架输出（例如只回一句「我做不到」）时，
  // 绝不能把它当成摘要存进 compactState —— 那会污染此后的每一轮回答。
  // 这里判为失败，让 routes 保留上一份可用摘要。
- const missing=COMPACT_SECTION_TITLES.filter(title=>!result.text.includes(title));
+ // 标题按「归一化后包含」比对：真实样本里模型把 `## 七、…` 写成过 `# 七、…`、`## 七、 …`、
+ // 以及全角/半角括号混用。精确 includes 会把「结构对、只差空格」的底稿判死，
+ // 而这道校验要挡的是「自编结构」，不是空格。
+ const normalizedText=normalizeSectionText(result.text);
+ const missing=COMPACT_SECTION_TITLES.filter(title=>!normalizedText.includes(normalizeSectionText(title)));
  // 空输出保留旧的 empty_result 语义（由 deriveCompactReason 处理）；
  // 只有「说了话但没按骨架说」才算 INVALID_SUMMARY。
  const invalid=result.complete&&result.text.trim().length>0&&missing.length>0;
- return {summary:result.text,reasoning:result.reasoning,usage:result.usage,complete:result.complete&&!invalid,...(result.timeout===undefined?{}:{timeout:result.timeout}),...(invalid?{failure:{code:'INVALID_SUMMARY',message:'压缩结果缺少必要的段落：'+missing.join('、')}}:{}),...(result.failure===undefined?{}:{failure:result.failure})};
+ return {summary:result.text,reasoning:result.reasoning,usage:result.usage,complete:result.complete&&!invalid,...(result.timeout===undefined?{}:{timeout:result.timeout}),...(invalid?{failure:{code:'INVALID_SUMMARY',message:'压缩结果缺少必要的段落：'+missing.map(title=>title.replace(/^#+\s*/,'')).join('、')}}:{}),...(result.failure===undefined?{}:{failure:result.failure})};
 }

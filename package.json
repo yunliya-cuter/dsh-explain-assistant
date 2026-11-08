@@ -1,6 +1,6 @@
 {
   "name": "dsh-explain-assistant",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "private": true,
   "engines": {
     "dsh": ">=0.1.7-rc.2 <0.3.0"
